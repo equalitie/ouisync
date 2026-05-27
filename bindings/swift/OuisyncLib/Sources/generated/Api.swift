@@ -512,7 +512,7 @@ public struct Datagram {
     public let addr: String
 }
 
-public struct FileHandle {
+public struct OuisyncFileHandle {
     public let value: UInt64
 }
 
@@ -530,13 +530,13 @@ public struct NetworkStreamHandle {
 
 internal enum Request {
     case cancel(id: MessageId)
-    case fileClose(file: FileHandle)
-    case fileFlush(file: FileHandle)
-    case fileGetLength(file: FileHandle)
-    case fileGetProgress(file: FileHandle)
-    case fileRead(file: FileHandle, offset: UInt64, size: UInt64)
-    case fileTruncate(file: FileHandle, len: UInt64)
-    case fileWrite(file: FileHandle, offset: UInt64, data: Data)
+    case fileClose(file: OuisyncFileHandle)
+    case fileFlush(file: OuisyncFileHandle)
+    case fileGetLength(file: OuisyncFileHandle)
+    case fileGetProgress(file: OuisyncFileHandle)
+    case fileRead(file: OuisyncFileHandle, offset: UInt64, size: UInt64)
+    case fileTruncate(file: OuisyncFileHandle, len: UInt64)
+    case fileWrite(file: OuisyncFileHandle, offset: UInt64, data: Data)
     case networkSocketClose(socket: NetworkSocketHandle)
     case networkSocketRecvFrom(socket: NetworkSocketHandle, len: UInt64)
     case networkSocketSendTo(socket: NetworkSocketHandle, data: Data, addr: String)
@@ -665,7 +665,7 @@ internal enum Response {
     case directoryEntries(_ value: [DirectoryEntry])
     case duration(_ value: TimeInterval)
     case entryType(_ value: EntryType)
-    case file(_ value: FileHandle)
+    case file(_ value: OuisyncFileHandle)
     case natBehavior(_ value: NatBehavior)
     case networkEvent(_ value: NetworkEvent)
     case networkSocket(_ value: NetworkSocketHandle)
@@ -2275,9 +2275,9 @@ public class Repository {
 
 public class File {
     internal let client: Client
-    public let handle: FileHandle
+    public let handle: OuisyncFileHandle
 
-    internal init(_ client: Client, _ handle: FileHandle) {
+    internal init(_ client: Client, _ handle: OuisyncFileHandle) {
         self.client = client
         self.handle = handle
     }

@@ -123,7 +123,7 @@ fn write_complex_enum(out: &mut dyn Write, name: &str, item: &ComplexEnum) -> Re
 
 fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
     write_docs(out, "", &item.docs)?;
-    writeln!(out, "public struct {name} {{")?;
+    writeln!(out, "public struct {} {{", swift_type_name(name))?;
 
     match &item.fields {
         Fields::Named(fields) => {
@@ -243,11 +243,13 @@ fn write_api_class(
     writeln!(out, "{I}internal let client: Client")?;
 
     if handle {
-        writeln!(out, "{I}public let handle: {name}Handle")?;
+        let handle_type_owned = format!("{name}Handle");
+        let handle_type = swift_type_name(&handle_type_owned);
+        writeln!(out, "{I}public let handle: {handle_type}")?;
         writeln!(out)?;
         writeln!(
             out,
-            "{I}internal init(_ client: Client, _ handle: {name}Handle) {{"
+            "{I}internal init(_ client: Client, _ handle: {handle_type}) {{"
         )?;
         writeln!(out, "{I}{I}self.client = client")?;
         writeln!(out, "{I}{I}self.handle = handle")?;
@@ -401,6 +403,15 @@ fn write_api_class(
     Ok(())
 }
 
+/// Renames Rust type names that conflict with Swift built-ins or Foundation types.
+fn swift_type_name(name: &str) -> &str {
+    match name {
+        // Foundation already defines FileHandle for file descriptors.
+        "FileHandle" => "OuisyncFileHandle",
+        _ => name,
+    }
+}
+
 fn write_docs(out: &mut dyn Write, prefix: &str, docs: &Docs) -> io::Result<()> {
     for line in &docs.lines {
         writeln!(out, "{prefix}///{line}")?;
@@ -452,7 +463,7 @@ impl fmt::Display for SwiftScalar<'_> {
             "Duration" => write!(f, "TimeInterval"),
             "SystemTime" => write!(f, "Date"),
             "StateMonitor" => write!(f, "StateMonitorNode"),
-            _ => write!(f, "{}", self.0),
+            _ => write!(f, "{}", swift_type_name(self.0)),
         }
     }
 }
