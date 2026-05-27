@@ -1,0 +1,11 @@
+language = "C"
+include_guard = "OUISYNC_SERVICE_H"
+
+# Export ErrorCode as typedef uint16_t so Swift sees it as UInt16,
+# avoiding C enum size ambiguity.
+[enum]
+style = "type"
+rename_variants = "QualifiedScreamingSnakeCase"
+
+[parse]
+parse_deps = false

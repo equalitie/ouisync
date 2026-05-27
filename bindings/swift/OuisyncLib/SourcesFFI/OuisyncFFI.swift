@@ -1,100 +1,98 @@
-//
-//  File.swift
-//  
-//
-//  Created by Peter Jankuliak on 19/07/2024.
-//
-
 import Foundation
 import OuisyncLibFFI
 
+// ErrorCode from cbindgen is typedef uint16_t; Swift imports it as UInt16.
+// The callback pointer type used by both start_service and stop_service.
+private typealias ServiceCallback = @convention(c) (UnsafeRawPointer?, UInt16) -> Void
 
-/* TODO: ⬇️
+// MARK: - OuisyncService
 
- Since we're now linking statically and both rust-cbindgen and swift do a reasonable job at guessing
- the intended types, I don't expect these types to ever make it to the main branch because this file
- will most likely go away. For now they are kept to avoid touching too much code in a single commit.
- */
-typealias FFISessionKind = UInt8 // swift gets confused here and imports a UInt32 enum as well as a UInt8 typealias
-typealias FFIContext = UnsafeMutableRawPointer // exported as `* mut ()` in rust so this is correct, annoyingly
-typealias FFICallback = @convention(c) (FFIContext?, UnsafePointer<UInt8>?, UInt64) -> Void;
-typealias FFISessionCreate = @convention(c) (FFISessionKind, UnsafePointer<Int8>?, UnsafePointer<Int8>?, UnsafePointer<Int8>?, FFIContext?, FFICallback?) -> SessionCreateResult;
-typealias FFISessionGrab = @convention(c) (FFIContext?, FFICallback?) -> SessionCreateResult;
-typealias FFISessionClose = @convention(c) (SessionHandle, FFIContext?, FFICallback?) -> Void;
-typealias FFISessionChannelSend = @convention(c) (SessionHandle, UnsafeMutablePointer<UInt8>?, UInt64) -> Void;
+public class OuisyncService {
+    let handle: UnsafeMutableRawPointer
 
-class SessionCreateError : Error, CustomStringConvertible {
-    let message: String
-    init(_ message: String) { self.message = message }
-    var description: String { message }
-}
-
-public class OuisyncFFI {
-    // let handle: UnsafeMutableRawPointer
-    let ffiSessionGrab: FFISessionGrab
-    let ffiSessionCreate: FFISessionCreate
-    let ffiSessionChannelSend: FFISessionChannelSend
-    let ffiSessionClose: FFISessionClose
-    let sessionKindShared: FFISessionKind = 0;
-
-    public init() {
-        // The .dylib is created using the OuisyncDyLibBuilder package plugin in this Swift package.
-        // let libraryName = "libouisync_ffi.dylib"
-        // let resourcePath = Bundle.main.resourcePath! + "/OuisyncLib_OuisyncLibFFI.bundle/Contents/Resources"
-        // handle = dlopen("\(resourcePath)/\(libraryName)", RTLD_NOW)!
-
-        ffiSessionGrab = session_grab
-        ffiSessionChannelSend = session_channel_send
-        ffiSessionClose = session_close
-        ffiSessionCreate = session_create
-
-        //ffiSessionGrab = unsafeBitCast(dlsym(handle, "session_grab"), to: FFISessionGrab.self)
-        //ffiSessionChannelSend = unsafeBitCast(dlsym(handle, "session_channel_send"), to: FFISessionChannelSend.self)
-        //ffiSessionClose = unsafeBitCast(dlsym(handle, "session_close"), to: FFISessionClose.self)
-        //ffiSessionCreate = unsafeBitCast(dlsym(handle, "session_create"), to: FFISessionCreate.self)
+    private init(_ handle: UnsafeMutableRawPointer) {
+        self.handle = handle
     }
 
-    // Blocks until Dart creates a session, then returns it.
-    func waitForSession(_ context: FFIContext, _ callback: FFICallback) async throws -> SessionHandle {
-        // TODO: Might be worth change the ffi function to call a callback when the session becomes created instead of bussy sleeping.
-        var elapsed: UInt64 = 0;
-        while true {
-            let result = ffiSessionGrab(context, callback)
-            if result.error_code == 0 {
-                NSLog("😀 Got Ouisync session");
-                return result.session
+    /// Initialize logging. Call before start().
+    public static func initLog() {
+        init_log()
+    }
+
+    /// Start the ouisync service and wait until it is ready to accept connections.
+    /// Returns a service handle; call stop() when done.
+    public static func start(configDir: String, debugLabel: String? = nil) async throws -> OuisyncService {
+        var rawHandle: UnsafeMutableRawPointer?
+
+        do {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                let ctx = Unmanaged.passRetained(StartBox(cont)).toOpaque()
+                rawHandle = configDir.withCString { cdir in
+                    if let label = debugLabel {
+                        return label.withCString { clab in
+                            start_service(cdir, clab, serviceStarted, ctx)
+                        }
+                    } else {
+                        return start_service(cdir, nil, serviceStarted, ctx)
+                    }
+                }
             }
-            NSLog("🤨 Ouisync session not yet ready. Code: \(result.error_code) Message:\(String(cString: result.error_message!))");
-
-            let millisecond: UInt64 = 1_000_000
-            let second: UInt64 = 1000 * millisecond
-
-            var timeout = 200 * millisecond
-
-            if elapsed > 10 * second {
-                timeout = second
+        } catch {
+            // start_service always returns a handle (the oneshot::Sender box).
+            // Free it even when initialization fails; the callback won't fire.
+            if let h = rawHandle {
+                stop_service(h, serviceNoop, nil)
             }
+            throw error
+        }
 
-            try await Task.sleep(nanoseconds: timeout)
-            elapsed += timeout;
+        guard let h = rawHandle else {
+            throw OuisyncError(.other, "start_service returned null")
+        }
+        return OuisyncService(h)
+    }
+
+    /// Stop the service and wait for shutdown to complete.
+    public func stop() async throws {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            let ctx = Unmanaged.passRetained(StopBox(cont)).toOpaque()
+            stop_service(handle, serviceStopped, ctx)
         }
     }
+}
 
-    // Retained pointers have their reference counter incremented by 1.
-    // https://stackoverflow.com/a/33310021/273348
-    static func toUnretainedPtr<T : AnyObject>(obj : T) -> UnsafeRawPointer {
-        return UnsafeRawPointer(Unmanaged.passUnretained(obj).toOpaque())
-    }
+// MARK: - Continuation boxes
 
-    static func fromUnretainedPtr<T : AnyObject>(ptr : UnsafeRawPointer) -> T {
-        return Unmanaged<T>.fromOpaque(ptr).takeUnretainedValue()
-    }
+private class StartBox {
+    let continuation: CheckedContinuation<Void, Error>
+    init(_ c: CheckedContinuation<Void, Error>) { continuation = c }
+}
 
-    static func toRetainedPtr<T : AnyObject>(obj : T) -> UnsafeRawPointer {
-        return UnsafeRawPointer(Unmanaged.passRetained(obj).toOpaque())
-    }
+private class StopBox {
+    let continuation: CheckedContinuation<Void, Error>
+    init(_ c: CheckedContinuation<Void, Error>) { continuation = c }
+}
 
-    static func fromRetainedPtr<T : AnyObject>(ptr : UnsafeRawPointer) -> T {
-        return Unmanaged<T>.fromOpaque(ptr).takeRetainedValue()
+// MARK: - C callbacks (no captures — compatible with @convention(c))
+
+private func serviceStarted(_ ctx: UnsafeRawPointer?, _ code: UInt16) {
+    guard let ctx else { return }
+    Unmanaged<StartBox>.fromOpaque(ctx).takeRetainedValue()
+        .continuation.resumeWith(result: serviceResult(code))
+}
+
+private func serviceStopped(_ ctx: UnsafeRawPointer?, _ code: UInt16) {
+    guard let ctx else { return }
+    Unmanaged<StopBox>.fromOpaque(ctx).takeRetainedValue()
+        .continuation.resumeWith(result: serviceResult(code))
+}
+
+private func serviceNoop(_: UnsafeRawPointer?, _: UInt16) {}
+
+private func serviceResult(_ code: UInt16) -> Result<Void, Error> {
+    if code == 0 {
+        return .success(())
     }
+    let errorCode = ErrorCode(rawValue: code) ?? .other
+    return .failure(OuisyncError(errorCode, "service error (code \(code))"))
 }
