@@ -27,7 +27,7 @@ let package = Package(
                                "OuisyncLibFFI"],
                 path: "SourcesFFI"),
         .testTarget(name: "OuisyncLibTests",
-                    dependencies: ["OuisyncLibCore"],
+                    dependencies: ["OuisyncLib"],
                     path: "Tests"),
         // FIXME: move this to a separate package / framework
         .binaryTarget(name: "OuisyncLibFFI",
