@@ -143,6 +143,39 @@ fn blocking_rename_no_replace_atomic(src: &Path, dst: &Path) -> io::Result<()> {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn blocking_rename_no_replace_atomic(src: &Path, dst: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+
+    fn to_cstring(path: &Path) -> io::Result<CString> {
+        CString::new(path.as_os_str().as_encoded_bytes())
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
+    }
+
+    // Available since macOS 10.12; fails with EEXIST if dst already exists.
+    const RENAME_EXCL: u32 = 0x00000004;
+
+    unsafe extern "C" {
+        fn renamex_np(
+            from: *const libc::c_char,
+            to: *const libc::c_char,
+            flags: u32,
+        ) -> libc::c_int;
+    }
+
+    let src = to_cstring(src)?;
+    let dst = to_cstring(dst)?;
+
+    // SAFETY: both pointers are valid null-terminated C strings for the duration of the call.
+    let result = unsafe { renamex_np(src.as_ptr(), dst.as_ptr(), RENAME_EXCL) };
+
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 // Renames `src` to `dst` but fails if `dst` already exists. This is not atomic so it's possible
 // that the dst file might still get deleted if it's created concurrently with calling this
 // function. This is used only as a fallback on platforms/filesystems which don't support the

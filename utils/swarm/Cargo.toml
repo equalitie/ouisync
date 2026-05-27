@@ -19,5 +19,5 @@ clap    = { workspace = true }
 ctrlc   = { workspace = true }
 os_pipe = "1.1.4"
 
-[target.'cfg(any(target_os = "linux", target_os = "osx"))'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 libc = "0.2.126"

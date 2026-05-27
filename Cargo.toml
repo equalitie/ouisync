@@ -103,7 +103,9 @@ opt-level = 3
 
 [patch.crates-io]
 # The upstream has outdated dependency on `bindgen` which conflicts with some of our other
-# dependencies. Using this fork until the upstream updates.
+# dependencies, and xpc-connection has a type mismatch on newer toolchains. Using this fork until
+# the upstream updates.
+xpc-connection     = { git = "https://github.com/madadam/xpc-connection-rs" }
 xpc-connection-sys = { git = "https://github.com/madadam/xpc-connection-rs" }
 
 [workspace.lints.clippy]

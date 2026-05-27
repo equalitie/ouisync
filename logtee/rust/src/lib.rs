@@ -1,12 +1,10 @@
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 #[path = "redirect.rs"]
 mod inner;
 
 #[cfg(target_os = "android")]
 #[path = "android.rs"]
 mod inner;
-
-// TODO: ios and macos
 
 #[cfg(test)]
 mod tests;
