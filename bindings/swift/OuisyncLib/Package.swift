@@ -25,7 +25,10 @@ let package = Package(
                 dependencies: ["OuisyncLibCore",
                                "FFIBuilder",
                                "OuisyncLibFFI"],
-                path: "SourcesFFI"),
+                path: "SourcesFFI",
+                linkerSettings: [
+                    .linkedFramework("SystemConfiguration"),
+                ]),
         .testTarget(name: "OuisyncLibTests",
                     dependencies: ["OuisyncLib"],
                     path: "Tests"),

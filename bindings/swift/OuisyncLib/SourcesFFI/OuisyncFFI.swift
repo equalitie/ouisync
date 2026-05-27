@@ -1,4 +1,5 @@
 import Foundation
+@_exported import OuisyncLibCore
 import OuisyncLibFFI
 
 // ErrorCode from cbindgen is typedef uint16_t; Swift imports it as UInt16.
@@ -47,7 +48,7 @@ public class OuisyncService {
         }
 
         guard let h = rawHandle else {
-            throw OuisyncError(.other, "start_service returned null")
+            throw OuisyncLibCore.OuisyncError(.other, "start_service returned null")
         }
         return OuisyncService(h)
     }
@@ -78,13 +79,13 @@ private class StopBox {
 private func serviceStarted(_ ctx: UnsafeRawPointer?, _ code: UInt16) {
     guard let ctx else { return }
     Unmanaged<StartBox>.fromOpaque(ctx).takeRetainedValue()
-        .continuation.resumeWith(result: serviceResult(code))
+        .continuation.resume(with: serviceResult(code))
 }
 
 private func serviceStopped(_ ctx: UnsafeRawPointer?, _ code: UInt16) {
     guard let ctx else { return }
     Unmanaged<StopBox>.fromOpaque(ctx).takeRetainedValue()
-        .continuation.resumeWith(result: serviceResult(code))
+        .continuation.resume(with: serviceResult(code))
 }
 
 private func serviceNoop(_: UnsafeRawPointer?, _: UInt16) {}
@@ -93,6 +94,6 @@ private func serviceResult(_ code: UInt16) -> Result<Void, Error> {
     if code == 0 {
         return .success(())
     }
-    let errorCode = ErrorCode(rawValue: code) ?? .other
-    return .failure(OuisyncError(errorCode, "service error (code \(code))"))
+    let errorCode = OuisyncLibCore.ErrorCode(rawValue: code) ?? .other
+    return .failure(OuisyncLibCore.OuisyncError(errorCode, "service error (code \(code))"))
 }

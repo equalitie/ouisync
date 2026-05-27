@@ -367,7 +367,7 @@ fn encode_expr(ty: &Type, expr: &str) -> String {
             let v_enc = encode_scalar_expr(v, "$0.value");
             format!(".map(Dictionary(uniqueKeysWithValues: {expr}.map {{ ({k_enc}, {v_enc}) }}))")
         }
-        Type::Bytes => format!(".binary([UInt8]({expr}))"),
+        Type::Bytes => format!(".binary({expr})"),
         Type::Result(..) => ".nil".to_string(),
     }
 }
@@ -567,7 +567,7 @@ fn write_request_enum(
                     }
                     write!(
                         out,
-                        "{}: {}",
+                        "_ {}: {}",
                         AsLowerCamelCase(field_name),
                         SwiftType(&field.ty)
                     )?;
@@ -925,7 +925,7 @@ fn write_api_class(
             out,
             "{I}public static func == (lhs: {name}, rhs: {name}) -> Bool {{"
         )?;
-        writeln!(out, "{I}{I}return lhs.handle == rhs.handle")?;
+        writeln!(out, "{I}{I}return lhs.handle.value == rhs.handle.value")?;
         writeln!(out, "{I}}}")?;
         writeln!(out)?;
         writeln!(

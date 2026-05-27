@@ -17,7 +17,7 @@ public struct SecretKey {
 
     public var debugDescription: String { "\(type(of: self))(******)" }
 
-    internal func encodeToMsgPack() -> MessagePackValue { .binary([UInt8](value)) }
+    internal func encodeToMsgPack() -> MessagePackValue { .binary(value) }
     internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {
         guard case .binary(let bytes_decoded) = v else { return nil }
         let decoded = Data(bytes_decoded)
@@ -42,7 +42,7 @@ public struct Password {
 public struct PasswordSalt {
     public let value: Data
 
-    internal func encodeToMsgPack() -> MessagePackValue { .binary([UInt8](value)) }
+    internal func encodeToMsgPack() -> MessagePackValue { .binary(value) }
     internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {
         guard case .binary(let bytes_decoded) = v else { return nil }
         let decoded = Data(bytes_decoded)
@@ -308,7 +308,7 @@ public enum PeerState {
 public struct PublicRuntimeId {
     public let value: Data
 
-    internal func encodeToMsgPack() -> MessagePackValue { .binary([UInt8](value)) }
+    internal func encodeToMsgPack() -> MessagePackValue { .binary(value) }
     internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {
         guard case .binary(let bytes_decoded) = v else { return nil }
         let decoded = Data(bytes_decoded)
@@ -359,7 +359,7 @@ public struct Progress {
 public struct TopicId {
     public let value: Data
 
-    internal func encodeToMsgPack() -> MessagePackValue { .binary([UInt8](value)) }
+    internal func encodeToMsgPack() -> MessagePackValue { .binary(value) }
     internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {
         guard case .binary(let bytes_decoded) = v else { return nil }
         let decoded = Data(bytes_decoded)
@@ -823,7 +823,7 @@ public struct Datagram {
     public let addr: String
 
     internal func encodeToMsgPack() -> MessagePackValue {
-        .array([.binary([UInt8](data)), .string(addr)])
+        .array([.binary(data), .string(addr)])
     }
     internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {
         guard case .array(let arr) = v, arr.count == 2 else { return nil }
@@ -875,76 +875,76 @@ public struct NetworkStreamHandle {
 }
 
 internal enum Request {
-    case cancel(id: MessageId)
-    case fileClose(file: OuisyncFileHandle)
-    case fileFlush(file: OuisyncFileHandle)
-    case fileGetLength(file: OuisyncFileHandle)
-    case fileGetProgress(file: OuisyncFileHandle)
-    case fileRead(file: OuisyncFileHandle, offset: UInt64, size: UInt64)
-    case fileTruncate(file: OuisyncFileHandle, len: UInt64)
-    case fileWrite(file: OuisyncFileHandle, offset: UInt64, data: Data)
-    case networkSocketClose(socket: NetworkSocketHandle)
-    case networkSocketRecvFrom(socket: NetworkSocketHandle, len: UInt64)
-    case networkSocketSendTo(socket: NetworkSocketHandle, data: Data, addr: String)
-    case networkStreamClose(stream: NetworkStreamHandle)
-    case networkStreamReadExact(stream: NetworkStreamHandle, len: UInt64)
-    case networkStreamWriteAll(stream: NetworkStreamHandle, buf: Data)
-    case repositoryClose(repo: RepositoryHandle)
-    case repositoryCreateDirectory(repo: RepositoryHandle, path: String)
-    case repositoryCreateFile(repo: RepositoryHandle, path: String)
-    case repositoryCreateMirror(repo: RepositoryHandle, host: String)
-    case repositoryDelete(repo: RepositoryHandle)
-    case repositoryDeleteMirror(repo: RepositoryHandle, host: String)
-    case repositoryExport(repo: RepositoryHandle, outputPath: String)
-    case repositoryFileExists(repo: RepositoryHandle, path: String)
-    case repositoryGetAccessMode(repo: RepositoryHandle)
-    case repositoryGetBlockExpiration(repo: RepositoryHandle)
-    case repositoryGetCredentials(repo: RepositoryHandle)
-    case repositoryGetEntryType(repo: RepositoryHandle, path: String)
-    case repositoryGetExpiration(repo: RepositoryHandle)
-    case repositoryGetInfoHash(repo: RepositoryHandle)
-    case repositoryGetMetadata(repo: RepositoryHandle, key: String)
-    case repositoryGetMountPoint(repo: RepositoryHandle)
-    case repositoryGetPath(repo: RepositoryHandle)
-    case repositoryGetQuota(repo: RepositoryHandle)
-    case repositoryGetShortName(repo: RepositoryHandle)
-    case repositoryGetStats(repo: RepositoryHandle)
-    case repositoryGetSyncProgress(repo: RepositoryHandle)
-    case repositoryIsDhtEnabled(repo: RepositoryHandle)
-    case repositoryIsPexEnabled(repo: RepositoryHandle)
-    case repositoryIsSyncEnabled(repo: RepositoryHandle)
-    case repositoryMirrorExists(repo: RepositoryHandle, host: String)
-    case repositoryMount(repo: RepositoryHandle)
-    case repositoryMove(repo: RepositoryHandle, dst: String)
-    case repositoryMoveEntry(repo: RepositoryHandle, src: String, dst: String)
-    case repositoryOpenFile(repo: RepositoryHandle, path: String)
-    case repositoryReadDirectory(repo: RepositoryHandle, path: String)
-    case repositoryRemoveDirectory(repo: RepositoryHandle, path: String, recursive: Bool)
-    case repositoryRemoveFile(repo: RepositoryHandle, path: String)
-    case repositoryResetAccess(repo: RepositoryHandle, token: ShareToken)
-    case repositorySetAccess(repo: RepositoryHandle, read: AccessChange?, write: AccessChange?)
-    case repositorySetAccessMode(repo: RepositoryHandle, accessMode: AccessMode, localSecret: LocalSecret?)
-    case repositorySetBlockExpiration(repo: RepositoryHandle, value: TimeInterval?)
-    case repositorySetCredentials(repo: RepositoryHandle, credentials: Data)
-    case repositorySetDhtEnabled(repo: RepositoryHandle, enabled: Bool)
-    case repositorySetExpiration(repo: RepositoryHandle, value: TimeInterval?)
-    case repositorySetMetadata(repo: RepositoryHandle, edits: [MetadataEdit])
-    case repositorySetPexEnabled(repo: RepositoryHandle, enabled: Bool)
-    case repositorySetQuota(repo: RepositoryHandle, value: StorageSize?)
-    case repositorySetSyncEnabled(repo: RepositoryHandle, enabled: Bool)
-    case repositoryShare(repo: RepositoryHandle, accessMode: AccessMode, localSecret: LocalSecret?)
-    case repositorySubscribe(repo: RepositoryHandle)
-    case repositoryUnmount(repo: RepositoryHandle)
-    case sessionAddUserProvidedPeers(addrs: [String])
-    case sessionBindMetrics(addr: String?)
-    case sessionBindNetwork(addrs: [String])
-    case sessionBindRemoteControl(addr: String?)
-    case sessionCopy(srcRepo: String?, srcPath: String, dstRepo: String?, dstPath: String)
-    case sessionCreateRepository(path: String, readSecret: SetLocalSecret?, writeSecret: SetLocalSecret?, token: ShareToken?, syncEnabled: Bool, dhtEnabled: Bool, pexEnabled: Bool)
-    case sessionDeleteRepositoryByName(name: String)
-    case sessionDeriveSecretKey(password: Password, salt: PasswordSalt)
-    case sessionDhtLookup(infoHash: String, announce: Bool)
-    case sessionFindRepository(name: String)
+    case cancel(_ id: MessageId)
+    case fileClose(_ file: OuisyncFileHandle)
+    case fileFlush(_ file: OuisyncFileHandle)
+    case fileGetLength(_ file: OuisyncFileHandle)
+    case fileGetProgress(_ file: OuisyncFileHandle)
+    case fileRead(_ file: OuisyncFileHandle, _ offset: UInt64, _ size: UInt64)
+    case fileTruncate(_ file: OuisyncFileHandle, _ len: UInt64)
+    case fileWrite(_ file: OuisyncFileHandle, _ offset: UInt64, _ data: Data)
+    case networkSocketClose(_ socket: NetworkSocketHandle)
+    case networkSocketRecvFrom(_ socket: NetworkSocketHandle, _ len: UInt64)
+    case networkSocketSendTo(_ socket: NetworkSocketHandle, _ data: Data, _ addr: String)
+    case networkStreamClose(_ stream: NetworkStreamHandle)
+    case networkStreamReadExact(_ stream: NetworkStreamHandle, _ len: UInt64)
+    case networkStreamWriteAll(_ stream: NetworkStreamHandle, _ buf: Data)
+    case repositoryClose(_ repo: RepositoryHandle)
+    case repositoryCreateDirectory(_ repo: RepositoryHandle, _ path: String)
+    case repositoryCreateFile(_ repo: RepositoryHandle, _ path: String)
+    case repositoryCreateMirror(_ repo: RepositoryHandle, _ host: String)
+    case repositoryDelete(_ repo: RepositoryHandle)
+    case repositoryDeleteMirror(_ repo: RepositoryHandle, _ host: String)
+    case repositoryExport(_ repo: RepositoryHandle, _ outputPath: String)
+    case repositoryFileExists(_ repo: RepositoryHandle, _ path: String)
+    case repositoryGetAccessMode(_ repo: RepositoryHandle)
+    case repositoryGetBlockExpiration(_ repo: RepositoryHandle)
+    case repositoryGetCredentials(_ repo: RepositoryHandle)
+    case repositoryGetEntryType(_ repo: RepositoryHandle, _ path: String)
+    case repositoryGetExpiration(_ repo: RepositoryHandle)
+    case repositoryGetInfoHash(_ repo: RepositoryHandle)
+    case repositoryGetMetadata(_ repo: RepositoryHandle, _ key: String)
+    case repositoryGetMountPoint(_ repo: RepositoryHandle)
+    case repositoryGetPath(_ repo: RepositoryHandle)
+    case repositoryGetQuota(_ repo: RepositoryHandle)
+    case repositoryGetShortName(_ repo: RepositoryHandle)
+    case repositoryGetStats(_ repo: RepositoryHandle)
+    case repositoryGetSyncProgress(_ repo: RepositoryHandle)
+    case repositoryIsDhtEnabled(_ repo: RepositoryHandle)
+    case repositoryIsPexEnabled(_ repo: RepositoryHandle)
+    case repositoryIsSyncEnabled(_ repo: RepositoryHandle)
+    case repositoryMirrorExists(_ repo: RepositoryHandle, _ host: String)
+    case repositoryMount(_ repo: RepositoryHandle)
+    case repositoryMove(_ repo: RepositoryHandle, _ dst: String)
+    case repositoryMoveEntry(_ repo: RepositoryHandle, _ src: String, _ dst: String)
+    case repositoryOpenFile(_ repo: RepositoryHandle, _ path: String)
+    case repositoryReadDirectory(_ repo: RepositoryHandle, _ path: String)
+    case repositoryRemoveDirectory(_ repo: RepositoryHandle, _ path: String, _ recursive: Bool)
+    case repositoryRemoveFile(_ repo: RepositoryHandle, _ path: String)
+    case repositoryResetAccess(_ repo: RepositoryHandle, _ token: ShareToken)
+    case repositorySetAccess(_ repo: RepositoryHandle, _ read: AccessChange?, _ write: AccessChange?)
+    case repositorySetAccessMode(_ repo: RepositoryHandle, _ accessMode: AccessMode, _ localSecret: LocalSecret?)
+    case repositorySetBlockExpiration(_ repo: RepositoryHandle, _ value: TimeInterval?)
+    case repositorySetCredentials(_ repo: RepositoryHandle, _ credentials: Data)
+    case repositorySetDhtEnabled(_ repo: RepositoryHandle, _ enabled: Bool)
+    case repositorySetExpiration(_ repo: RepositoryHandle, _ value: TimeInterval?)
+    case repositorySetMetadata(_ repo: RepositoryHandle, _ edits: [MetadataEdit])
+    case repositorySetPexEnabled(_ repo: RepositoryHandle, _ enabled: Bool)
+    case repositorySetQuota(_ repo: RepositoryHandle, _ value: StorageSize?)
+    case repositorySetSyncEnabled(_ repo: RepositoryHandle, _ enabled: Bool)
+    case repositoryShare(_ repo: RepositoryHandle, _ accessMode: AccessMode, _ localSecret: LocalSecret?)
+    case repositorySubscribe(_ repo: RepositoryHandle)
+    case repositoryUnmount(_ repo: RepositoryHandle)
+    case sessionAddUserProvidedPeers(_ addrs: [String])
+    case sessionBindMetrics(_ addr: String?)
+    case sessionBindNetwork(_ addrs: [String])
+    case sessionBindRemoteControl(_ addr: String?)
+    case sessionCopy(_ srcRepo: String?, _ srcPath: String, _ dstRepo: String?, _ dstPath: String)
+    case sessionCreateRepository(_ path: String, _ readSecret: SetLocalSecret?, _ writeSecret: SetLocalSecret?, _ token: ShareToken?, _ syncEnabled: Bool, _ dhtEnabled: Bool, _ pexEnabled: Bool)
+    case sessionDeleteRepositoryByName(_ name: String)
+    case sessionDeriveSecretKey(_ password: Password, _ salt: PasswordSalt)
+    case sessionDhtLookup(_ infoHash: String, _ announce: Bool)
+    case sessionFindRepository(_ name: String)
     case sessionGeneratePasswordSalt
     case sessionGenerateSecretKey
     case sessionGetCurrentProtocolVersion
@@ -962,45 +962,45 @@ internal enum Request {
     case sessionGetNetworkStats
     case sessionGetPeers
     case sessionGetRemoteControlListenerAddr
-    case sessionGetRemoteListenerAddrs(host: String)
+    case sessionGetRemoteListenerAddrs(_ host: String)
     case sessionGetRuntimeId
-    case sessionGetShareTokenAccessMode(token: ShareToken)
-    case sessionGetShareTokenInfoHash(token: ShareToken)
-    case sessionGetShareTokenSuggestedName(token: ShareToken)
-    case sessionGetStateMonitor(path: [MonitorId])
+    case sessionGetShareTokenAccessMode(_ token: ShareToken)
+    case sessionGetShareTokenInfoHash(_ token: ShareToken)
+    case sessionGetShareTokenSuggestedName(_ token: ShareToken)
+    case sessionGetStateMonitor(_ path: [MonitorId])
     case sessionGetStoreDirs
     case sessionGetUserProvidedPeers
-    case sessionInitNetwork(defaults: NetworkDefaults)
-    case sessionInsertStoreDirs(paths: [String])
+    case sessionInitNetwork(_ defaults: NetworkDefaults)
+    case sessionInsertStoreDirs(_ paths: [String])
     case sessionIsLocalDhtEnabled
     case sessionIsLocalDiscoveryEnabled
     case sessionIsPexRecvEnabled
     case sessionIsPexSendEnabled
     case sessionIsPortForwardingEnabled
     case sessionListRepositories
-    case sessionMirrorExists(token: ShareToken, host: String)
+    case sessionMirrorExists(_ token: ShareToken, _ host: String)
     case sessionOpenNetworkSocketV4
     case sessionOpenNetworkSocketV6
-    case sessionOpenNetworkStream(addr: String, topicId: TopicId)
-    case sessionOpenRepository(path: String, localSecret: LocalSecret?)
+    case sessionOpenNetworkStream(_ addr: String, _ topicId: TopicId)
+    case sessionOpenRepository(_ path: String, _ localSecret: LocalSecret?)
     case sessionPinDht
-    case sessionRemoveStoreDirs(paths: [String])
-    case sessionRemoveUserProvidedPeers(addrs: [String])
-    case sessionSetDefaultBlockExpiration(value: TimeInterval?)
-    case sessionSetDefaultQuota(value: StorageSize?)
-    case sessionSetDefaultRepositoryExpiration(value: TimeInterval?)
-    case sessionSetDhtRouters(routers: [String])
-    case sessionSetLocalDhtEnabled(enabled: Bool)
-    case sessionSetLocalDiscoveryEnabled(enabled: Bool)
-    case sessionSetMountRoot(path: String?)
-    case sessionSetPexRecvEnabled(enabled: Bool)
-    case sessionSetPexSendEnabled(enabled: Bool)
-    case sessionSetPortForwardingEnabled(enabled: Bool)
-    case sessionSetStoreDirs(paths: [String])
+    case sessionRemoveStoreDirs(_ paths: [String])
+    case sessionRemoveUserProvidedPeers(_ addrs: [String])
+    case sessionSetDefaultBlockExpiration(_ value: TimeInterval?)
+    case sessionSetDefaultQuota(_ value: StorageSize?)
+    case sessionSetDefaultRepositoryExpiration(_ value: TimeInterval?)
+    case sessionSetDhtRouters(_ routers: [String])
+    case sessionSetLocalDhtEnabled(_ enabled: Bool)
+    case sessionSetLocalDiscoveryEnabled(_ enabled: Bool)
+    case sessionSetMountRoot(_ path: String?)
+    case sessionSetPexRecvEnabled(_ enabled: Bool)
+    case sessionSetPexSendEnabled(_ enabled: Bool)
+    case sessionSetPortForwardingEnabled(_ enabled: Bool)
+    case sessionSetStoreDirs(_ paths: [String])
     case sessionSubscribeToNetwork
-    case sessionSubscribeToStateMonitor(path: [MonitorId])
+    case sessionSubscribeToStateMonitor(_ path: [MonitorId])
     case sessionUnpinDht
-    case sessionValidateShareToken(token: String)
+    case sessionValidateShareToken(_ token: String)
 
     internal func encodeToMsgPack() -> MessagePackValue {
         switch self {
@@ -1011,13 +1011,13 @@ internal enum Request {
         case .fileGetProgress(let file): return .map([.string("FileGetProgress"): .array([file.encodeToMsgPack()])])
         case .fileRead(let file, let offset, let size): return .map([.string("FileRead"): .array([file.encodeToMsgPack(), .uint(UInt64(offset)), .uint(UInt64(size))])])
         case .fileTruncate(let file, let len): return .map([.string("FileTruncate"): .array([file.encodeToMsgPack(), .uint(UInt64(len))])])
-        case .fileWrite(let file, let offset, let data): return .map([.string("FileWrite"): .array([file.encodeToMsgPack(), .uint(UInt64(offset)), .binary([UInt8](data))])])
+        case .fileWrite(let file, let offset, let data): return .map([.string("FileWrite"): .array([file.encodeToMsgPack(), .uint(UInt64(offset)), .binary(data)])])
         case .networkSocketClose(let socket): return .map([.string("NetworkSocketClose"): .array([socket.encodeToMsgPack()])])
         case .networkSocketRecvFrom(let socket, let len): return .map([.string("NetworkSocketRecvFrom"): .array([socket.encodeToMsgPack(), .uint(UInt64(len))])])
-        case .networkSocketSendTo(let socket, let data, let addr): return .map([.string("NetworkSocketSendTo"): .array([socket.encodeToMsgPack(), .binary([UInt8](data)), .string(addr)])])
+        case .networkSocketSendTo(let socket, let data, let addr): return .map([.string("NetworkSocketSendTo"): .array([socket.encodeToMsgPack(), .binary(data), .string(addr)])])
         case .networkStreamClose(let stream): return .map([.string("NetworkStreamClose"): .array([stream.encodeToMsgPack()])])
         case .networkStreamReadExact(let stream, let len): return .map([.string("NetworkStreamReadExact"): .array([stream.encodeToMsgPack(), .uint(UInt64(len))])])
-        case .networkStreamWriteAll(let stream, let buf): return .map([.string("NetworkStreamWriteAll"): .array([stream.encodeToMsgPack(), .binary([UInt8](buf))])])
+        case .networkStreamWriteAll(let stream, let buf): return .map([.string("NetworkStreamWriteAll"): .array([stream.encodeToMsgPack(), .binary(buf)])])
         case .repositoryClose(let repo): return .map([.string("RepositoryClose"): .array([repo.encodeToMsgPack()])])
         case .repositoryCreateDirectory(let repo, let path): return .map([.string("RepositoryCreateDirectory"): .array([repo.encodeToMsgPack(), .string(path)])])
         case .repositoryCreateFile(let repo, let path): return .map([.string("RepositoryCreateFile"): .array([repo.encodeToMsgPack(), .string(path)])])
@@ -1054,7 +1054,7 @@ internal enum Request {
         case .repositorySetAccess(let repo, let read, let write): return .map([.string("RepositorySetAccess"): .array([repo.encodeToMsgPack(), { if let x = read { return x.encodeToMsgPack() } else { return .nil } }(), { if let x = write { return x.encodeToMsgPack() } else { return .nil } }()])])
         case .repositorySetAccessMode(let repo, let accessMode, let localSecret): return .map([.string("RepositorySetAccessMode"): .array([repo.encodeToMsgPack(), accessMode.encodeToMsgPack(), { if let x = localSecret { return x.encodeToMsgPack() } else { return .nil } }()])])
         case .repositorySetBlockExpiration(let repo, let value): return .map([.string("RepositorySetBlockExpiration"): .array([repo.encodeToMsgPack(), { if let x = value { return .int(Int64(x * 1000)) } else { return .nil } }()])])
-        case .repositorySetCredentials(let repo, let credentials): return .map([.string("RepositorySetCredentials"): .array([repo.encodeToMsgPack(), .binary([UInt8](credentials))])])
+        case .repositorySetCredentials(let repo, let credentials): return .map([.string("RepositorySetCredentials"): .array([repo.encodeToMsgPack(), .binary(credentials)])])
         case .repositorySetDhtEnabled(let repo, let enabled): return .map([.string("RepositorySetDhtEnabled"): .array([repo.encodeToMsgPack(), .bool(enabled)])])
         case .repositorySetExpiration(let repo, let value): return .map([.string("RepositorySetExpiration"): .array([repo.encodeToMsgPack(), { if let x = value { return .int(Int64(x * 1000)) } else { return .nil } }()])])
         case .repositorySetMetadata(let repo, let edits): return .map([.string("RepositorySetMetadata"): .array([repo.encodeToMsgPack(), .array(edits.map { $0.encodeToMsgPack() })])])
@@ -1175,7 +1175,7 @@ internal enum Response {
         switch self {
         case .accessMode(let value): return .map([.string("AccessMode"): value.encodeToMsgPack()])
         case .bool(let value): return .map([.string("Bool"): .bool(value)])
-        case .bytes(let value): return .map([.string("Bytes"): .binary([UInt8](value))])
+        case .bytes(let value): return .map([.string("Bytes"): .binary(value)])
         case .datagram(let value): return .map([.string("Datagram"): value.encodeToMsgPack()])
         case .directoryEntries(let value): return .map([.string("DirectoryEntries"): .array(value.map { $0.encodeToMsgPack() })])
         case .duration(let value): return .map([.string("Duration"): .int(Int64(value * 1000))])
@@ -2932,7 +2932,7 @@ public class Repository {
     }
 
     public static func == (lhs: Repository, rhs: Repository) -> Bool {
-        return lhs.handle == rhs.handle
+        return lhs.handle.value == rhs.handle.value
     }
 
     public var description: String { "\(type(of: self))(\(handle))" }
@@ -3053,7 +3053,7 @@ public class File {
     }
 
     public static func == (lhs: File, rhs: File) -> Bool {
-        return lhs.handle == rhs.handle
+        return lhs.handle.value == rhs.handle.value
     }
 
     public var description: String { "\(type(of: self))(\(handle))" }
@@ -3109,7 +3109,7 @@ public class NetworkSocket {
     }
 
     public static func == (lhs: NetworkSocket, rhs: NetworkSocket) -> Bool {
-        return lhs.handle == rhs.handle
+        return lhs.handle.value == rhs.handle.value
     }
 
     public var description: String { "\(type(of: self))(\(handle))" }
@@ -3168,7 +3168,7 @@ public class NetworkStream {
     }
 
     public static func == (lhs: NetworkStream, rhs: NetworkStream) -> Bool {
-        return lhs.handle == rhs.handle
+        return lhs.handle.value == rhs.handle.value
     }
 
     public var description: String { "\(type(of: self))(\(handle))" }

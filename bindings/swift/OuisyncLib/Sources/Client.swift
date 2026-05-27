@@ -141,7 +141,7 @@ internal actor Client {
     }
 
     private func sendCancel(id: UInt64) async throws {
-        try await sendFrame(id: id, request: .cancel(id: MessageId(value: id)))
+        try await sendFrame(id: id, request: .cancel(MessageId(value: id)))
     }
 
     // MARK: - Receive loop
@@ -280,12 +280,12 @@ private extension Data {
 
     mutating func appendBigEndian(_ value: UInt32) {
         var v = value.bigEndian
-        withUnsafeBytes(of: &v) { append(contentsOf: $0) }
+        Swift.withUnsafeBytes(of: &v) { append(contentsOf: $0) }
     }
 
     mutating func appendBigEndian(_ value: UInt64) {
         var v = value.bigEndian
-        withUnsafeBytes(of: &v) { append(contentsOf: $0) }
+        Swift.withUnsafeBytes(of: &v) { append(contentsOf: $0) }
     }
 
     var bigEndianUInt32: UInt32 {
