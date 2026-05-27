@@ -1,5 +1,5 @@
 import XCTest
-@testable import OuisyncLib
+@testable import OuisyncLibCore
 
 final class OuisyncLibTests: XCTestCase {
     func testExample() throws {
