@@ -214,5 +214,15 @@ swift test
 - The xcframework is macOS-only for now; iOS targets need a multi-arch fat build.
 - The `OuisyncLibFFI` binary target path is hard-coded; it should move to a separate
   Swift package so downstream apps can integrate without the full repo.
+- **`subscribe()` / streaming API is not yet implemented.** `Repository` and `Session`
+  have no `subscribe()` method even though the underlying protocol supports it
+  (`Request.repositorySubscribe`, `Request.sessionSubscribeToNetwork` are generated).
+  The blocker is that `Client.invoke()` resolves a single `CheckedContinuation` per
+  message ID, so subsequent event notifications are silently dropped. A second
+  registration map (keyed message ID → `AsyncStream.Continuation`) needs to be added
+  to the receive loop, and manual `subscribe() -> NotificationStream` methods added to
+  `Repository` and `Session` — exactly as Kotlin does with its `channels` map and
+  `Flow`-returning extension functions. `NotificationStream.swift` is already scaffolded
+  and waiting for this work.
 - The SPM `FFIBuilder` plugin rebuilds the Rust library on Xcode/SPM builds; the
   `build-xcframework-macos.sh` script is the simpler path for development.
