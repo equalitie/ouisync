@@ -31,7 +31,15 @@ import PackagePlugin
             .removingLastComponent() // ouisync.output
             .appending("Update rust dependencies.output")
 
-        guard FileManager.default.fileExists(atPath: update.string) else {
+        // Check whether a pre-built xcframework already exists.  When it does, the Rust
+        // toolchain is not needed for this build even if the cargo home directory hasn't
+        // been populated yet (e.g. when building an external package that depends on
+        // OuisyncLibCore but not OuisyncLib itself).
+        let xcframework = context.package.directory
+            .appending(["output", "OuisyncLibFFI.xcframework"])
+        let xcframeworkExists = FileManager.default.fileExists(atPath: xcframework.string)
+
+        guard xcframeworkExists || FileManager.default.fileExists(atPath: update.string) else {
             Diagnostics.error("Please run `Update rust dependencies` on the OuisyncLib package")
             fatalError("Unable to build LibOuisyncFFI.xcframework")
         }
