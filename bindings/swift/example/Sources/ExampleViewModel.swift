@@ -1,6 +1,36 @@
 import Foundation
 import OuisyncLib
 
+struct PendingShare: Equatable {
+    let token: String
+    let suggestedName: String
+
+    // Receives an ouisync:// URL, converts it back to https://ouisync.net/...
+    // for validateShareToken, and extracts the suggested name from the fragment.
+    init?(url: URL) {
+        guard url.scheme == "ouisync",
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        components.scheme = "https"
+        guard let httpsURL = components.url else { return nil }
+        token = httpsURL.absoluteString
+
+        // Fragment may be "<encoded-token>" or "<encoded-token>?name=<name>"
+        let fragment = url.fragment ?? ""
+        if let queryStart = fragment.firstIndex(of: "?") {
+            let query = String(fragment[fragment.index(after: queryStart)...])
+            let params = query.split(separator: "&").reduce(into: [String: String]()) { dict, pair in
+                let kv = pair.split(separator: "=", maxSplits: 1)
+                if kv.count == 2 {
+                    dict[String(kv[0])] = String(kv[1]).removingPercentEncoding ?? String(kv[1])
+                }
+            }
+            suggestedName = params["name"] ?? ""
+        } else {
+            suggestedName = ""
+        }
+    }
+}
+
 private let configDir: String = {
     let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
     return appSupport.appendingPathComponent("OuisyncExample/config").path
@@ -18,6 +48,8 @@ class ExampleViewModel: ObservableObject {
 
     @Published var sessionError: String?
     @Published var repositories: [String: Repository] = [:]
+    @Published var pendingShare: PendingShare?
+
 
     init() {
         Task { await start() }

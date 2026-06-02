@@ -106,7 +106,6 @@ struct FolderView: View {
         do {
             switch kind {
             case .file:
-                // Create an empty file, then immediately close it.
                 let file = try await repo.createFile(entryPath)
                 try await file.close()
             case .directory:
@@ -158,7 +157,9 @@ private struct CreateEntrySheet: View {
                 .buttonStyle(.borderedProminent)
             }
         }
+#if os(macOS)
         .frame(width: 280)
+#endif
     }
 
     private func validate() -> Bool {

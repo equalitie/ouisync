@@ -178,7 +178,11 @@ private struct WriteContentSheet: View {
             Text("Write content").font(.headline)
             TextEditor(text: $text)
                 .font(.system(.body, design: .monospaced))
+#if os(macOS)
                 .frame(width: 380, height: 160)
+#else
+                .frame(minHeight: 160)
+#endif
                 .border(Color.secondary.opacity(0.3))
             HStack {
                 Spacer()
@@ -188,7 +192,9 @@ private struct WriteContentSheet: View {
                     .disabled(text.isEmpty)
             }
         }
+#if os(macOS)
         .frame(width: 400)
+#endif
     }
 }
 

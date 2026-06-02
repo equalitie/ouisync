@@ -5,6 +5,8 @@ struct RepositoryListView: View {
     @EnvironmentObject private var viewModel: ExampleViewModel
     @State private var navigationPath: [Route] = []
     @State private var isCreating = false
+    @State private var initialName = ""
+    @State private var initialToken = ""
     @State private var errorMessage: String?
 
     var body: some View {
@@ -28,7 +30,7 @@ struct RepositoryListView: View {
                 }
         }
         .sheet(isPresented: $isCreating) {
-            CreateRepositorySheet { name, token in
+            CreateRepositorySheet(initialName: initialName, initialToken: initialToken) { name, token in
                 isCreating = false
                 Task {
                     do {
@@ -41,6 +43,13 @@ struct RepositoryListView: View {
                 isCreating = false
             }
             .padding()
+        }
+        .onChange(of: viewModel.pendingShare) { share in
+            guard let share else { return }
+            initialName = share.suggestedName
+            initialToken = share.token
+            isCreating = true
+            viewModel.pendingShare = nil
         }
         .alert("Error", isPresented: Binding(
             get: { errorMessage != nil },
@@ -60,24 +69,24 @@ struct RepositoryListView: View {
             ContentUnavailableView("No Repositories", systemImage: "folder", description: Text("Tap + to create a new repository."))
         } else {
             List(Array(viewModel.repositories.keys.sorted()), id: \.self) { name in
-                RepositoryRow(name: name, onNavigate: {
-                    navigationPath.append(.folder(repositoryName: name, path: ""))
-                }, onShare: {
-                    Task {
-                        if let token = await viewModel.shareRepository(name: name) {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(token, forType: .string)
+                RepositoryRow(
+                    name: name,
+                    onNavigate: {
+                        navigationPath.append(.folder(repositoryName: name, path: ""))
+                    },
+                    onShare: {
+                        await viewModel.shareRepository(name: name)
+                    },
+                    onDelete: {
+                        Task {
+                            do {
+                                try await viewModel.deleteRepository(name: name)
+                            } catch {
+                                errorMessage = error.localizedDescription
+                            }
                         }
                     }
-                }, onDelete: {
-                    Task {
-                        do {
-                            try await viewModel.deleteRepository(name: name)
-                        } catch {
-                            errorMessage = error.localizedDescription
-                        }
-                    }
-                })
+                )
             }
         }
     }
@@ -86,9 +95,10 @@ struct RepositoryListView: View {
 private struct RepositoryRow: View {
     let name: String
     let onNavigate: () -> Void
-    let onShare: () -> Void
+    let onShare: () async -> String?
     let onDelete: () -> Void
 
+    @State private var shareToken: String?
     @State private var confirmDelete = false
 
     var body: some View {
@@ -99,13 +109,25 @@ private struct RepositoryRow: View {
                 .contentShape(Rectangle())
                 .onTapGesture { onNavigate() }
 
-            Button { onShare() } label: { Image(systemName: "square.and.arrow.up") }
-                .buttonStyle(.borderless)
-                .help("Copy share token to clipboard")
+            Group {
+                if let shareURL = shareToken.flatMap(ouisyncURL(from:)) {
+                    ShareLink(item: shareURL) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                } else {
+                    Image(systemName: "square.and.arrow.up")
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .buttonStyle(.borderless)
+            .help("Share repository")
 
             Button { confirmDelete = true } label: { Image(systemName: "trash") }
                 .buttonStyle(.borderless)
                 .foregroundStyle(.red)
+        }
+        .task {
+            shareToken = await onShare()
         }
         .confirmationDialog("Delete \"\(name)\"?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) { onDelete() }
@@ -117,12 +139,23 @@ private struct RepositoryRow: View {
 }
 
 private struct CreateRepositorySheet: View {
+    var initialName: String = ""
+    var initialToken: String = ""
     let onSubmit: (String, String) -> Void
     let onCancel: () -> Void
 
-    @State private var name = ""
-    @State private var token = ""
+    @State private var name: String
+    @State private var token: String
     @State private var nameError = ""
+
+    init(initialName: String = "", initialToken: String = "", onSubmit: @escaping (String, String) -> Void, onCancel: @escaping () -> Void) {
+        self.initialName = initialName
+        self.initialToken = initialToken
+        self.onSubmit = onSubmit
+        self.onCancel = onCancel
+        _name = State(initialValue: initialName)
+        _token = State(initialValue: initialToken)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -147,7 +180,9 @@ private struct CreateRepositorySheet: View {
                 .buttonStyle(.borderedProminent)
             }
         }
+#if os(macOS)
         .frame(width: 320)
+#endif
     }
 
     private func validate() -> Bool {
@@ -163,4 +198,13 @@ private struct CreateRepositorySheet: View {
 enum Route: Hashable {
     case folder(repositoryName: String, path: String)
     case file(repositoryName: String, path: String)
+}
+
+// Converts https://ouisync.net/... → ouisync://ouisync.net/... for sharing.
+// AirDrop and other share targets receive the ouisync:// URL; the app converts
+// it back to https:// when validating the token on the receiving side.
+private func ouisyncURL(from token: String) -> URL? {
+    guard var components = URLComponents(string: token) else { return nil }
+    components.scheme = "ouisync"
+    return components.url
 }
