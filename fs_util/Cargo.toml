@@ -13,7 +13,7 @@ tokio        = { workspace = true, features = ["fs", "io-util", "rt", "sync"] }
 tokio-stream = { workspace = true }
 walkdir      = "2.5.0"
 
-[target.'cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "android", target_os = "macos", target_os = "ios"))'.dependencies]
 libc         = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
