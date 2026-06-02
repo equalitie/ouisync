@@ -5,11 +5,9 @@ mod format;
 #[path = "android.rs"]
 mod output;
 
-#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos", target_os = "ios"))]
 #[path = "stdout.rs"]
 mod output;
-
-// TODO: ios
 
 pub use color::{LogColor, ParseLogColorError};
 pub use format::{LogFormat, ParseLogFormatError};
