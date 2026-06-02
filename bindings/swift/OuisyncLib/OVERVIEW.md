@@ -37,7 +37,9 @@ response type; `Client.swift` handles the framing and multiplexing.
 ```
 bindings/swift/OuisyncLib/
 ├── Package.swift                   SPM package definition
-├── build-xcframework-macos.sh      One-shot build script (macOS host)
+├── build-xcframework.sh            One-shot build script (all configured platforms)
+├── build-xcframework-macos.sh      One-shot build script (macOS host only)
+├── config.sh                       Target list for build-xcframework.sh
 ├── Sources/                        OuisyncLibCore target
 │   ├── Client.swift                TCP client, auth, framing
 │   ├── Session.swift               Session lifecycle
@@ -78,22 +80,39 @@ Verify the active developer tools point at Xcode (not CommandLineTools):
 xcode-select -p   # must print …/Xcode.app/Contents/Developer
 ```
 
+To build for iOS targets, add the required Rust toolchains (one-time setup):
+
+```sh
+rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+```
+
 ## 1. Build the xcframework
 
 The xcframework (`OuisyncLibFFI.xcframework`) bundles the compiled Rust static library
 together with the C header so SPM and Xcode can consume it.
 
 ```sh
-# From anywhere inside the repo:
-bash bindings/swift/OuisyncLib/build-xcframework-macos.sh
+# From anywhere inside the repo — builds all targets in config.sh:
+bash bindings/swift/OuisyncLib/build-xcframework.sh
 ```
 
 This script:
-1. Runs `cargo build --package ouisync-service --release --target <host-arch>-apple-darwin`
-2. Runs `cbindgen` to generate `target/swift-include/bindings.h` from the Rust sources
-3. Creates `OuisyncLib/output/OuisyncLibFFI.xcframework` via `xcodebuild -create-xcframework`
+1. Reads the enabled targets from `config.sh` (macOS, iOS device, iOS simulator)
+2. Runs `cargo build --package ouisync-service --release --target <triple>` for each
+3. Runs `cbindgen` to generate `target/swift-include/bindings.h` from the Rust sources
+4. Combines simulator slices with `lipo` where needed
+5. Creates `OuisyncLib/output/OuisyncLibFFI.xcframework` via `xcodebuild -create-xcframework`
+
+The resulting xcframework contains slices for all enabled platforms, so the same artifact
+works for both macOS and iOS builds in Xcode.
 
 > Re-run this script any time the Rust service API changes.
+
+For macOS-only development (faster, skips iOS compilation):
+
+```sh
+bash bindings/swift/OuisyncLib/build-xcframework-macos.sh
+```
 
 ## 2. Regenerate Api.swift
 
@@ -211,7 +230,6 @@ swift test
 
 ## Known limitations / TODOs
 
-- The xcframework is macOS-only for now; iOS targets need a multi-arch fat build.
 - The `OuisyncLibFFI` binary target path is hard-coded; it should move to a separate
   Swift package so downstream apps can integrate without the full repo.
 - **`subscribe()` / streaming API is not yet implemented.** `Repository` and `Session`
@@ -225,4 +243,4 @@ swift test
   `Flow`-returning extension functions. `NotificationStream.swift` is already scaffolded
   and waiting for this work.
 - The SPM `FFIBuilder` plugin rebuilds the Rust library on Xcode/SPM builds; the
-  `build-xcframework-macos.sh` script is the simpler path for development.
+  `build-xcframework.sh` script is the simpler path for development.
