@@ -143,7 +143,7 @@ fn blocking_rename_no_replace_atomic(src: &Path, dst: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn blocking_rename_no_replace_atomic(src: &Path, dst: &Path) -> io::Result<()> {
     use std::ffi::CString;
 
