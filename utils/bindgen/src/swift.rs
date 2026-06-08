@@ -801,13 +801,80 @@ fn write_api_class(
     let prefix = format!("{}_", AsSnakeCase(name));
 
     for (variant_name, variant) in request_variants {
-        if variant.skip || variant.ret_stream_item.is_some() {
+        if variant.skip {
             continue;
         }
 
         let Some(op_name) = variant_name.strip_prefix(&prefix) else {
             continue;
         };
+
+        if let Some(stream_item) = &variant.ret_stream_item {
+            writeln!(out)?;
+            write_docs(out, I, &variant.docs)?;
+            write!(out, "{I}public func {}(", AsLowerCamelCase(op_name))?;
+
+            let mut first = true;
+            for (index, (arg_name, field)) in variant.fields.iter().enumerate() {
+                if index == 0 && handle {
+                    continue;
+                }
+                if !first {
+                    write!(out, ", ")?;
+                }
+                let param_name = AsLowerCamelCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME));
+                write!(out, "_ {param_name}: {}", SwiftType(&field.ty))?;
+                first = false;
+            }
+
+            writeln!(out, ") async throws -> AsyncStream<{}> {{", SwiftType(stream_item))?;
+
+            let request_case = format!("{}", AsLowerCamelCase(variant_name));
+            if variant.fields.is_empty() {
+                writeln!(out, "{I}{I}let request = Request.{request_case}")?;
+            } else {
+                writeln!(out, "{I}{I}let request = Request.{request_case}(")?;
+                for (index, (arg_name, _)) in variant.fields.iter().enumerate() {
+                    let arg = AsLowerCamelCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME));
+                    if index == 0 && handle {
+                        writeln!(out, "{I}{I}{I}handle,")?;
+                    } else {
+                        writeln!(out, "{I}{I}{I}{arg},")?;
+                    }
+                }
+                writeln!(out, "{I}{I})")?;
+            }
+
+            writeln!(out, "{I}{I}let stream = try await client.subscribe(request)")?;
+            writeln!(out, "{I}{I}return AsyncStream {{ continuation in")?;
+            writeln!(out, "{I}{I}{I}let task = Task {{")?;
+            writeln!(out, "{I}{I}{I}{I}for await response in stream {{")?;
+            writeln!(out, "{I}{I}{I}{I}{I}switch response {{")?;
+
+            match stream_item {
+                Type::Unit => {
+                    writeln!(out, "{I}{I}{I}{I}{I}case .unit: continuation.yield(())")?;
+                }
+                _ => {
+                    let rv = stream_item.to_response_variant_name();
+                    let rc = format!("{}", AsLowerCamelCase(&rv));
+                    writeln!(
+                        out,
+                        "{I}{I}{I}{I}{I}case .{rc}(let value): continuation.yield(value)"
+                    )?;
+                }
+            }
+
+            writeln!(out, "{I}{I}{I}{I}{I}default: break")?;
+            writeln!(out, "{I}{I}{I}{I}{I}}}")?;
+            writeln!(out, "{I}{I}{I}{I}}}")?;
+            writeln!(out, "{I}{I}{I}{I}continuation.finish()")?;
+            writeln!(out, "{I}{I}{I}}}")?;
+            writeln!(out, "{I}{I}{I}continuation.onTermination = {{ _ in task.cancel() }}")?;
+            writeln!(out, "{I}{I}}}")?;
+            writeln!(out, "{I}}}")?;
+            continue;
+        }
 
         let ret = match &variant.ret {
             Type::Result(ty, _) => ty.as_ref(),

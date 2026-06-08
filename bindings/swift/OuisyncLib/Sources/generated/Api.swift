@@ -1519,6 +1519,32 @@ public class Session {
         }
     }
 
+    /// Starts a DHT lookup for the given info-hash (formated as hex string). Returns a stream of
+    /// discovered peer addresses. If `announce` is true, also announces us as having the content
+    /// corresponding to the info-hash.
+    ///
+    /// Note: Currently this doesn't automatically connnect to the discovered peers but this might
+    /// change in the future.
+    public func dhtLookup(_ infoHash: String, _ announce: Bool) async throws -> AsyncStream<String> {
+        let request = Request.sessionDhtLookup(
+            infoHash,
+            announce,
+        )
+        let stream = try await client.subscribe(request)
+        return AsyncStream { continuation in
+            let task = Task {
+                for await response in stream {
+                    switch response {
+                    case .peerAddr(let value): continuation.yield(value)
+                    default: break
+                    }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
     public func findRepository(_ name: String) async throws -> Repository {
         let request = Request.sessionFindRepository(
             name,
@@ -2209,6 +2235,42 @@ public class Session {
             return
         default:
             throw UnexpectedResponse()
+        }
+    }
+
+    public func subscribeToNetwork() async throws -> AsyncStream<NetworkEvent> {
+        let request = Request.sessionSubscribeToNetwork
+        let stream = try await client.subscribe(request)
+        return AsyncStream { continuation in
+            let task = Task {
+                for await response in stream {
+                    switch response {
+                    case .networkEvent(let value): continuation.yield(value)
+                    default: break
+                    }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    public func subscribeToStateMonitor(_ path: [MonitorId]) async throws -> AsyncStream<Void> {
+        let request = Request.sessionSubscribeToStateMonitor(
+            path,
+        )
+        let stream = try await client.subscribe(request)
+        return AsyncStream { continuation in
+            let task = Task {
+                for await response in stream {
+                    switch response {
+                    case .unit: continuation.yield(())
+                    default: break
+                    }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
@@ -2915,6 +2977,25 @@ public class Repository {
         case .shareToken(let value): return value
         default:
             throw UnexpectedResponse()
+        }
+    }
+
+    public func subscribe() async throws -> AsyncStream<Void> {
+        let request = Request.repositorySubscribe(
+            handle,
+        )
+        let stream = try await client.subscribe(request)
+        return AsyncStream { continuation in
+            let task = Task {
+                for await response in stream {
+                    switch response {
+                    case .unit: continuation.yield(())
+                    default: break
+                    }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 

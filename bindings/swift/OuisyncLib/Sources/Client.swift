@@ -13,6 +13,7 @@ internal actor Client {
     private let connection: NWConnection
     private var nextId: UInt64 = 1
     private var pending: [UInt64: CheckedContinuation<Response, Error>] = [:]
+    private var subscriptions: [UInt64: AsyncStream<Response>.Continuation] = [:]
 
     private init(_ connection: NWConnection) {
         self.connection = connection
@@ -92,6 +93,44 @@ internal actor Client {
         }
     }
 
+    func subscribe(_ request: Request) async throws -> AsyncStream<Response> {
+        let id = nextId
+        nextId &+= 1
+
+        var streamContinuation: AsyncStream<Response>.Continuation!
+        let stream = AsyncStream<Response>(bufferingPolicy: .bufferingNewest(16)) { cont in
+            streamContinuation = cont
+        }
+        subscriptions[id] = streamContinuation
+        streamContinuation.onTermination = { [weak self] _ in
+            Task { [weak self] in await self?.unsubscribe(id: id) }
+        }
+
+        do {
+            return try await withTaskCancellationHandler {
+                _ = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Response, Error>) in
+                    pending[id] = cont
+                    Task {
+                        do {
+                            try await sendFrame(id: id, request: request)
+                        } catch {
+                            if let c = pending.removeValue(forKey: id) {
+                                subscriptions.removeValue(forKey: id)?.finish()
+                                c.resume(throwing: error)
+                            }
+                        }
+                    }
+                }
+                return stream
+            } onCancel: {
+                Task { [weak self] in await self?.cancelSubscribe(id: id) }
+            }
+        } catch {
+            subscriptions.removeValue(forKey: id)?.finish()
+            throw error
+        }
+    }
+
     func close() {
         connection.cancel()
     }
@@ -163,7 +202,7 @@ internal actor Client {
                 guard let (value, _) = try? unpack(Data(payload)) else { continue }
                 let result = decodeResponseResult(value)
 
-                // Resume continuation
+                // Route to pending one-shot or active subscription stream
                 if let cont = pending.removeValue(forKey: messageId) {
                     switch result {
                     case .success(let response):
@@ -171,17 +210,45 @@ internal actor Client {
                     case .failure(let error):
                         cont.resume(throwing: error)
                     }
+                } else if let cont = subscriptions[messageId] {
+                    switch result {
+                    case .success(let response):
+                        cont.yield(response)
+                    case .failure:
+                        cont.finish()
+                        subscriptions.removeValue(forKey: messageId)
+                    }
                 }
             } catch {
-                // Connection closed or error: fail all pending
+                // Connection closed or error: fail all pending and close all streams
                 let all = pending
                 pending.removeAll()
                 for cont in all.values {
                     cont.resume(throwing: error)
                 }
+                let allSubs = subscriptions
+                subscriptions.removeAll()
+                for cont in allSubs.values {
+                    cont.finish()
+                }
                 return
             }
         }
+    }
+
+    // MARK: - Subscription helpers
+
+    private func cancelSubscribe(id: UInt64) async {
+        if let c = pending.removeValue(forKey: id) {
+            subscriptions.removeValue(forKey: id)?.finish()
+            c.resume(throwing: CancellationError())
+        }
+        try? await sendCancel(id: id)
+    }
+
+    private func unsubscribe(id: UInt64) async {
+        guard subscriptions.removeValue(forKey: id) != nil else { return }
+        try? await sendCancel(id: id)
     }
 
     // MARK: - NWConnection helpers
