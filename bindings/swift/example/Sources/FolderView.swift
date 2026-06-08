@@ -36,6 +36,7 @@ struct FolderView: View {
         }
         .navigationTitle(path.isEmpty ? repositoryName : "\(repositoryName)\(path)")
         .task { await loadEntries() }
+        .task(id: repositoryName) { await watchRepository() }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { isCreating = true } label: { Image(systemName: "plus") }
@@ -83,6 +84,14 @@ struct FolderView: View {
     }
 
     // MARK: - Actions
+
+    private func watchRepository() async {
+        guard let repo else { return }
+        guard let stream = try? await repo.subscribe() else { return }
+        for await _ in stream {
+            await loadEntries()
+        }
+    }
 
     private func loadEntries() async {
         guard let repo else {
