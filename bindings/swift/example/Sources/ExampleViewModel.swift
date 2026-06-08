@@ -108,6 +108,9 @@ class ExampleViewModel: ObservableObject {
         guard let session else { return }
         do {
             repositories = try await session.listRepositories()
+            for (_, repo) in repositories {
+                try await repo.setSyncEnabled(true)
+            }
             await loadInfoHashes()
         } catch {
             sessionError = "Failed to list repositories: \(error)"
