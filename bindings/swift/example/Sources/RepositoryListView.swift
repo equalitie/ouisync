@@ -70,7 +70,8 @@ struct RepositoryListView: View {
         } else {
             List(Array(viewModel.repositories.keys.sorted()), id: \.self) { name in
                 RepositoryRow(
-                    name: name,
+                    name: URL(fileURLWithPath: name).deletingPathExtension().lastPathComponent,
+                    infoHash: viewModel.repositoryInfoHashes[name],
                     onNavigate: {
                         navigationPath.append(.folder(repositoryName: name, path: ""))
                     },
@@ -94,6 +95,7 @@ struct RepositoryListView: View {
 
 private struct RepositoryRow: View {
     let name: String
+    let infoHash: String?
     let onNavigate: () -> Void
     let onShare: () async -> String?
     let onDelete: () -> Void
@@ -104,10 +106,18 @@ private struct RepositoryRow: View {
     var body: some View {
         HStack {
             Image(systemName: "folder")
-            Text(name)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture { onNavigate() }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name)
+                if let hash = infoHash {
+                    Text("id: \(hash.prefix(16))…")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .monospaced()
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { onNavigate() }
 
             Group {
                 if let shareURL = shareToken.flatMap(ouisyncURL(from:)) {

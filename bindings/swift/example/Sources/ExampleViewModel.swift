@@ -48,6 +48,7 @@ class ExampleViewModel: ObservableObject {
 
     @Published var sessionError: String?
     @Published var repositories: [String: Repository] = [:]
+    @Published var repositoryInfoHashes: [String: String] = [:]
     @Published var pendingShare: PendingShare?
 
 
@@ -107,9 +108,21 @@ class ExampleViewModel: ObservableObject {
         guard let session else { return }
         do {
             repositories = try await session.listRepositories()
+            await loadInfoHashes()
         } catch {
             sessionError = "Failed to list repositories: \(error)"
         }
+    }
+
+    private func loadInfoHashes() async {
+        var hashes: [String: String] = [:]
+        for (name, repo) in repositories {
+            if let hash = try? await repo.getInfoHash() {
+                hashes[name] = hash
+                print("[ouisync] repository \"\(name)\" info_hash=\(hash)")
+            }
+        }
+        repositoryInfoHashes = hashes
     }
 
     func createRepository(name: String, token: String) async throws {
@@ -123,11 +136,16 @@ class ExampleViewModel: ObservableObject {
         // syncEnabled / dhtEnabled / pexEnabled all true so the new repo starts syncing immediately.
         let repo = try await session.createRepository(name, nil, nil, shareToken, true, true, true)
         repositories[name] = repo
+        if let hash = try? await repo.getInfoHash() {
+            repositoryInfoHashes[name] = hash
+            print("[ouisync] repository \"\(name)\" info_hash=\(hash)")
+        }
     }
 
     func deleteRepository(name: String) async throws {
         guard let repo = repositories[name] else { return }
         repositories.removeValue(forKey: name)
+        repositoryInfoHashes.removeValue(forKey: name)
         try await repo.delete()
     }
 
