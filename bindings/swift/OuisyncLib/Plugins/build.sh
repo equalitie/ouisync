@@ -51,7 +51,7 @@ cd $PROJECT_HOME
 for TARGET in ${(k)TARGETS}; do
     "$CARGO_HOME/bin/cross" build \
         --frozen \
-        --package ouisync-ffi \
+        --package ouisync-service \
         --target $TARGET \
         --target-dir "$BUILD_OUTPUT" \
         $FLAGS || exit 1
@@ -64,7 +64,7 @@ echo "module OuisyncLibFFI {
     header \"bindings.h\"
     export *
 }" > "$INCLUDE/module.modulemap"
-"$CARGO_HOME/bin/cbindgen" --lang C --crate ouisync-ffi > "$INCLUDE/bindings.h" || exit 2
+"$CARGO_HOME/bin/cbindgen" --lang C --crate ouisync-service --config "$PROJECT_HOME/service/cbindgen.toml" > "$INCLUDE/bindings.h" || exit 2
 
 # delete previous framework (possibly a stub) and replace with new one that contains the archive
 # TODO: some symlinks would be lovely here instead, cargo already create two copies
@@ -86,7 +86,7 @@ for PLATFORM OUTPUTS in ${(kv)TREE}; do
     MATCHED=()  # list of libraries compiled for this platform
     for TARGET in ${=OUTPUTS}; do
         if [[ -v TARGETS[$TARGET] ]]; then
-            MATCHED+="$BUILD_OUTPUT/$TARGET/$CONFIGURATION/libouisync_ffi.a"
+            MATCHED+="$BUILD_OUTPUT/$TARGET/$CONFIGURATION/libouisync_service.a"
         fi
     done
     if [ $#MATCHED -eq 0 ]; then  # platform not enabled
@@ -94,7 +94,7 @@ for PLATFORM OUTPUTS in ${(kv)TREE}; do
     elif [ $#MATCHED -eq 1 ]; then  # single architecture: skip lipo and link directly
         LIBRARY=$MATCHED
     else  # at least two architectures; run lipo on all matches and link the output instead
-        LIBRARY="$BUILD_OUTPUT/$PLATFORM/libouisync_ffi.a"
+        LIBRARY="$BUILD_OUTPUT/$PLATFORM/libouisync_service.a"
         mkdir -p "$(dirname "$LIBRARY")"
         lipo -create $MATCHED[@] -output $LIBRARY || exit 3
     fi

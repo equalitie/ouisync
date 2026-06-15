@@ -1,0 +1,13 @@
+# Build output
+.build/
+DerivedData/
+build/
+
+# Xcode user-specific files
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# Xcode auto-generated workspace data (schemes, package pins, etc.)
+xcshareddata/

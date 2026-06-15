@@ -1,0 +1,5 @@
+language = "C"
+include_guard = "OUISYNC_SERVICE_H"
+
+[parse]
+parse_deps = false

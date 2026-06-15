@@ -1,6 +1,7 @@
 mod cpp;
 mod dart;
 mod kotlin;
+mod swift;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -16,6 +17,7 @@ fn main() -> Result<()> {
     match options.language {
         Language::Dart => dart::generate(&context, &mut io::stdout())?,
         Language::Kotlin => kotlin::generate(&context, &mut io::stdout())?,
+        Language::Swift => swift::generate(&context, &mut io::stdout())?,
         Language::Cpp { out_dir } => cpp::generate(&context, &out_dir)?,
     }
 
@@ -34,6 +36,7 @@ struct Options {
 enum Language {
     Dart,
     Kotlin,
+    Swift,
     Cpp {
         /// Output directory for generated *.{hpp,cpp} files
         out_dir: PathBuf,
