@@ -2,6 +2,7 @@
 
 #include <boost/system/system_error.hpp>
 #include <ouisync/data.hpp>
+#include <ouisync/lib_api.hpp>
 
 namespace ouisync::error {
 
@@ -119,8 +120,8 @@ public:
 
 // -------------------------------------
 // Boilerplate in ouisync::error namespace
-const boost::system::error_category& client_error_category();
-const boost::system::error_category& service_error_category();
+const OUISYNC_COMMON_API boost::system::error_category& client_error_category();
+const OUISYNC_COMMON_API boost::system::error_category& service_error_category();
 
 inline
 boost::system::error_code make_error_code(error::Client e) {

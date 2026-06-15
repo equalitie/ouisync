@@ -105,7 +105,7 @@ corrosion_import_crate(
 install(TARGETS ouisync_service DESTINATION ${CMAKE_INSTALL_PREFIX})
 
 add_library(cpp_ouisync_service
-    STATIC
+    SHARED
         ouisync/data.g.cpp
         ouisync/error.cpp
         ouisync/service.cpp
@@ -130,8 +130,10 @@ target_include_directories(cpp_ouisync_service
         ${Boost_INCLUDE_DIRS}
 )
 
+target_compile_definitions(cpp_ouisync_service PRIVATE OUISYNC_API_SERVICE_EXPORT)
+
 if (OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION)
-    target_compile_definitions(cpp_ouisync_service PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)
+    target_compile_definitions(cpp_ouisync_service PUBLIC BOOST_ASIO_SEPARATE_COMPILATION)
 endif()
 
 ###########################################################
@@ -172,7 +174,7 @@ add_custom_target(ouisync_generate_api
 )
 
 add_library(cpp_ouisync_client
-    STATIC
+    SHARED
         ouisync/client.cpp
         ouisync/serialize.cpp
         ouisync/error.cpp
@@ -196,11 +198,13 @@ target_link_libraries(cpp_ouisync_client
         msgpack-cxx
 )
 
+target_compile_definitions(cpp_ouisync_client PRIVATE OUISYNC_API_CLIENT_EXPORT)
+
 target_compile_features(cpp_ouisync_client PUBLIC cxx_std_20)
 target_compile_features(cpp_ouisync_service PUBLIC cxx_std_20)
 
 if (OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION)
-    target_compile_definitions(cpp_ouisync_client PUBLIC -DBOOST_ASIO_SEPARATE_COMPILATION)
+    target_compile_definitions(cpp_ouisync_client PUBLIC BOOST_ASIO_SEPARATE_COMPILATION)
 endif()
 
 if (NOT OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION)

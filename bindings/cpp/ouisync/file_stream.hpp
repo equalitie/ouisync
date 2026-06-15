@@ -7,12 +7,13 @@
 #include <memory>
 #include <boost/asio.hpp>
 #include <ouisync/api.g.hpp>
+#include <ouisync/lib_api.hpp>
 
 namespace ouisync {
 
 /// Adapter for ouisync::File which fullfils the `AsyncReadStream` and `AsyncWriteStream`
 /// requirements from asio.
-class FileStream {
+class OUISYNC_CLIENT_API FileStream {
 private:
     struct State {
         ouisync::File file;

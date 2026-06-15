@@ -2,10 +2,11 @@
 
 #include <boost/asio/spawn.hpp>
 #include <boost/filesystem/path.hpp>
+#include <ouisync/lib_api.hpp>
 
 namespace ouisync {
 
-class Service {
+class OUISYNC_SERVICE_API Service {
 public:
     Service(boost::asio::any_io_executor exec);
 
@@ -40,6 +41,6 @@ private:
     std::shared_ptr<State> _state;
 };
 
-void init_log();
+OUISYNC_SERVICE_API void init_log();
 
 } // namespace ouisync

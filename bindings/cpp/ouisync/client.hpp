@@ -13,6 +13,7 @@
 #include <boost/system/detail/error_code.hpp>
 #include <ouisync/error.hpp>
 #include <ouisync/handler.hpp>
+#include <ouisync/lib_api.hpp>
 
 namespace ouisync {
 
@@ -29,7 +30,7 @@ class Subscription;
 
 const std::size_t default_subscription_buffer_size = 32;
 
-class Client : public std::enable_shared_from_this<Client> {
+class OUISYNC_CLIENT_API Client : public std::enable_shared_from_this<Client> {
 public:
     struct State;
 
