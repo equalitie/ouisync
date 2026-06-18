@@ -508,18 +508,39 @@ fn write_complex_enum(
     writeln!(out.hpp, "{I}>;")?;
     writeln!(out.hpp)?;
 
+    writeln!(out.hpp, "{I}{ALTERNATIVES_SUFFIX} value;")?;
+    writeln!(out.hpp)?;
+
+    // `Request` is treated specially:
+    //
+    // Deleting default constructor because the first alternative (`Cancel`) is not
+    // default-constructible (because it contains a reference). We could designate some other
+    // variant as default but there isn't any that would be meaningful and also it's not really
+    // needed.
+    //
+    // Also deleting move and copy assignment operators because some of the alternatives contain
+    // const references.
+    if matches!(item_type, ItemType::Message(MessageType::Request)) {
+        writeln!(out.hpp, "{I}{name}() = delete;")?;
+        writeln!(out.hpp, "{I}{name}& operator=({name}&&) = delete;")?;
+        writeln!(out.hpp, "{I}{name}& operator=({name} const&) = delete;")?;
+    } else {
+        writeln!(out.hpp, "{I}{name}() = default;")?;
+        writeln!(out.hpp, "{I}{name}& operator=({name}&&) = default;")?;
+        writeln!(out.hpp, "{I}{name}& operator=({name} const&) = default;")?;
+    }
+
     writedoc!(
         out.hpp,
         "
-        {I}{ALTERNATIVES_SUFFIX} value;
-
-        {I}{name}() = default;
         {I}{name}({name}&&) = default;
-        {I}{name}& operator=({name}&&) = default;
         {I}{name}({name} const&) = default;
 
         {I}template<class T>
-        {I}requires(!std::same_as<std::remove_cvref_t<T>, {name}>)
+        {I}requires(
+        {I}{I}!std::same_as<std::remove_cvref_t<T>, {name}> &&
+        {I}{I}std::constructible_from<Alternatives, T>
+        {I})
         {I}{name}(T&& v)
         {I}{I}: value(std::forward<T>(v)) {{}}
 

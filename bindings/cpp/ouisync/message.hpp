@@ -42,7 +42,9 @@ struct ResponseResult {
 
     Alternatives value;
 
-    ResponseResult() = default;
+    ResponseResult()
+        : value(Failure { error::Service::invalid_data, {}, {} })
+    {};
     ResponseResult(ResponseResult&&) = default;
     ResponseResult(const ResponseResult&) = delete;
     ResponseResult& operator=(const ResponseResult&) = delete;

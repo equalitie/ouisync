@@ -677,13 +677,17 @@ struct Request {
 
     Alternatives value;
 
-    Request() = default;
+    Request() = delete;
+    Request& operator=(Request&&) = delete;
+    Request& operator=(Request const&) = delete;
     Request(Request&&) = default;
-    Request& operator=(Request&&) = default;
     Request(Request const&) = default;
 
     template<class T>
-    requires(!std::same_as<std::remove_cvref_t<T>, Request>)
+    requires(
+        !std::same_as<std::remove_cvref_t<T>, Request> &&
+        std::constructible_from<Alternatives, T>
+    )
     Request(T&& v)
         : value(std::forward<T>(v)) {}
 
@@ -1956,12 +1960,16 @@ struct Response {
     Alternatives value;
 
     Response() = default;
-    Response(Response&&) = default;
     Response& operator=(Response&&) = default;
+    Response& operator=(Response const&) = default;
+    Response(Response&&) = default;
     Response(Response const&) = default;
 
     template<class T>
-    requires(!std::same_as<std::remove_cvref_t<T>, Response>)
+    requires(
+        !std::same_as<std::remove_cvref_t<T>, Response> &&
+        std::constructible_from<Alternatives, T>
+    )
     Response(T&& v)
         : value(std::forward<T>(v)) {}
 

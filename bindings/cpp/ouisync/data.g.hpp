@@ -124,12 +124,16 @@ struct LocalSecret {
     Alternatives value;
 
     LocalSecret() = default;
-    LocalSecret(LocalSecret&&) = default;
     LocalSecret& operator=(LocalSecret&&) = default;
+    LocalSecret& operator=(LocalSecret const&) = default;
+    LocalSecret(LocalSecret&&) = default;
     LocalSecret(LocalSecret const&) = default;
 
     template<class T>
-    requires(!std::same_as<std::remove_cvref_t<T>, LocalSecret>)
+    requires(
+        !std::same_as<std::remove_cvref_t<T>, LocalSecret> &&
+        std::constructible_from<Alternatives, T>
+    )
     LocalSecret(T&& v)
         : value(std::forward<T>(v)) {}
 
@@ -192,12 +196,16 @@ struct SetLocalSecret {
     Alternatives value;
 
     SetLocalSecret() = default;
-    SetLocalSecret(SetLocalSecret&&) = default;
     SetLocalSecret& operator=(SetLocalSecret&&) = default;
+    SetLocalSecret& operator=(SetLocalSecret const&) = default;
+    SetLocalSecret(SetLocalSecret&&) = default;
     SetLocalSecret(SetLocalSecret const&) = default;
 
     template<class T>
-    requires(!std::same_as<std::remove_cvref_t<T>, SetLocalSecret>)
+    requires(
+        !std::same_as<std::remove_cvref_t<T>, SetLocalSecret> &&
+        std::constructible_from<Alternatives, T>
+    )
     SetLocalSecret(T&& v)
         : value(std::forward<T>(v)) {}
 
@@ -273,12 +281,16 @@ struct AccessChange {
     Alternatives value;
 
     AccessChange() = default;
-    AccessChange(AccessChange&&) = default;
     AccessChange& operator=(AccessChange&&) = default;
+    AccessChange& operator=(AccessChange const&) = default;
+    AccessChange(AccessChange&&) = default;
     AccessChange(AccessChange const&) = default;
 
     template<class T>
-    requires(!std::same_as<std::remove_cvref_t<T>, AccessChange>)
+    requires(
+        !std::same_as<std::remove_cvref_t<T>, AccessChange> &&
+        std::constructible_from<Alternatives, T>
+    )
     AccessChange(T&& v)
         : value(std::forward<T>(v)) {}
 
@@ -409,12 +421,16 @@ struct PeerState {
     Alternatives value;
 
     PeerState() = default;
-    PeerState(PeerState&&) = default;
     PeerState& operator=(PeerState&&) = default;
+    PeerState& operator=(PeerState const&) = default;
+    PeerState(PeerState&&) = default;
     PeerState(PeerState const&) = default;
 
     template<class T>
-    requires(!std::same_as<std::remove_cvref_t<T>, PeerState>)
+    requires(
+        !std::same_as<std::remove_cvref_t<T>, PeerState> &&
+        std::constructible_from<Alternatives, T>
+    )
     PeerState(T&& v)
         : value(std::forward<T>(v)) {}
 
