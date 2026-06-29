@@ -80,7 +80,7 @@ public:
     template<
         boost::asio::completion_token_for<void(boost::system::error_code)> CompletionToken
     >
-    void close(CompletionToken token) {
+    auto close(CompletionToken token) {
         auto file = take();
 
         return boost::asio::async_initiate<CompletionToken, void(boost::system::error_code)>(
