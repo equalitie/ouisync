@@ -757,11 +757,40 @@ fn write_api_class(
         writedoc!(
             out_hpp,
             "
-            {I}static Session connect(
+            {I}template<typename CompletionToken>
+            {I}requires
+            {I}{I}boost::asio::completion_token_for<
+            {I}{I}{I}CompletionToken,
+            {I}{I}{I}void(boost::system::error_code, Session)
+            {I}{I}> &&
+            {I}{I}std::convertible_to<
+            {I}{I}{I}boost::asio::associated_executor_t<CompletionToken>,
+            {I}{I}{I}boost::asio::any_io_executor
+            {I}{I}>
+            {I}static auto connect(
             {I}{I}const boost::filesystem::path& config_dir,
-            {I}{I}boost::asio::yield_context yield
+            {I}{I}CompletionToken token
             {I}) {{
-            {I}{I}return Session(ouisync::Client::connect(config_dir, yield));
+            {I}{I}auto exec = boost::asio::get_associated_executor(token);
+            {I}{I}return boost::asio::async_initiate<
+            {I}{I}{I}CompletionToken,
+            {I}{I}{I}void(boost::system::error_code, Session)
+            {I}{I}>
+            {I}{I}(
+            {I}{I}{I}[&](auto handler) {{
+            {I}{I}{I}{I}ouisync::Client::connect(
+            {I}{I}{I}{I}{I}config_dir,
+            {I}{I}{I}{I}{I}boost::asio::bind_executor(
+            {I}{I}{I}{I}{I}{I}exec,
+            {I}{I}{I}{I}{I}{I}[handler = std::move(handler)]
+            {I}{I}{I}{I}{I}{I}(boost::system::error_code ec, std::shared_ptr<Client> client) mutable {{
+            {I}{I}{I}{I}{I}{I}{I}handler(ec, Session(std::move(client)));
+            {I}{I}{I}{I}{I}{I}}}
+            {I}{I}{I}{I}{I})
+            {I}{I}{I}{I});
+            {I}{I}{I}}},
+            {I}{I}{I}token
+            {I}{I});
             {I}}}
 
             "

@@ -1133,11 +1133,40 @@ public:
      * config_dir_path: Path to a directory created by Ouisync service
      *                  containing local_endpoint.conf file.
      */
-    static Session connect(
+    template<typename CompletionToken>
+    requires
+        boost::asio::completion_token_for<
+            CompletionToken,
+            void(boost::system::error_code, Session)
+        > &&
+        std::convertible_to<
+            boost::asio::associated_executor_t<CompletionToken>,
+            boost::asio::any_io_executor
+        >
+    static auto connect(
         const boost::filesystem::path& config_dir,
-        boost::asio::yield_context yield
+        CompletionToken token
     ) {
-        return Session(ouisync::Client::connect(config_dir, yield));
+        auto exec = boost::asio::get_associated_executor(token);
+        return boost::asio::async_initiate<
+            CompletionToken,
+            void(boost::system::error_code, Session)
+        >
+        (
+            [&](auto handler) {
+                ouisync::Client::connect(
+                    config_dir,
+                    boost::asio::bind_executor(
+                        exec,
+                        [handler = std::move(handler)]
+                        (boost::system::error_code ec, std::shared_ptr<Client> client) mutable {
+                            handler(ec, Session(std::move(client)));
+                        }
+                    )
+                );
+            },
+            token
+        );
     }
 
     /**

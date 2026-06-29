@@ -1,11 +1,14 @@
 #include "ouisync/data.g.hpp"
 #include "ouisync/message.g.hpp"
+#include <boost/asio/any_completion_handler.hpp>
+#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>
 #include <boost/asio/cancellation_type.hpp>
 #include <boost/asio/detached.hpp>
 #include <boost/asio/error.hpp>
 #include <boost/asio/spawn.hpp>
 #include <boost/system/detail/error_code.hpp>
+#include <boost/system/system_error.hpp>
 #include <exception>
 #include <ouisync/client.hpp>
 #include <ouisync/serialize.hpp>
@@ -490,13 +493,7 @@ void authenticate(Socket& socket, const std::vector<uint8_t>& auth_key, asio::yi
     asio::async_write(socket, asio::buffer(client_proof), yield);
 }
 
-// static
-std::shared_ptr<Client> Client::connect(
-    const boost::filesystem::path& config_dir_path,
-    asio::yield_context yield
-) {
-    auto ep = read_local_endpoint(config_dir_path);
-
+static std::shared_ptr<Client> connect_coro(LocalEndpoint ep, asio::yield_context yield) {
     Socket socket(yield.get_executor());
 
     socket.async_connect(
@@ -509,7 +506,28 @@ std::shared_ptr<Client> Client::connect(
 
     authenticate(socket, ep.auth_key, yield);
 
-    return std::make_shared<Client>(std::make_shared<State>(std::move(socket)));
+    return std::make_shared<Client>(
+        std::make_shared<Client::State>(std::move(socket))
+    );
+};
+
+// static
+void Client::connect_impl(
+    const boost::asio::any_io_executor& exec,
+    const boost::filesystem::path& config_dir_path,
+    asio::any_completion_handler<void(system::error_code, std::shared_ptr<Client>)> handler
+) {
+    auto ep = read_local_endpoint(config_dir_path);
+    asio::spawn(
+        exec,
+        [ep = std::move(ep), handler = std::move(handler)]
+        (asio::yield_context yield) mutable {
+            system::error_code ec;
+            auto client = connect_coro(ep, yield[ec]);
+            handler(ec, std::move(client));
+        },
+        asio::detached
+    );
 }
 
 } // namespace ouisync

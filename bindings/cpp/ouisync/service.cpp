@@ -1,14 +1,13 @@
+#include <iostream>
+
+#include <boost/asio/detached.hpp>
+#include <boost/asio/spawn.hpp>
+
 #include <ouisync/service.hpp>
 #include <ouisync/data.hpp>
 #include <ouisync/error.hpp>
-#include <mutex>
 
-#include <boost/asio/any_completion_handler.hpp>
-#include <boost/asio/detached.hpp>
-
-#include <iostream>
-
-typedef void(Callback)(const void* context, ouisync::error::Service);
+typedef void(Callback)(void* context, ouisync::error::Service);
 
 // Defined in the Rust code
 // Returns opaque handle which needs to be passed to `stop_service`
@@ -16,14 +15,14 @@ extern "C" void* start_service(
     const char* config_dir,
     const char* debug_label,
     Callback,
-    const void* context
+    void* context
 );
 
 // Defined in the Rust code
 extern "C" void stop_service(
     const void* stop_handle,
     Callback,
-    const void* context
+    void* context
 );
 
 // Defined in Rust code
@@ -33,22 +32,30 @@ namespace ouisync {
 
 namespace asio = boost::asio;
 namespace fs = boost::filesystem;
-namespace system = boost::system;
-
-using HandlerSig = void(system::error_code ec);
-using Handler = asio::any_completion_handler<HandlerSig>;
-
-struct Service::State {
-    boost::asio::any_io_executor exec;
-    void* stop_handle;
-
-    State(asio::any_io_executor exec) :
-        exec(std::move(exec)), stop_handle(nullptr) {}
-};
 
 Service::Service(boost::asio::any_io_executor exec) :
-    _state(std::make_shared<State>(std::move(exec)))
+    _exec(std::move(exec)),
+    _stop_handle(nullptr)
 {
+}
+
+Service::Service(Service&& other) :
+    _exec(std::move(other._exec)),
+    _stop_handle(other._stop_handle)
+{
+    other._stop_handle = nullptr;
+}
+
+Service& Service::operator = (Service&& other) {
+    _exec = std::move(other._exec);
+    _stop_handle = other._stop_handle;
+    other._stop_handle = nullptr;
+
+    return *this;
+}
+
+const asio::any_io_executor& Service::get_executor() {
+    return _exec;
 }
 
 struct StartContext {
@@ -56,22 +63,21 @@ struct StartContext {
     // executed.
     std::shared_ptr<std::mutex> stop_handle_mutex;
     asio::executor_work_guard<asio::any_io_executor> work_guard;
-    Handler handler;
+    Service::Handler handler;
 };
 
 static
-void start_callback(const void* context, ouisync::error::Service ec) {
-    auto ctx = std::unique_ptr<StartContext>((StartContext*)(context));
+void start_callback(void* context, ouisync::error::Service ec) {
+    auto ctx = std::unique_ptr<StartContext>(static_cast<StartContext*>(context));
 
     // Second lock ensures that stop_handle has already been set
     ctx->stop_handle_mutex->lock();
 
     // This function might be called from another thread, so must `post` the
     // handler back.
-    asio::post(ctx->work_guard.get_executor(), [
-            handler = std::move(ctx->handler),
-            ec
-        ] () mutable {
+    asio::post(
+        ctx->work_guard.get_executor(),
+        [handler = std::move(ctx->handler), ec] () mutable {
             std::move(handler)(ec);
         }
     );
@@ -90,111 +96,82 @@ static std::string convert_wstring_to_string(std::wstring const& src) {
 }
 #endif
 
-void Service::start(
+void Service::start_impl(
     const fs::path& config_dir,
     const char* debug_label,
-    asio::yield_context yield
+    Handler handler
 ) {
-    auto started = asio::async_initiate<decltype(asio::deferred), HandlerSig>(
-        [&](auto handler) {
-            auto stop_handle_mutex = std::make_shared<std::mutex>();
+    if (is_running()) {
+        handler(boost::system::error_code());
+        return;
+    }
 
-            auto start_context = new StartContext {
-                stop_handle_mutex,
-                asio::make_work_guard(yield.get_executor()),
-                std::move(handler),
-            };
-
-            // First lock
-            stop_handle_mutex->lock();
-
-            _state->stop_handle = start_service(
-                #if !defined(OUISYNC_WINDOWS)
-                    config_dir.c_str(),
-                #else
-                    convert_wstring_to_string(config_dir.native()).c_str(),
-                #endif
-                debug_label,
-                start_callback,
-                start_context
-            );
-
-            // After unlocking the start_callback can proceed with calling the
-            // handler.
-            stop_handle_mutex->unlock();
-        },
-        asio::deferred
+    auto stop_handle_mutex = std::make_shared<std::mutex>();
+    auto start_context = std::make_unique<StartContext>(
+        stop_handle_mutex,
+        asio::make_work_guard(_exec),
+        std::move(handler)
     );
 
-    system::error_code* caller_ec = yield.ec_;
-    system::error_code ec;
+    // First lock
+    stop_handle_mutex->lock();
 
-    started(yield[ec]);
+    _stop_handle = start_service(
+        #if !defined(OUISYNC_WINDOWS)
+            config_dir.c_str(),
+        #else
+            convert_wstring_to_string(config_dir.native()).c_str(),
+        #endif
+        debug_label,
+        start_callback,
+        start_context.release()
+    );
 
-    if (ec) {
-        if (caller_ec) {
-            *caller_ec = ec;
-        } else {
-            throw system::system_error(ec, "Failed to start Ouisync session");
-        }
-    }
+    // After unlocking the start_callback can proceed with calling the
+    // handler.
+    stop_handle_mutex->unlock();
 }
 
 struct StopContext {
     asio::executor_work_guard<asio::any_io_executor> work_guard;
-    Handler handler;
+    Service::Handler handler;
 };
 
 static
-void stop_callback(const void* context, ouisync::error::Service ec) {
-    auto ctx = std::unique_ptr<StopContext>((StopContext*)(context));
+void stop_callback(void* context, ouisync::error::Service ec) {
+    auto ctx = std::unique_ptr<StopContext>(static_cast<StopContext*>(context));
 
     auto exec = ctx->work_guard.get_executor();
 
     // This function might be called from another thread, so must `post` the
     // handler back.
-    asio::post(exec, [
-            ctx = std::move(ctx),
-            ec
-        ] () mutable {
+    asio::post(
+        exec,
+        [ctx = std::move(ctx), ec] () mutable {
             std::move(ctx->handler)(ec);
         }
     );
 }
 
-void Service::stop(asio::yield_context yield) {
+void Service::stop_impl(Handler handler) {
     if (!is_running()) {
+        handler(boost::system::error_code());
         return;
     }
 
-    auto stopped = asio::async_initiate<decltype(asio::deferred), HandlerSig>(
-        [state = std::move(_state), &yield](auto handler) {
-            auto stop_context = new StopContext {
-                asio::make_work_guard(yield.get_executor()),
-                std::move(handler),
-            };
+    auto stop_handle = _stop_handle;
+    _stop_handle = nullptr;
 
-            stop_service(
-                state->stop_handle,
-                stop_callback,
-                stop_context
-            );
-        },
-        asio::deferred
+    auto stop_context = std::make_unique<StopContext>(
+        asio::make_work_guard(_exec),
+        std::move(handler)
     );
 
-    system::error_code* caller_ec = yield.ec_;
-    system::error_code ec;
-
-    stopped(yield[ec]);
-
-    if (ec) {
-        if (caller_ec) {
-            *caller_ec = ec;
-        } else {
-            throw system::system_error(ec, "Failed to stop Ouisync session");
-        }
-    }
+    stop_service(
+        stop_handle,
+        stop_callback,
+        stop_context.release()
+    );
 }
 
 Service::~Service() {
@@ -202,8 +179,10 @@ Service::~Service() {
         return;
     }
 
-    auto state = _state;
-    asio::spawn(state->exec,
+    auto exec = _exec;
+
+    asio::spawn(
+        exec,
         [self = std::move(*this)] (asio::yield_context yield) mutable {
             std::cout << "Stopping Ouisync service in detached mode...\n";
             try {
@@ -219,7 +198,7 @@ Service::~Service() {
 }
 
 bool Service::is_running() const {
-    return _state && _state->stop_handle;
+    return _stop_handle;
 }
 
 void init_log() {

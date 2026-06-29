@@ -1,7 +1,11 @@
 #pragma once
 
+#include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>
+#include <boost/asio/associated_executor.hpp>
 #include <boost/asio/bind_cancellation_slot.hpp>
+#include <boost/asio/detached.hpp>
+#include <concepts>
 #include <iostream>
 #include <type_traits>
 #include <boost/asio/any_completion_handler.hpp>
@@ -42,10 +46,33 @@ public:
 
     ~Client();
 
-    static std::shared_ptr<Client> connect(
+    template<typename CompletionToken>
+    requires
+        boost::asio::completion_token_for<
+            CompletionToken,
+            void(boost::system::error_code, std::shared_ptr<Client>)
+        > &&
+        std::convertible_to<
+            boost::asio::associated_executor_t<CompletionToken>,
+            boost::asio::any_io_executor
+        >
+    static
+    auto connect(
         const boost::filesystem::path& config_dir_path,
-        boost::asio::yield_context
-    );
+        CompletionToken token
+    ) {
+        auto exec = boost::asio::get_associated_executor(token);
+
+        return boost::asio::async_initiate<
+            CompletionToken,
+            void(boost::system::error_code, std::shared_ptr<Client>)
+        >(
+            [&](auto handler) {
+                connect_impl(exec, config_dir_path, std::move(handler));
+            },
+            token
+        );
+    }
 
     /**
      * Send request and await response
@@ -147,6 +174,13 @@ private:
 
     void subscribe_impl(MessageId, Request, std::shared_ptr<detail::SubscriptionChannel>);
     void unsubscribe_impl(MessageId);
+
+    static
+    void connect_impl(
+        const boost::asio::any_io_executor& exec,
+        const boost::filesystem::path& config_dir_path,
+        boost::asio::any_completion_handler<void(boost::system::error_code, std::shared_ptr<Client>)>
+    );
 
 private:
     // TODO: given that Client is already in shared_ptr (via enable_shared_from_this), maybe this
