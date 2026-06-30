@@ -2,12 +2,8 @@
 
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/associated_cancellation_slot.hpp>
-#include <boost/asio/associated_executor.hpp>
 #include <boost/asio/bind_cancellation_slot.hpp>
 #include <boost/asio/detached.hpp>
-#include <concepts>
-#include <iostream>
-#include <type_traits>
 #include <boost/asio/any_completion_handler.hpp>
 #include <boost/asio/async_result.hpp>
 #include <boost/asio/experimental/channel.hpp>
@@ -47,22 +43,16 @@ public:
     ~Client();
 
     template<typename CompletionToken>
-    requires
-        boost::asio::completion_token_for<
-            CompletionToken,
-            void(boost::system::error_code, std::shared_ptr<Client>)
-        > &&
-        std::convertible_to<
-            boost::asio::associated_executor_t<CompletionToken>,
-            boost::asio::any_io_executor
-        >
+    requires boost::asio::completion_token_for<
+        CompletionToken,
+        void(boost::system::error_code, std::shared_ptr<Client>)
+    >
     static
     auto connect(
+        const boost::asio::any_io_executor& exec,
         const boost::filesystem::path& config_dir_path,
         CompletionToken token
     ) {
-        auto exec = boost::asio::get_associated_executor(token);
-
         return boost::asio::async_initiate<
             CompletionToken,
             void(boost::system::error_code, std::shared_ptr<Client>)

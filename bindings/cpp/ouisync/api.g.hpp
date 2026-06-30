@@ -1134,6 +1134,35 @@ public:
      *                  containing local_endpoint.conf file.
      */
     template<typename CompletionToken>
+    requires boost::asio::completion_token_for<
+        CompletionToken,
+        void(boost::system::error_code, Session)
+    >
+    static auto connect(
+        const boost::asio::any_io_executor& exec,
+        const boost::filesystem::path& config_dir,
+        CompletionToken token
+    ) {
+        return boost::asio::async_initiate<
+            CompletionToken,
+            void(boost::system::error_code, Session)
+        >
+        (
+            [&](auto handler) {
+                ouisync::Client::connect(
+                    exec,
+                    config_dir,
+                    [handler = std::move(handler)]
+                    (boost::system::error_code ec, std::shared_ptr<Client> client) mutable {
+                        handler(ec, Session(std::move(client)));
+                    }
+                );
+            },
+            token
+        );
+    }
+
+    template<typename CompletionToken>
     requires
         boost::asio::completion_token_for<
             CompletionToken,
@@ -1147,26 +1176,7 @@ public:
         const boost::filesystem::path& config_dir,
         CompletionToken token
     ) {
-        auto exec = boost::asio::get_associated_executor(token);
-        return boost::asio::async_initiate<
-            CompletionToken,
-            void(boost::system::error_code, Session)
-        >
-        (
-            [&](auto handler) {
-                ouisync::Client::connect(
-                    config_dir,
-                    boost::asio::bind_executor(
-                        exec,
-                        [handler = std::move(handler)]
-                        (boost::system::error_code ec, std::shared_ptr<Client> client) mutable {
-                            handler(ec, Session(std::move(client)));
-                        }
-                    )
-                );
-            },
-            token
-        );
+        return connect(boost::asio::get_associated_executor(token), config_dir, token);
     }
 
     /**
