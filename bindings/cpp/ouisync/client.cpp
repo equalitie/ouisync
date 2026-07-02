@@ -274,6 +274,11 @@ void Client::invoke_impl(
         Request request,
         asio::any_completion_handler<HandlerSig> handler)
 {
+    if (state->disconnected) {
+        handler(asio::error::shut_down, Response {});
+        return;
+    }
+
     // Handle cancellation
     auto cancellation_slot = handler.get_cancellation_slot();
     if (cancellation_slot.is_connected()) {

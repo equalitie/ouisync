@@ -1,3 +1,4 @@
+#include <boost/asio/error.hpp>
 #define BOOST_TEST_MODULE network_sockets
 #include <boost/test/included/unit_test.hpp>
 
@@ -67,6 +68,36 @@ BOOST_AUTO_TEST_CASE(test_ping) {
         }
 
         service.stop(yield);
+
+    }, check_exception);
+
+    ctx.run();
+}
+
+BOOST_AUTO_TEST_CASE(test_operations_after_service_stop) {
+    asio::io_context ctx;
+
+    auto tempdir = TempDir();
+
+    asio::spawn(ctx, [&] (asio::yield_context yield) {
+        ouisync::init_log();
+        ouisync::Service service(yield.get_executor());
+        service.start(tempdir.path(), nullptr, yield);
+
+        auto session = ouisync::Session::connect(tempdir.path(), yield);
+        session.bind_network({"quic/127.0.0.1:0"}, yield);
+
+        auto socket = session.open_network_socket_v4(yield);
+
+        service.stop(yield);
+
+        boost::system::error_code ec;
+        std::ignore = socket.recv_from(1024, yield[ec]);
+        BOOST_REQUIRE_EQUAL(ec, asio::error::shut_down);
+
+        ec = boost::system::error_code();
+        socket.close(yield[ec]);
+        BOOST_REQUIRE_EQUAL(ec, asio::error::shut_down);
 
     }, check_exception);
 
