@@ -111,3 +111,9 @@ xpc-connection-sys = { git = "https://github.com/madadam/xpc-connection-rs" }
 [workspace.lints.clippy]
 large_enum_variant = "allow"
 result_large_err   = "allow"
+
+[workspace.lints.rust]
+# Since rust 1.97, linker messages are printed by default even when the linking succeeds
+# (https://blog.rust-lang.org/2026/07/09/Rust-1.97.0/#linker-output-no-longer-hidden-by-default).
+# This mostly clutters the output so we disable it.
+linker_messages = "allow"
