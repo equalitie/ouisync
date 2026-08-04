@@ -6,13 +6,13 @@ plugins {
 }
 
 android {
-    compileSdkVersion 35
+    compileSdkVersion 36
     namespace = 'org.equalitie.ouisync.kotlin.example'
 
     defaultConfig {
         applicationId 'org.equalitie.ouisync.kotlin.example'
         minSdkVersion 26
-        targetSdkVersion 35
+        targetSdkVersion 36
         versionCode 1
         versionName '0.0.1'
     }

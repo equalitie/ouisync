@@ -35,7 +35,7 @@ android {
         namespace = "org.equalitie.ouisync.dart"
     }
 
-    compileSdk = 35
+    compileSdk = 36
 
     sourceSets {
         main.java.srcDirs += "src/main/kotlin"
@@ -44,7 +44,7 @@ android {
 
     defaultConfig {
         minSdk = 23
-        targetSdk = 35
+        targetSdk = 36
     }
 
     kotlin {

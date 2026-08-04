@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "org.equalitie.ouisync.dart.example"
-    compileSdk = 35
+    compileSdk = 36
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
