@@ -29,9 +29,9 @@
 #endif
 
 #ifdef OUISYNC_USES_API
-#    if defined(OUISYNC_API_CLIENT_LOCAL) || defined(OUISYNC_API_SERVICE_LOCAL)
+#    if defined(OUISYNC_API_COMMON_LOCAL)
 #        define OUISYNC_COMMON_API
-#    elif defined(OUISYNC_API_CLIENT_EXPORT) || defined(OUISYNC_API_SERVICE_EXPORT)
+#    elif defined(OUISYNC_API_COMMON_EXPORT)
 #        define OUISYNC_COMMON_API __declspec(dllexport)
 #    else
 #        define OUISYNC_COMMON_API __declspec(dllimport)

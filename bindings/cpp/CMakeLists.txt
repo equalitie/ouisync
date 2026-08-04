@@ -99,6 +99,26 @@ corrosion_import_crate(
     FEATURES ${OUISYNC_CARGO_FEATURES}
 )
 
+# The `cpp_ouisync_common` library is mainly needed for the client and service
+# libraries to share the same error categories, which are static globals. If
+# that wasn't the case, both the client and service would create their own
+# instances of the categories and (e.g.) `error_code::operator==` would
+# randomly fail.
+add_library(cpp_ouisync_common
+    SHARED
+        ouisync/data.g.cpp
+        ouisync/error.cpp
+)
+
+target_include_directories(cpp_ouisync_common
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    PRIVATE
+        ${Boost_INCLUDE_DIRS}
+)
+
+target_compile_definitions(cpp_ouisync_common PRIVATE OUISYNC_API_COMMON_EXPORT)
+
 # TODO: This doesn't seem to do anything apart from preventing
 # `externalproject_add` that adds this project from failing when its
 # `INSTALL_COMMAND` is left unset.
@@ -106,14 +126,13 @@ install(TARGETS ouisync_service DESTINATION ${CMAKE_INSTALL_PREFIX})
 
 add_library(cpp_ouisync_service
     SHARED
-        ouisync/data.g.cpp
-        ouisync/error.cpp
         ouisync/service.cpp
 )
 
 target_link_libraries(cpp_ouisync_service
     PUBLIC
         ouisync_service
+        cpp_ouisync_common
         # Required when using Boost.Asio with stackful coroutines
         Boost::context
         # For reading ouisync config files
@@ -177,7 +196,6 @@ add_library(cpp_ouisync_client
     SHARED
         ouisync/client.cpp
         ouisync/serialize.cpp
-        ouisync/error.cpp
         ouisync/file_stream.cpp
         ${GENERATED_CPP_FILES}
 )
@@ -191,6 +209,7 @@ target_include_directories(cpp_ouisync_client
 
 target_link_libraries(cpp_ouisync_client
     PUBLIC
+        cpp_ouisync_common
         # Required when using Boost.Asio with stackful coroutines
         Boost::context
         # For reading ouisync config files
@@ -200,6 +219,7 @@ target_link_libraries(cpp_ouisync_client
 
 target_compile_definitions(cpp_ouisync_client PRIVATE OUISYNC_API_CLIENT_EXPORT)
 
+target_compile_features(cpp_ouisync_common PUBLIC cxx_std_20)
 target_compile_features(cpp_ouisync_client PUBLIC cxx_std_20)
 target_compile_features(cpp_ouisync_service PUBLIC cxx_std_20)
 
@@ -215,9 +235,9 @@ if (NOT OUISYNC_BOOST_ASIO_SEPARATE_COMPILATION)
 
     if(EXAMPLE_USE_BUILT_IN_SERVICE)
         target_compile_definitions(example PUBLIC USE_BUILT_IN_SERVICE)
-        target_link_libraries(example PUBLIC cpp_ouisync_client cpp_ouisync_service)
+        target_link_libraries(example PUBLIC cpp_ouisync_common cpp_ouisync_client cpp_ouisync_service)
     else()
-        target_link_libraries(example PUBLIC cpp_ouisync_client)
+        target_link_libraries(example PUBLIC cpp_ouisync_common cpp_ouisync_client)
     endif()
 
     ############################
