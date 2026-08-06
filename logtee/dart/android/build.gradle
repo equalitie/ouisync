@@ -6,19 +6,17 @@ buildscript {
 
     dependencies {
         // The Android Gradle Plugin knows how to build native code with the NDK.
-        classpath("com.android.tools.build:gradle:8.7.0")
+        classpath("com.android.tools.build:gradle:9.3.0")
     }
 }
 
 plugins {
     id 'com.android.library'
-    id 'org.mozilla.rust-android-gradle.rust-android' version '0.9.6'
     id 'org.equalitie.ouisync.convention'
 }
 
 group = "org.equalitie.logtee"
 version = "1.0"
-
 
 rootProject.allprojects {
     repositories {
@@ -30,12 +28,7 @@ rootProject.allprojects {
 android {
     namespace = "org.equalitie.logtee"
 
-    compileSdk = 36
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
-    }
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 21
@@ -46,21 +39,78 @@ android {
     }
 }
 
-cargo {
-    module = '../../..'
-    libname = 'logtee'
-    profile = 'release'
-    targets = ['arm', 'arm64', 'x86_64']
-    extraCargoBuildArguments = ['--package', 'logtee']
+kotlin {
+    jvmToolchain(17)
 }
 
-afterEvaluate {
-    android.libraryVariants.each {
-        def variant = it.name.capitalize()
+// Build and package the rust library
+def rustCrateDir = file("$projectDir/../../rust")
+def rustOutputDir = file("$buildDir/rustJniLibs")
 
-        // Build the native library for the target android platforms.
-        tasks.named("merge${variant}JniLibFolders") {
-            dependsOn 'cargoBuild'
+// Flutter passes -Ptarget-platform for the device(s) being targeted.
+def flutterPlatformToAbi = [
+    'android-arm'  : 'armeabi-v7a',
+    'android-arm64': 'arm64-v8a',
+    'android-x86'  : 'x86',
+    'android-x64'  : 'x86_64',
+]
+def allAbis = flutterPlatformToAbi.values().toList()
+def requestedAbis = project.hasProperty('target-platform')
+    ? project.property('target-platform').split(',')
+             .collect { flutterPlatformToAbi[it.trim()] }
+             .findAll { it != null }
+    : allAbis
+
+// For each build type define a task to build the rust library using the corresponding cargo profile
+// and hook it into the build.
+android.buildTypes.all { buildType ->
+    def name = buildType.name
+    def outputDir = file("$rustOutputDir/$name")
+    def taskName = "cargoBuild${name.capitalize()}"
+
+    android.sourceSets.maybeCreate(name).jniLibs.srcDir(outputDir)
+
+    tasks.register(taskName, Exec) {
+        group = 'rust'
+        description = "Builds the rust crate for $name"
+
+        workingDir = rustCrateDir
+        executable = "cargo"
+        args = ["ndk", "--output-dir", outputDir.absolutePath]
+
+        requestedAbis.each { abi ->
+            args += ["--target", abi]
+        }
+
+        if (android.defaultConfig.minSdk != null) {
+            args += ['--platform', android.defaultConfig.minSdk as String]
+        }
+
+        args += "build"
+
+        if (name != 'debug') {
+            args += '--release'
+        }
+
+        environment 'ANDROID_NDK_HOME', android.ndkDirectory.absolutePath
+
+        inputs
+            .files(fileTree(rustCrateDir) { exclude 'target/**' })
+            .withPropertyName('rustSources')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+
+        inputs.property('abis', requestedAbis)
+
+        outputs.dir(outputDir)
+
+        doFirst { outputDir.mkdirs() }
+    }
+
+    tasks.whenTaskAdded { task ->
+        if (task.name == "merge${name.capitalize()}JniLibFolders") {
+            task.dependsOn "cargoBuild${name.capitalize()}"
         }
     }
 }
+
+tasks.named('clean') { delete rustOutputDir }

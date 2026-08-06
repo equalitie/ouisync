@@ -1,6 +1,5 @@
 plugins {
     id 'com.android.library'
-    id 'kotlin-android'
     id 'dokka-convention'
 }
 
@@ -10,11 +9,11 @@ group   = rootProject.group
 android {
     namespace = 'org.equalitie.ouisync.android'
 
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         versionName = version
 
@@ -54,11 +53,18 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
 }
 
+def libraryVariants = []
+
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        libraryVariants.add(variant.name);
+    }
+}
+
 afterEvaluate {
-    publishing {
+    project.parent.publishing {
         publications {
-            android.libraryVariants.each {
-                def variant = it.name
+            libraryVariants.each { variant ->
                 def packageNameSuffix = variant == 'release' ? '' : "-${variant}"
 
                 create("${variant}Android", MavenPublication) {
@@ -97,17 +103,17 @@ afterEvaluate {
     }
 }
 
-signing {
+project.parent.signing {
     // Only sign when publishing to sonatype, not local
-    required = android.libraryVariants.any { variant ->
+    required = libraryVariants.any { variant ->
         gradle.taskGraph.hasTask("publish${variant}AndroidPublicationToSonatypeRepository")
     }
 
-    if (signingKey) {
+    if (project.signingKey) {
         useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
     }
 
-    sign publishing.publications
+    sign project.publishing.publications
 }
 
 dokka {

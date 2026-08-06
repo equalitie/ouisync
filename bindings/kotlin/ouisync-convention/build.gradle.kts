@@ -12,5 +12,5 @@ gradlePlugin {
 }
 
 dependencies {
-    compileOnly("com.android.tools.build:gradle:8.10.0")
+    compileOnly("com.android.tools.build:gradle:9.3.0")
 }

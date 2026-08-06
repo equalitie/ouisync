@@ -40,19 +40,19 @@ class _MyAppState extends State<MyApp> {
     final dataDir = (await getApplicationSupportDirectory()).path;
     final configDir = join(dataDir, 'config.db');
 
-    final server = Server.create(
-      configPath: configDir,
-    )..initLog();
+    final server = Server.create(configPath: configDir)..initLog();
     await server.start();
     await server.notify(contentTitle: 'Ouisync example is running');
 
     final session = await Session.create(configPath: configDir);
     await session.setStoreDirs([join(dataDir, 'repos')]);
-    await session.initNetwork(NetworkDefaults(
-      bind: ["quic/0.0.0.0:0"],
-      portForwardingEnabled: false,
-      localDiscoveryEnabled: false,
-    ));
+    await session.initNetwork(
+      NetworkDefaults(
+        bind: ["quic/0.0.0.0:0"],
+        portForwardingEnabled: false,
+        localDiscoveryEnabled: false,
+      ),
+    );
 
     Repository repo;
 
@@ -72,10 +72,12 @@ class _MyAppState extends State<MyApp> {
 
   @override
   void dispose() {
-    unawaited(Future(() async {
-      await server.stop();
-      await session.close();
-    }));
+    unawaited(
+      Future(() async {
+        await server.stop();
+        await session.close();
+      }),
+    );
 
     super.dispose();
   }
@@ -83,18 +85,20 @@ class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-        length: 2,
-        child: Scaffold(
-            appBar: AppBar(
-                title: const Text("Ouisync Example App"),
-                bottom: const TabBar(
-                    tabs: [Tab(text: "Files"), Tab(text: "Settings")])),
-            body: TabBarView(
-              children: [
-                makeFileListBody(),
-                makeSettingsBody(),
-              ],
-            )));
+      length: 2,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text("Ouisync Example App"),
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: "Files"),
+              Tab(text: "Settings"),
+            ],
+          ),
+        ),
+        body: TabBarView(children: [makeFileListBody(), makeSettingsBody()]),
+      ),
+    );
   }
 
   Widget makeFileListBody() {
@@ -105,9 +109,10 @@ class _MyAppState extends State<MyApp> {
           child: Row(
             children: [
               ElevatedButton(
-                  onPressed: () async =>
-                      await addFile().then((value) => getFiles('/')),
-                  child: const Text('Add file')),
+                onPressed: () async =>
+                    await addFile().then((value) => getFiles('/')),
+                child: const Text('Add file'),
+              ),
             ],
           ),
         ),
@@ -140,25 +145,24 @@ class _MyAppState extends State<MyApp> {
   }
 
   Widget fileList() => ListView.separated(
-        separatorBuilder: (context, index) =>
-            const Divider(height: 1, color: Colors.transparent),
-        shrinkWrap: true,
-        itemCount: contents.length,
-        itemBuilder: (context, index) {
-          final item = contents[index];
+    separatorBuilder: (context, index) =>
+        const Divider(height: 1, color: Colors.transparent),
+    shrinkWrap: true,
+    itemCount: contents.length,
+    itemBuilder: (context, index) {
+      final item = contents[index];
 
-          return Card(
-            child: ListTile(
-              title: Text(item),
-              onTap: () => showAlertDialog(context, item),
-            ),
-          );
-        },
+      return Card(
+        child: ListTile(
+          title: Text(item),
+          onTap: () => showAlertDialog(context, item),
+        ),
       );
+    },
+  );
 
   Future<void> addFile() async {
-    FilePickerResult? result =
-        await FilePicker.platform.pickFiles(withReadStream: true);
+    FilePickerResult? result = await FilePicker.pickFiles(withReadStream: true);
 
     if (result != null) {
       final path = '/${result.files.single.name}';
@@ -181,7 +185,10 @@ class _MyAppState extends State<MyApp> {
   }
 
   Future<void> saveFile(
-      File file, String path, Stream<List<int>> stream) async {
+    File file,
+    String path,
+    Stream<List<int>> stream,
+  ) async {
     debugPrint('Writing file $path');
 
     int offset = 0;
@@ -242,11 +249,7 @@ class _MyAppState extends State<MyApp> {
     AlertDialog alert = AlertDialog(
       title: const Text("Ouisync Plugin Example App"),
       content: Text("File:\n$path"),
-      actions: [
-        previewFileButton,
-        shareFileButton,
-        cancelButton,
-      ],
+      actions: [previewFileButton, shareFileButton, cancelButton],
     );
 
     showDialog<AlertDialog>(
@@ -259,7 +262,7 @@ class _MyAppState extends State<MyApp> {
 }
 
 Uri _getFileUrl(String path) => Uri(
-      scheme: 'content',
-      host: 'org.equalitie.ouisync.dart.example.provider',
-      path: posix.join(_repoName, path),
-    );
+  scheme: 'content',
+  host: 'org.equalitie.ouisync.dart.example.provider',
+  path: posix.join(_repoName, path),
+);

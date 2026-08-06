@@ -1,6 +1,5 @@
 plugins {
     id 'com.android.library'
-    id 'kotlin-android'
     id 'me.sigptr.rust-android'
     id 'org.equalitie.ouisync.convention'
     id 'dokka-convention'
@@ -12,11 +11,11 @@ group   = rootProject.group
 android {
     namespace = 'org.equalitie.ouisync.service'
 
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 23
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         versionName = version
 
@@ -68,9 +67,17 @@ cargo {
     extraCargoBuildArguments = ['--package', 'ouisync-service']
 }
 
+def libraryVariants = []
+
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        libraryVariants.add(variant.name);
+    }
+}
+
 afterEvaluate {
-    android.libraryVariants.each {
-        def variant = it.name.capitalize()
+    libraryVariants.each { name ->
+        def variant = name.capitalize()
 
         // Build the native library for the target android platforms.
         tasks.named("merge${variant}JniLibFolders") {
@@ -78,10 +85,9 @@ afterEvaluate {
         }
     }
 
-    publishing {
+    project.parent.publishing {
         publications {
-            android.libraryVariants.each {
-                def variant = it.name
+            libraryVariants.each { variant ->
                 def packageNameSuffix = variant == 'release' ? '' : "-${variant}"
 
                 create("${variant}Service", MavenPublication) {
@@ -120,17 +126,21 @@ afterEvaluate {
     }
 }
 
-signing {
+project.parent.signing {
     // Only sign when publishing to sonatype, not local
-    required = android.libraryVariants.any { variant ->
+    required = libraryVariants.any { variant ->
         gradle.taskGraph.hasTask("publish${variant}ServicePublicationToSonatypeRepository")
     }
 
-    if (signingKey) {
-        useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
+    if (project.signingKey) {
+        useInMemoryPgpKeys(
+            project.signingKeyId,
+            project.signingKey,
+            project.signingPassword
+        )
     }
 
-    sign publishing.publications
+    sign project.publishing.publications
 }
 
 dokka {

@@ -1,13 +1,11 @@
 buildscript {
-    ext.kotlin_version = "2.2.10"
     repositories {
         google()
         mavenCentral()
     }
 
     dependencies {
-        classpath "com.android.tools.build:gradle:8.10.0"
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+        classpath "com.android.tools.build:gradle:9.3.0"
     }
 }
 
@@ -28,14 +26,13 @@ group = "org.equalitie.ouisync.dart"
 version = "1.0-SNAPSHOT"
 
 apply plugin: "com.android.library"
-apply plugin: "kotlin-android"
 
 android {
     if (project.android.hasProperty("namespace")) {
         namespace = "org.equalitie.ouisync.dart"
     }
 
-    compileSdk = 36
+    compileSdk = 37
 
     sourceSets {
         main.java.srcDirs += "src/main/kotlin"
@@ -44,7 +41,7 @@ android {
 
     defaultConfig {
         minSdk = 23
-        targetSdk = 36
+        targetSdk = 37
     }
 
     kotlin {

@@ -2,8 +2,8 @@ name: logtee
 description: "Library to capture log messages to a file"
 
 environment:
-  sdk: ^3.7.2
-  flutter: '>=3.3.0'
+  sdk: ^3.12.2
+  flutter: ^3.44.8
 
 dependencies:
   flutter:
@@ -46,4 +46,3 @@ flutter:
       #   ffiPlugin: true
       # macos:
       #   ffiPlugin: true
-

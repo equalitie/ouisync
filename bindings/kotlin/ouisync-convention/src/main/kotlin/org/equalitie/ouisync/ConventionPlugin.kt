@@ -1,6 +1,6 @@
 package org.equalitie.ouisync
 
-import com.android.build.gradle.BaseExtension
+import com.android.build.api.dsl.CommonExtension
 import com.android.build.gradle.BasePlugin
 import org.gradle.api.Plugin
 import org.gradle.api.Project
@@ -10,11 +10,11 @@ import kotlin.text.lineSequence
 class ConventionPlugin : Plugin<Project> {
     override fun apply(target: Project): Unit = with(target) {
         plugins.withType(BasePlugin::class.java) {
-            configure(extensions.getByType(BaseExtension::class.java))
+            configure(extensions.getByType(CommonExtension::class.java))
         }
     }
 
-    private fun Project.configure(extension: BaseExtension) {
+    private fun Project.configure(extension: CommonExtension) {
         val fileName = "ndk-version.txt"
         val file = findFile(projectDir, fileName)
         if (file == null) {

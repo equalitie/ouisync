@@ -1,18 +1,17 @@
 plugins {
     id 'com.android.application'
-    id 'kotlin-android'
     id 'org.jetbrains.kotlin.plugin.compose' version '2.0.0'
     id 'org.jetbrains.kotlin.plugin.serialization' version '2.1.21'
 }
 
 android {
-    compileSdkVersion 36
+    compileSdk = 37
     namespace = 'org.equalitie.ouisync.kotlin.example'
 
     defaultConfig {
         applicationId 'org.equalitie.ouisync.kotlin.example'
-        minSdkVersion 26
-        targetSdkVersion 36
+        minSdk 26
+        targetSdk 37
         versionCode 1
         versionName '0.0.1'
     }
@@ -20,10 +19,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = '17'
     }
 
     buildFeatures {

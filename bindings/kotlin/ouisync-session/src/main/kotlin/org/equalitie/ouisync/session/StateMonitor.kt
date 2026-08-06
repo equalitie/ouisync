@@ -16,7 +16,7 @@ data class MonitorId(val name: String, val disambiguator: Long) {
 @Serializable
 class StateMonitorNode(val values: Map<String, String>, val children: List<MonitorId>)
 
-private object IdSerializer : KSerializer<MonitorId> {
+object IdSerializer : KSerializer<MonitorId> {
     override val descriptor: SerialDescriptor =
         PrimitiveSerialDescriptor(
             MonitorId::class.qualifiedName!!,
