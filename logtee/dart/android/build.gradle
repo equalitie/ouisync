@@ -51,7 +51,6 @@ def rustOutputDir = file("$buildDir/rustJniLibs")
 def flutterPlatformToAbi = [
     'android-arm'  : 'armeabi-v7a',
     'android-arm64': 'arm64-v8a',
-    'android-x86'  : 'x86',
     'android-x64'  : 'x86_64',
 ]
 def allAbis = flutterPlatformToAbi.values().toList()
@@ -74,6 +73,8 @@ android.buildTypes.all { buildType ->
         group = 'rust'
         description = "Builds the rust crate for $name"
 
+        doNotTrackState('state is tracked by cargo')
+
         workingDir = rustCrateDir
         executable = "cargo"
         args = ["ndk", "--output-dir", outputDir.absolutePath]
@@ -93,15 +94,6 @@ android.buildTypes.all { buildType ->
         }
 
         environment 'ANDROID_NDK_HOME', android.ndkDirectory.absolutePath
-
-        inputs
-            .files(fileTree(rustCrateDir) { exclude 'target/**' })
-            .withPropertyName('rustSources')
-            .withPathSensitivity(PathSensitivity.RELATIVE)
-
-        inputs.property('abis', requestedAbis)
-
-        outputs.dir(outputDir)
 
         doFirst { outputDir.mkdirs() }
     }

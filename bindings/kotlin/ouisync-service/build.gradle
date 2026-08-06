@@ -1,6 +1,5 @@
 plugins {
     id 'com.android.library'
-    id 'me.sigptr.rust-android'
     id 'org.equalitie.ouisync.convention'
     id 'dokka-convention'
 }
@@ -38,34 +37,75 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2'
 }
 
-def rustTargets = project.findProperty('target-platform')?.split(',').collect {
-    // https://github.com/flutter/flutter/blob/37dbe030feb47cdf15f3d4c1921857dbbac8aedf/packages/flutter_tools/gradle/flutter.gradle#L78-L82
-    switch (it) {
-        case 'android-arm':   return 'arm'
-        case 'android-arm64': return 'arm64'
-        case 'android-x86':   return 'x86'
-        case 'android-x64':   return 'x86_64'
-        default: throw new IllegalArgumentException("unknown target platform: $it")
+//--------------------------------------------------------------------------------------------------
+// Build and package the rust library
+
+def rustCratesDir = file("$rootDir/../..")
+def rustOutputDir = file("$buildDir/rustJniLibs")
+
+// Flutter passes -Ptarget-platform for the device(s) being targeted.
+def flutterPlatformToAbi = [
+    'android-arm'  : 'armeabi-v7a',
+    'android-arm64': 'arm64-v8a',
+    'android-x64'  : 'x86_64',
+]
+def allAbis = flutterPlatformToAbi.values().toList()
+def requestedAbis = project.hasProperty('target-platform')
+    ? project.property('target-platform').split(',')
+             .collect { flutterPlatformToAbi[it.trim()] }
+             .findAll { it != null }
+    : allAbis
+
+// For each build type define a task to build the rust library using the corresponding cargo profile
+// and hook it into the build.
+android.buildTypes.all { buildType ->
+    def name = buildType.name
+    def outputDir = file("$rustOutputDir/$name")
+    def taskName = "cargoBuild${name.capitalize()}"
+
+    android.sourceSets.maybeCreate(name).jniLibs.srcDir(outputDir)
+
+    tasks.register(taskName, Exec) {
+        group = 'rust'
+        description = "Builds the rust crate for $name"
+
+        doNotTrackState('state is tracked by cargo')
+
+        workingDir = rustCratesDir
+        executable = "cargo"
+        args = ["ndk", "--output-dir", outputDir.absolutePath]
+
+        requestedAbis.each { abi ->
+            args += ["--target", abi]
+        }
+
+        if (android.defaultConfig.minSdk != null) {
+            args += ['--platform', android.defaultConfig.minSdk as String]
+        }
+
+        args += ['build', '--package', 'ouisync-service']
+
+        if (name != 'debug') {
+            args += '--release'
+        }
+
+        environment 'ANDROID_NDK_HOME',
+            androidComponents.sdkComponents.ndkDirectory.get().asFile.absolutePath
+
+        doFirst { outputDir.mkdirs() }
+    }
+
+    tasks.whenTaskAdded { task ->
+        if (task.name == "merge${name.capitalize()}JniLibFolders") {
+            task.dependsOn "cargoBuild${name.capitalize()}"
+        }
     }
 }
 
-cargo {
-    module = "$rootDir/../.."
-    libname = 'ouisync_service'
+tasks.named('clean') { delete rustOutputDir }
 
-    // https://stackoverflow.com/questions/66054763/build-rust-on-android
-    pythonCommand = "python3"
-
-    // Read targets from the 'target-platform' project property that can be set in
-    // `gradle.properties` or using the `-P` command line option when invoking gradle.
-    //
-    //Example: `gradle assemble -Ptarget-platform=android-x64`
-    targets = rustTargets ?: ['arm', 'arm64', 'x86_64']
-
-    profiles = ['debug', 'release']
-
-    extraCargoBuildArguments = ['--package', 'ouisync-service']
-}
+//--------------------------------------------------------------------------------------------------
+// Publication and signing
 
 def libraryVariants = []
 
@@ -76,15 +116,6 @@ androidComponents {
 }
 
 afterEvaluate {
-    libraryVariants.each { name ->
-        def variant = name.capitalize()
-
-        // Build the native library for the target android platforms.
-        tasks.named("merge${variant}JniLibFolders") {
-            dependsOn "cargoBuild${variant}"
-        }
-    }
-
     project.parent.publishing {
         publications {
             libraryVariants.each { variant ->
