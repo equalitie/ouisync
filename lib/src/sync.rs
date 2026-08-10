@@ -126,7 +126,7 @@ pub(crate) mod broadcast_hash_set {
         pub fn insert(&self, value: &T) {
             let mut receivers = self.shared.receivers.lock().unwrap();
 
-            for (_id, receiver) in receivers.iter_mut() {
+            for receiver in receivers.values_mut() {
                 if receiver.1.insert(value.clone()) {
                     receiver.0.send(()).unwrap_or(());
                 }

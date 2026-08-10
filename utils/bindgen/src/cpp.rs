@@ -480,7 +480,7 @@ fn write_complex_enum(
             let ty = CppType::new(&field.ty);
             let ty = ty.modify(is_request, true);
             let name = AsSnakeCase(name.unwrap_or(DEFAULT_FIELD_NAME));
-            writeln!(out.hpp, "{I}{I}{} {};", &ty, name)?;
+            writeln!(out.hpp, "{I}{I}{} {};", ty, name)?;
         }
 
         writeln!(out.hpp, "{I}}};")?;
@@ -896,7 +896,7 @@ fn write_api_class(
                 writeln!(out_hpp, ",")?;
             }
 
-            write!(out_hpp, "{I}{I}{} {}", &field.modify(true, false), name,)?;
+            write!(out_hpp, "{I}{I}{} {}", field.modify(true, false), name,)?;
         }
 
         writeln!(out_hpp)?;

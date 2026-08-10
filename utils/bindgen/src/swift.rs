@@ -42,11 +42,23 @@ pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     writeln!(out)?;
 
     // Private msgpack helpers
-    writeln!(out, "private func _msgpackInt(_ v: MessagePackValue) -> Int64? {{")?;
-    writeln!(out, "{I}switch v {{ case .int(let n): return n; case .uint(let n): return Int64(bitPattern: n); default: return nil }}")?;
+    writeln!(
+        out,
+        "private func _msgpackInt(_ v: MessagePackValue) -> Int64? {{"
+    )?;
+    writeln!(
+        out,
+        "{I}switch v {{ case .int(let n): return n; case .uint(let n): return Int64(bitPattern: n); default: return nil }}"
+    )?;
     writeln!(out, "}}")?;
-    writeln!(out, "private func _msgpackUInt(_ v: MessagePackValue) -> UInt64? {{")?;
-    writeln!(out, "{I}switch v {{ case .uint(let n): return n; case .int(let n): return UInt64(bitPattern: n); default: return nil }}")?;
+    writeln!(
+        out,
+        "private func _msgpackUInt(_ v: MessagePackValue) -> UInt64? {{"
+    )?;
+    writeln!(
+        out,
+        "{I}switch v {{ case .uint(let n): return n; case .int(let n): return UInt64(bitPattern: n); default: return nil }}"
+    )?;
     writeln!(out, "}}")?;
     writeln!(out)?;
 
@@ -71,9 +83,18 @@ fn write_simple_enum(out: &mut dyn Write, name: &str, item: &SimpleEnum) -> Resu
 
     // Codec
     writeln!(out)?;
-    writeln!(out, "{I}internal func encodeToMsgPack() -> MessagePackValue {{ .uint(UInt64(rawValue)) }}")?;
-    writeln!(out, "{I}internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {{")?;
-    writeln!(out, "{I}{I}guard let n = _msgpackUInt(v), let r = {repr}(exactly: n) else {{ return nil }}")?;
+    writeln!(
+        out,
+        "{I}internal func encodeToMsgPack() -> MessagePackValue {{ .uint(UInt64(rawValue)) }}"
+    )?;
+    writeln!(
+        out,
+        "{I}internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {{"
+    )?;
+    writeln!(
+        out,
+        "{I}{I}guard let n = _msgpackUInt(v), let r = {repr}(exactly: n) else {{ return nil }}"
+    )?;
     writeln!(out, "{I}{I}return Self(rawValue: r)")?;
     writeln!(out, "{I}}}")?;
 
@@ -151,18 +172,27 @@ fn write_complex_enum(out: &mut dyn Write, name: &str, item: &ComplexEnum) -> Re
 }
 
 fn write_complex_enum_encode(out: &mut dyn Write, item: &ComplexEnum) -> Result<()> {
-    writeln!(out, "{I}internal func encodeToMsgPack() -> MessagePackValue {{")?;
+    writeln!(
+        out,
+        "{I}internal func encodeToMsgPack() -> MessagePackValue {{"
+    )?;
     writeln!(out, "{I}{I}switch self {{")?;
     for (variant_name, variant) in &item.variants {
         let case_name = format!("{}", AsLowerCamelCase(variant_name));
         let msgpack_name = format!("{}", AsUpperCamelCase(variant_name));
         match &variant.fields {
             Fields::Unit => {
-                writeln!(out, "{I}{I}case .{case_name}: return .string(\"{msgpack_name}\")")?;
+                writeln!(
+                    out,
+                    "{I}{I}case .{case_name}: return .string(\"{msgpack_name}\")"
+                )?;
             }
             Fields::Unnamed(field) => {
                 let enc = encode_expr(&field.ty, "value");
-                writeln!(out, "{I}{I}case .{case_name}(let value): return .map([.string(\"{msgpack_name}\"): {enc}])")?;
+                writeln!(
+                    out,
+                    "{I}{I}case .{case_name}(let value): return .map([.string(\"{msgpack_name}\"): {enc}])"
+                )?;
             }
             Fields::Named(fields) => {
                 // Build pattern
@@ -176,7 +206,10 @@ fn write_complex_enum_encode(out: &mut dyn Write, item: &ComplexEnum) -> Result<
                     .map(|(n, f)| encode_expr(&f.ty, &format!("{}", AsLowerCamelCase(n))))
                     .collect();
                 let enc_arr = enc_exprs.join(", ");
-                writeln!(out, "{I}{I}case .{case_name}({pattern_str}): return .map([.string(\"{msgpack_name}\"): .array([{enc_arr}])])")?;
+                writeln!(
+                    out,
+                    "{I}{I}case .{case_name}({pattern_str}): return .map([.string(\"{msgpack_name}\"): .array([{enc_arr}])])"
+                )?;
             }
         }
     }
@@ -186,11 +219,17 @@ fn write_complex_enum_encode(out: &mut dyn Write, item: &ComplexEnum) -> Result<
 }
 
 fn write_complex_enum_decode(out: &mut dyn Write, item: &ComplexEnum) -> Result<()> {
-    writeln!(out, "{I}internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {{")?;
+    writeln!(
+        out,
+        "{I}internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {{"
+    )?;
     writeln!(out, "{I}{I}switch v {{")?;
 
     // Unit variants via .string
-    let has_unit = item.variants.iter().any(|(_, v)| matches!(v.fields, Fields::Unit));
+    let has_unit = item
+        .variants
+        .iter()
+        .any(|(_, v)| matches!(v.fields, Fields::Unit));
     if has_unit {
         writeln!(out, "{I}{I}case .string(let name):")?;
         writeln!(out, "{I}{I}{I}switch name {{")?;
@@ -206,10 +245,16 @@ fn write_complex_enum_decode(out: &mut dyn Write, item: &ComplexEnum) -> Result<
     }
 
     // Non-unit variants via .map
-    let has_non_unit = item.variants.iter().any(|(_, v)| !matches!(v.fields, Fields::Unit));
+    let has_non_unit = item
+        .variants
+        .iter()
+        .any(|(_, v)| !matches!(v.fields, Fields::Unit));
     if has_non_unit {
         writeln!(out, "{I}{I}case .map(let m) where m.count == 1:")?;
-        writeln!(out, "{I}{I}{I}guard let entry = m.first, case .string(let name) = entry.key else {{ return nil }}")?;
+        writeln!(
+            out,
+            "{I}{I}{I}guard let entry = m.first, case .string(let name) = entry.key else {{ return nil }}"
+        )?;
         writeln!(out, "{I}{I}{I}switch name {{")?;
         for (variant_name, variant) in &item.variants {
             let case_name = format!("{}", AsLowerCamelCase(variant_name));
@@ -223,7 +268,11 @@ fn write_complex_enum_decode(out: &mut dyn Write, item: &ComplexEnum) -> Result<
                 }
                 Fields::Named(fields) => {
                     writeln!(out, "{I}{I}{I}case \"{msgpack_name}\":")?;
-                    writeln!(out, "{I}{I}{I}{I}guard case .array(let arr) = entry.value, arr.count == {} else {{ return nil }}", fields.len())?;
+                    writeln!(
+                        out,
+                        "{I}{I}{I}{I}guard case .array(let arr) = entry.value, arr.count == {} else {{ return nil }}",
+                        fields.len()
+                    )?;
                     let mut args = Vec::new();
                     for (i, (field_name, field)) in fields.iter().enumerate() {
                         let fn_lcc = format!("{}", AsLowerCamelCase(field_name));
@@ -261,11 +310,17 @@ fn write_decode_stmts(
         }
         Type::Scalar(s) => {
             if let Some(swift_decode) = scalar_decode_expr(s, src) {
-                writeln!(out, "{prefix}guard let {varname} = {swift_decode} else {{ return nil }}")?;
+                writeln!(
+                    out,
+                    "{prefix}guard let {varname} = {swift_decode} else {{ return nil }}"
+                )?;
             } else {
                 // Custom type
                 let t = SwiftScalar(s).to_string();
-                writeln!(out, "{prefix}guard let {varname} = {t}.decodeFromMsgPack({src}) else {{ return nil }}")?;
+                writeln!(
+                    out,
+                    "{prefix}guard let {varname} = {t}.decodeFromMsgPack({src}) else {{ return nil }}"
+                )?;
             }
         }
         Type::Option(s) => {
@@ -276,23 +331,38 @@ fn write_decode_stmts(
             writeln!(out, "{prefix}}} else {{")?;
             // decode inner
             if let Some(inner_dec) = scalar_decode_expr(s, src) {
-                writeln!(out, "{prefix}{I}guard let tmp_{varname} = {inner_dec} else {{ return nil }}")?;
+                writeln!(
+                    out,
+                    "{prefix}{I}guard let tmp_{varname} = {inner_dec} else {{ return nil }}"
+                )?;
                 writeln!(out, "{prefix}{I}{varname} = tmp_{varname}")?;
             } else {
-                writeln!(out, "{prefix}{I}guard let tmp_{varname} = {t}.decodeFromMsgPack({src}) else {{ return nil }}")?;
+                writeln!(
+                    out,
+                    "{prefix}{I}guard let tmp_{varname} = {t}.decodeFromMsgPack({src}) else {{ return nil }}"
+                )?;
                 writeln!(out, "{prefix}{I}{varname} = tmp_{varname}")?;
             }
             writeln!(out, "{prefix}}}")?;
         }
         Type::Vec(s) => {
             let elem_type = SwiftScalar(s).to_string();
-            writeln!(out, "{prefix}guard case .array(let arr_{varname}) = {src} else {{ return nil }}")?;
+            writeln!(
+                out,
+                "{prefix}guard case .array(let arr_{varname}) = {src} else {{ return nil }}"
+            )?;
             writeln!(out, "{prefix}var {varname}: [{elem_type}] = []")?;
             writeln!(out, "{prefix}for elem_{varname} in arr_{varname} {{")?;
             if let Some(inner_dec) = scalar_decode_expr(s, &format!("elem_{varname}")) {
-                writeln!(out, "{prefix}{I}guard let x_{varname} = {inner_dec} else {{ return nil }}")?;
+                writeln!(
+                    out,
+                    "{prefix}{I}guard let x_{varname} = {inner_dec} else {{ return nil }}"
+                )?;
             } else {
-                writeln!(out, "{prefix}{I}guard let x_{varname} = {elem_type}.decodeFromMsgPack(elem_{varname}) else {{ return nil }}")?;
+                writeln!(
+                    out,
+                    "{prefix}{I}guard let x_{varname} = {elem_type}.decodeFromMsgPack(elem_{varname}) else {{ return nil }}"
+                )?;
             }
             writeln!(out, "{prefix}{I}{varname}.append(x_{varname})")?;
             writeln!(out, "{prefix}}}")?;
@@ -300,25 +370,37 @@ fn write_decode_stmts(
         Type::Map(k, v) => {
             let k_swift = SwiftScalar(k).to_string();
             let v_swift = SwiftScalar(v).to_string();
-            writeln!(out, "{prefix}guard case .map(let map_{varname}) = {src} else {{ return nil }}")?;
+            writeln!(
+                out,
+                "{prefix}guard case .map(let map_{varname}) = {src} else {{ return nil }}"
+            )?;
             writeln!(out, "{prefix}var {varname}: [{k_swift}: {v_swift}] = [:]")?;
             writeln!(out, "{prefix}for (mk, mv) in map_{varname} {{")?;
             // key decode
             if let Some(kd) = scalar_decode_expr(k, "mk") {
                 writeln!(out, "{prefix}{I}guard let dk = {kd} else {{ return nil }}")?;
             } else {
-                writeln!(out, "{prefix}{I}guard let dk = {k_swift}.decodeFromMsgPack(mk) else {{ return nil }}")?;
+                writeln!(
+                    out,
+                    "{prefix}{I}guard let dk = {k_swift}.decodeFromMsgPack(mk) else {{ return nil }}"
+                )?;
             }
             if let Some(vd) = scalar_decode_expr(v, "mv") {
                 writeln!(out, "{prefix}{I}guard let dv = {vd} else {{ return nil }}")?;
             } else {
-                writeln!(out, "{prefix}{I}guard let dv = {v_swift}.decodeFromMsgPack(mv) else {{ return nil }}")?;
+                writeln!(
+                    out,
+                    "{prefix}{I}guard let dv = {v_swift}.decodeFromMsgPack(mv) else {{ return nil }}"
+                )?;
             }
             writeln!(out, "{prefix}{I}{varname}[dk] = dv")?;
             writeln!(out, "{prefix}}}")?;
         }
         Type::Bytes => {
-            writeln!(out, "{prefix}guard case .binary(let bytes_{varname}) = {src} else {{ return nil }}")?;
+            writeln!(
+                out,
+                "{prefix}guard case .binary(let bytes_{varname}) = {src} else {{ return nil }}"
+            )?;
             writeln!(out, "{prefix}let {varname} = Data(bytes_{varname})")?;
         }
         Type::Result(..) => {
@@ -332,20 +414,38 @@ fn write_decode_stmts(
 // or None if this is a custom type that needs `.decodeFromMsgPack`.
 fn scalar_decode_expr(s: &str, src: &str) -> Option<String> {
     match s {
-        "u8" => Some(format!("(_msgpackUInt({src}).flatMap {{ UInt8(exactly: $0) }})")),
-        "u16" => Some(format!("(_msgpackUInt({src}).flatMap {{ UInt16(exactly: $0) }})")),
-        "u32" => Some(format!("(_msgpackUInt({src}).flatMap {{ UInt32(exactly: $0) }})")),
+        "u8" => Some(format!(
+            "(_msgpackUInt({src}).flatMap {{ UInt8(exactly: $0) }})"
+        )),
+        "u16" => Some(format!(
+            "(_msgpackUInt({src}).flatMap {{ UInt16(exactly: $0) }})"
+        )),
+        "u32" => Some(format!(
+            "(_msgpackUInt({src}).flatMap {{ UInt32(exactly: $0) }})"
+        )),
         "u64" | "usize" => Some(format!("_msgpackUInt({src})")),
-        "i8" => Some(format!("(_msgpackInt({src}).flatMap {{ Int8(exactly: $0) }})")),
-        "i16" => Some(format!("(_msgpackInt({src}).flatMap {{ Int16(exactly: $0) }})")),
-        "i32" => Some(format!("(_msgpackInt({src}).flatMap {{ Int32(exactly: $0) }})")),
+        "i8" => Some(format!(
+            "(_msgpackInt({src}).flatMap {{ Int8(exactly: $0) }})"
+        )),
+        "i16" => Some(format!(
+            "(_msgpackInt({src}).flatMap {{ Int16(exactly: $0) }})"
+        )),
+        "i32" => Some(format!(
+            "(_msgpackInt({src}).flatMap {{ Int32(exactly: $0) }})"
+        )),
         "i64" | "isize" => Some(format!("_msgpackInt({src})")),
-        "bool" => Some(format!("{{ if case .bool(let b) = {src} {{ return b }}; return nil }}()")),
-        "String" | "PathBuf" | "PeerAddr" | "SocketAddr" => {
-            Some(format!("{{ if case .string(let s) = {src} {{ return s }}; return nil }}()"))
-        }
-        "Duration" => Some(format!("(_msgpackInt({src}).map {{ TimeInterval($0) / 1000.0 }})")),
-        "SystemTime" => Some(format!("(_msgpackInt({src}).map {{ Date(timeIntervalSince1970: TimeInterval($0) / 1000.0) }})")),
+        "bool" => Some(format!(
+            "{{ if case .bool(let b) = {src} {{ return b }}; return nil }}()"
+        )),
+        "String" | "PathBuf" | "PeerAddr" | "SocketAddr" => Some(format!(
+            "{{ if case .string(let s) = {src} {{ return s }}; return nil }}()"
+        )),
+        "Duration" => Some(format!(
+            "(_msgpackInt({src}).map {{ TimeInterval($0) / 1000.0 }})"
+        )),
+        "SystemTime" => Some(format!(
+            "(_msgpackInt({src}).map {{ Date(timeIntervalSince1970: TimeInterval($0) / 1000.0) }})"
+        )),
         _ => None, // custom type
     }
 }
@@ -419,16 +519,28 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
     match &item.fields {
         Fields::Unnamed(field) => {
             let enc = encode_expr(&field.ty, "value");
-            writeln!(out, "{I}internal func encodeToMsgPack() -> MessagePackValue {{ {enc} }}")?;
-            writeln!(out, "{I}internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {{")?;
+            writeln!(
+                out,
+                "{I}internal func encodeToMsgPack() -> MessagePackValue {{ {enc} }}"
+            )?;
+            writeln!(
+                out,
+                "{I}internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {{"
+            )?;
             write_decode_stmts(out, &field.ty, "decoded", "v", 2)?;
             writeln!(out, "{I}{I}return Self(value: decoded)")?;
             writeln!(out, "{I}}}")?;
         }
         Fields::Named(fields) => {
             if fields.is_empty() {
-                writeln!(out, "{I}internal func encodeToMsgPack() -> MessagePackValue {{ .array([]) }}")?;
-                writeln!(out, "{I}internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {{")?;
+                writeln!(
+                    out,
+                    "{I}internal func encodeToMsgPack() -> MessagePackValue {{ .array([]) }}"
+                )?;
+                writeln!(
+                    out,
+                    "{I}internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {{"
+                )?;
                 writeln!(out, "{I}{I}return Self()")?;
                 writeln!(out, "{I}}}")?;
             } else {
@@ -437,11 +549,21 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
                     .map(|(n, f)| encode_expr(&f.ty, &format!("{}", AsLowerCamelCase(n))))
                     .collect();
                 let enc_arr = enc_exprs.join(", ");
-                writeln!(out, "{I}internal func encodeToMsgPack() -> MessagePackValue {{")?;
+                writeln!(
+                    out,
+                    "{I}internal func encodeToMsgPack() -> MessagePackValue {{"
+                )?;
                 writeln!(out, "{I}{I}.array([{enc_arr}])")?;
                 writeln!(out, "{I}}}")?;
-                writeln!(out, "{I}internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {{")?;
-                writeln!(out, "{I}{I}guard case .array(let arr) = v, arr.count == {} else {{ return nil }}", fields.len())?;
+                writeln!(
+                    out,
+                    "{I}internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {{"
+                )?;
+                writeln!(
+                    out,
+                    "{I}{I}guard case .array(let arr) = v, arr.count == {} else {{ return nil }}",
+                    fields.len()
+                )?;
                 let mut args = Vec::new();
                 for (i, (field_name, field)) in fields.iter().enumerate() {
                     let fn_lcc = format!("{}", AsLowerCamelCase(field_name));
@@ -453,8 +575,14 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
             }
         }
         Fields::Unit => {
-            writeln!(out, "{I}internal func encodeToMsgPack() -> MessagePackValue {{ .array([]) }}")?;
-            writeln!(out, "{I}internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {{")?;
+            writeln!(
+                out,
+                "{I}internal func encodeToMsgPack() -> MessagePackValue {{ .array([]) }}"
+            )?;
+            writeln!(
+                out,
+                "{I}internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Self? {{"
+            )?;
             writeln!(out, "{I}{I}return Self()")?;
             writeln!(out, "{I}}}")?;
         }
@@ -590,7 +718,10 @@ fn write_request_enum(
 
     writeln!(out)?;
     // Encode only for Request (no decode needed)
-    writeln!(out, "{I}internal func encodeToMsgPack() -> MessagePackValue {{")?;
+    writeln!(
+        out,
+        "{I}internal func encodeToMsgPack() -> MessagePackValue {{"
+    )?;
     writeln!(out, "{I}{I}switch self {{")?;
     // The request_variants have snake_case names; item.variants use PascalCase
     // We need to use the original snake_case names for AsUpperCamelCase
@@ -603,11 +734,17 @@ fn write_request_enum(
         let msgpack_name = variant_name.clone(); // already PascalCase
         match &variant.fields {
             Fields::Unit => {
-                writeln!(out, "{I}{I}case .{case_name}: return .string(\"{msgpack_name}\")")?;
+                writeln!(
+                    out,
+                    "{I}{I}case .{case_name}: return .string(\"{msgpack_name}\")"
+                )?;
             }
             Fields::Unnamed(field) => {
                 let enc = encode_expr(&field.ty, "value");
-                writeln!(out, "{I}{I}case .{case_name}(let value): return .map([.string(\"{msgpack_name}\"): {enc}])")?;
+                writeln!(
+                    out,
+                    "{I}{I}case .{case_name}(let value): return .map([.string(\"{msgpack_name}\"): {enc}])"
+                )?;
             }
             Fields::Named(fields) => {
                 let pattern: Vec<String> = fields
@@ -620,7 +757,10 @@ fn write_request_enum(
                     .map(|(n, f)| encode_expr(&f.ty, &format!("{}", AsLowerCamelCase(n))))
                     .collect();
                 let enc_arr = enc_exprs.join(", ");
-                writeln!(out, "{I}{I}case .{case_name}({pattern_str}): return .map([.string(\"{msgpack_name}\"): .array([{enc_arr}])])")?;
+                writeln!(
+                    out,
+                    "{I}{I}case .{case_name}({pattern_str}): return .map([.string(\"{msgpack_name}\"): .array([{enc_arr}])])"
+                )?;
             }
         }
     }
@@ -675,18 +815,27 @@ fn write_response_enum(out: &mut dyn Write, item: &ComplexEnum) -> Result<()> {
     writeln!(out)?;
 
     // Encode
-    writeln!(out, "{I}internal func encodeToMsgPack() -> MessagePackValue {{")?;
+    writeln!(
+        out,
+        "{I}internal func encodeToMsgPack() -> MessagePackValue {{"
+    )?;
     writeln!(out, "{I}{I}switch self {{")?;
     for (variant_name, variant) in &item.variants {
         let case_name = format!("{}", AsLowerCamelCase(variant_name));
         let msgpack_name = variant_name.clone(); // PascalCase
         match &variant.fields {
             Fields::Unit => {
-                writeln!(out, "{I}{I}case .{case_name}: return .string(\"{msgpack_name}\")")?;
+                writeln!(
+                    out,
+                    "{I}{I}case .{case_name}: return .string(\"{msgpack_name}\")"
+                )?;
             }
             Fields::Unnamed(field) => {
                 let enc = encode_expr(&field.ty, "value");
-                writeln!(out, "{I}{I}case .{case_name}(let value): return .map([.string(\"{msgpack_name}\"): {enc}])")?;
+                writeln!(
+                    out,
+                    "{I}{I}case .{case_name}(let value): return .map([.string(\"{msgpack_name}\"): {enc}])"
+                )?;
             }
             Fields::Named(fields) => {
                 let pattern: Vec<String> = fields
@@ -699,7 +848,10 @@ fn write_response_enum(out: &mut dyn Write, item: &ComplexEnum) -> Result<()> {
                     .map(|(n, f)| encode_expr(&f.ty, &format!("{}", AsLowerCamelCase(n))))
                     .collect();
                 let enc_arr = enc_exprs.join(", ");
-                writeln!(out, "{I}{I}case .{case_name}({pattern_str}): return .map([.string(\"{msgpack_name}\"): .array([{enc_arr}])])")?;
+                writeln!(
+                    out,
+                    "{I}{I}case .{case_name}({pattern_str}): return .map([.string(\"{msgpack_name}\"): .array([{enc_arr}])])"
+                )?;
             }
         }
     }
@@ -708,11 +860,17 @@ fn write_response_enum(out: &mut dyn Write, item: &ComplexEnum) -> Result<()> {
     writeln!(out)?;
 
     // Decode
-    writeln!(out, "{I}internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Response? {{")?;
+    writeln!(
+        out,
+        "{I}internal static func decodeFromMsgPack(_ v: MessagePackValue) -> Response? {{"
+    )?;
     writeln!(out, "{I}{I}switch v {{")?;
 
     // Unit variants
-    let has_unit = item.variants.iter().any(|(_, v)| matches!(v.fields, Fields::Unit));
+    let has_unit = item
+        .variants
+        .iter()
+        .any(|(_, v)| matches!(v.fields, Fields::Unit));
     if has_unit {
         writeln!(out, "{I}{I}case .string(let name):")?;
         writeln!(out, "{I}{I}{I}switch name {{")?;
@@ -728,10 +886,16 @@ fn write_response_enum(out: &mut dyn Write, item: &ComplexEnum) -> Result<()> {
     }
 
     // Non-unit variants
-    let has_non_unit = item.variants.iter().any(|(_, v)| !matches!(v.fields, Fields::Unit));
+    let has_non_unit = item
+        .variants
+        .iter()
+        .any(|(_, v)| !matches!(v.fields, Fields::Unit));
     if has_non_unit {
         writeln!(out, "{I}{I}case .map(let m) where m.count == 1:")?;
-        writeln!(out, "{I}{I}{I}guard let entry = m.first, case .string(let name) = entry.key else {{ return nil }}")?;
+        writeln!(
+            out,
+            "{I}{I}{I}guard let entry = m.first, case .string(let name) = entry.key else {{ return nil }}"
+        )?;
         writeln!(out, "{I}{I}{I}switch name {{")?;
         for (variant_name, variant) in &item.variants {
             let case_name = format!("{}", AsLowerCamelCase(variant_name));
@@ -745,7 +909,11 @@ fn write_response_enum(out: &mut dyn Write, item: &ComplexEnum) -> Result<()> {
                 }
                 Fields::Named(fields) => {
                     writeln!(out, "{I}{I}{I}case \"{msgpack_name}\":")?;
-                    writeln!(out, "{I}{I}{I}{I}guard case .array(let arr) = entry.value, arr.count == {} else {{ return nil }}", fields.len())?;
+                    writeln!(
+                        out,
+                        "{I}{I}{I}{I}guard case .array(let arr) = entry.value, arr.count == {} else {{ return nil }}",
+                        fields.len()
+                    )?;
                     let mut args = Vec::new();
                     for (i, (field_name, field)) in fields.iter().enumerate() {
                         let fn_lcc = format!("{}", AsLowerCamelCase(field_name));
@@ -827,7 +995,11 @@ fn write_api_class(
                 first = false;
             }
 
-            writeln!(out, ") async throws -> AsyncStream<{}> {{", SwiftType(stream_item))?;
+            writeln!(
+                out,
+                ") async throws -> AsyncStream<{}> {{",
+                SwiftType(stream_item)
+            )?;
 
             let request_case = format!("{}", AsLowerCamelCase(variant_name));
             if variant.fields.is_empty() {
@@ -845,7 +1017,10 @@ fn write_api_class(
                 writeln!(out, "{I}{I})")?;
             }
 
-            writeln!(out, "{I}{I}let stream = try await client.subscribe(request)")?;
+            writeln!(
+                out,
+                "{I}{I}let stream = try await client.subscribe(request)"
+            )?;
             writeln!(out, "{I}{I}return AsyncStream {{ continuation in")?;
             writeln!(out, "{I}{I}{I}let task = Task {{")?;
             writeln!(out, "{I}{I}{I}{I}for await response in stream {{")?;
@@ -870,7 +1045,10 @@ fn write_api_class(
             writeln!(out, "{I}{I}{I}{I}}}")?;
             writeln!(out, "{I}{I}{I}{I}continuation.finish()")?;
             writeln!(out, "{I}{I}{I}}}")?;
-            writeln!(out, "{I}{I}{I}continuation.onTermination = {{ _ in task.cancel() }}")?;
+            writeln!(
+                out,
+                "{I}{I}{I}continuation.onTermination = {{ _ in task.cancel() }}"
+            )?;
             writeln!(out, "{I}{I}}}")?;
             writeln!(out, "{I}}}")?;
             continue;
@@ -905,10 +1083,8 @@ fn write_api_class(
             let param_name = AsLowerCamelCase(arg_name.unwrap_or(DEFAULT_FIELD_NAME));
             let ty = SwiftType(&field.ty);
             write!(out, "_ {param_name}: {ty}")?;
-            if use_default_args {
-                if let Some(default) = ty.default() {
-                    write!(out, " = {default}")?;
-                }
+            if use_default_args && let Some(default) = ty.default() {
+                write!(out, " = {default}")?;
             }
             first = false;
         }
@@ -968,9 +1144,7 @@ fn write_api_class(
                 write!(out, "{I}{I}case .{response_case}(let value):")?;
                 match &ret_stripped {
                     Some(Type::Scalar(w)) => writeln!(out, " return {w}(client, value)")?,
-                    Some(Type::Vec(w)) => {
-                        writeln!(out, " return value.map {{ {w}(client, $0) }}")?
-                    }
+                    Some(Type::Vec(w)) => writeln!(out, " return value.map {{ {w}(client, $0) }}")?,
                     Some(Type::Map(_, w)) => {
                         writeln!(out, " return value.mapValues {{ {w}(client, $0) }}")?
                     }

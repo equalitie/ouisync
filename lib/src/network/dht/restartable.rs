@@ -94,12 +94,9 @@ impl ObservableDht {
 
                 match &inner.state {
                     State::Stopped => {
-                        if let Some(socket) = inner.socket_maker.as_ref().map(|m| m.make()) {
-                            inner.state = State::Starting;
-                            (Some(socket), inner.routers.clone())
-                        } else {
-                            return None;
-                        }
+                        let socket = inner.socket_maker.as_ref().map(|m| m.make())?;
+                        inner.state = State::Starting;
+                        (Some(socket), inner.routers.clone())
                     }
                     State::Started(dht) => return Some(dht.dht.clone()),
                     State::Starting => (None, HashSet::new()),
