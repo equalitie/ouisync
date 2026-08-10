@@ -161,6 +161,10 @@ jobs:
                   restore-keys: |
                       ${{ runner.os }}-gradle-
 
+            # Needed by the gradle task which builds the rust library
+            - name: Install cargo-ndk
+              run: cargo install --force cargo-ndk
+
             - name: Run lint
               working-directory: bindings/kotlin
               run: ./gradlew --stacktrace lint
