@@ -162,12 +162,12 @@ class _MyAppState extends State<MyApp> {
   );
 
   Future<void> addFile() async {
-    FilePickerResult? result = await FilePicker.pickFiles(withReadStream: true);
+    final files = await FilePicker.pickFiles();
 
-    if (result != null) {
-      final path = '/${result.files.single.name}';
+    if (files.isNotEmpty) {
+      final path = '/${files.single.name}';
       final file = await createFile(path);
-      await saveFile(file, path, result.files.first.readStream!);
+      await saveFile(file, path, files.first.readAsByteStream());
     }
   }
 
