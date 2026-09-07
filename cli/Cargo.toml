@@ -44,3 +44,6 @@ libc = { workspace = true }
 [features]
 default = ["vfs"]
 vfs = ["ouisync-service/vfs"]
+
+[lints]
+workspace = true
