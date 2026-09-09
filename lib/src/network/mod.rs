@@ -773,25 +773,22 @@ impl Inner {
     }
 
     fn spawn_local_discovery(self: &Arc<Self>) -> Option<AbortHandle> {
-        let addrs = self.gateway.listener_local_addrs();
-        let tcp_port = addrs
-            .iter()
-            .find(|addr| matches!(addr, PeerAddr::Tcp(SocketAddr::V4(_))))
-            .map(|addr| PeerPort::Tcp(addr.port()));
-        let quic_port = addrs
-            .iter()
-            .find(|addr| matches!(addr, PeerAddr::Quic(SocketAddr::V4(_))))
-            .map(|addr| PeerPort::Quic(addr.port()));
+        let ports: Vec<_> = self
+            .gateway
+            .listener_local_addrs()
+            .into_iter()
+            .filter_map(|addr| match addr {
+                PeerAddr::Tcp(SocketAddr::V4(addr)) => Some(PeerPort::Tcp(addr.port())),
+                PeerAddr::Quic(SocketAddr::V4(addr)) => Some(PeerPort::Quic(addr.port())),
+                _ => None,
+            })
+            .collect();
 
-        // Arbitrary order of preference.
-        // TODO: Should we support all available?
-        let port = tcp_port.or(quic_port);
-
-        if let Some(port) = port {
+        if !ports.is_empty() {
             Some(
                 self.spawn(
                     self.clone()
-                        .run_local_discovery(port)
+                        .run_local_discovery(ports)
                         .instrument(self.span.clone()),
                 ),
             )
@@ -801,9 +798,9 @@ impl Inner {
         }
     }
 
-    async fn run_local_discovery(self: Arc<Self>, listener_port: PeerPort) {
+    async fn run_local_discovery(self: Arc<Self>, listener_ports: Vec<PeerPort>) {
         let mut discovery = LocalDiscovery::new(
-            listener_port,
+            listener_ports,
             self.main_monitor.make_child("LocalDiscovery"),
         );
 
