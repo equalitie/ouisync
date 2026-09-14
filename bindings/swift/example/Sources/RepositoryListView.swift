@@ -42,9 +42,8 @@ struct RepositoryListView: View {
             } onCancel: {
                 isCreating = false
             }
-            .padding()
         }
-        .onChange(of: viewModel.pendingShare) { share in
+        .onChange(of: viewModel.pendingShare) { _, share in
             guard let share else { return }
             initialName = share.suggestedName
             initialToken = share.token
@@ -136,6 +135,27 @@ private struct RepositoryRow: View {
                 .buttonStyle(.borderless)
                 .foregroundStyle(.red)
         }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(role: .destructive) { confirmDelete = true } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            if let shareURL = shareToken.flatMap(ouisyncURL(from:)) {
+                ShareLink(item: shareURL) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+                .tint(.blue)
+            }
+        }
+        .contextMenu {
+            if let shareURL = shareToken.flatMap(ouisyncURL(from:)) {
+                ShareLink(item: shareURL) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+            }
+            Button(role: .destructive) { confirmDelete = true } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
         .task {
             shareToken = await onShare()
         }
@@ -168,6 +188,49 @@ private struct CreateRepositorySheet: View {
     }
 
     var body: some View {
+#if os(iOS)
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Name", text: $name)
+                    if !nameError.isEmpty {
+                        Text(nameError).font(.caption).foregroundStyle(.red)
+                    }
+                } header: {
+                    Text("Name")
+                }
+                Section {
+                    TextField("Share token", text: $token, axis: .vertical)
+                        .lineLimit(1...3)
+                } header: {
+                    Text("Share token (optional)")
+                }
+            }
+            .navigationTitle("New Repository")
+            .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) {
+                HStack(spacing: 12) {
+                    Button(role: .cancel) { onCancel() } label: {
+                        Text("Cancel").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        guard validate() else { return }
+                        onSubmit(name, token)
+                    } label: {
+                        Text("Create").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .controlSize(.large)
+                .padding()
+                .background(.bar)
+            }
+        }
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+#else
         VStack(alignment: .leading, spacing: 16) {
             Text("Create Repository").font(.headline)
 
@@ -190,7 +253,7 @@ private struct CreateRepositorySheet: View {
                 .buttonStyle(.borderedProminent)
             }
         }
-#if os(macOS)
+        .padding()
         .frame(width: 320)
 #endif
     }

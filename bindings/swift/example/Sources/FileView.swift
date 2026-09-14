@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import CryptoKit
 import OuisyncLib
 
@@ -8,8 +9,12 @@ struct FileView: View {
     let path: String
 
     @State private var state: FileState = .loading
-    @State private var isWriting = false
+    @State private var isExporting = false
+    @State private var exportDocument: ExportedFile?
+    @State private var exportProgress: Double?
     @State private var errorMessage: String?
+
+    private var fileName: String { (path as NSString).lastPathComponent }
 
     private var repo: Repository? { viewModel.repositories[repositoryName] }
 
@@ -40,26 +45,31 @@ struct FileView: View {
                 )
             }
         }
-        .navigationTitle((path as NSString).lastPathComponent)
+        .navigationTitle(fileName)
         .task { await loadFile() }
+        .overlay { if let exportProgress { exportOverlay(exportProgress) } }
         .toolbar {
             ToolbarItem {
-                Button { isWriting = true } label: { Image(systemName: "pencil") }
-                    .help("Write text content")
+                Button { Task { await prepareExport() } } label: { Image(systemName: "square.and.arrow.down") }
+                    .help("Export / download this file")
+                    .disabled(exportProgress != nil)
             }
             ToolbarItem {
                 Button { Task { await loadFile() } } label: { Image(systemName: "arrow.clockwise") }
                     .help("Refresh")
             }
         }
-        .sheet(isPresented: $isWriting) {
-            WriteContentSheet { text in
-                isWriting = false
-                Task { await writeContent(text) }
-            } onCancel: {
-                isWriting = false
+        .fileExporter(
+            isPresented: $isExporting,
+            document: exportDocument,
+            contentType: .data,
+            defaultFilename: fileName
+        ) { result in
+            if case .failure(let error) = result {
+                errorMessage = error.localizedDescription
             }
-            .padding()
+            exportDocument?.cleanup()
+            exportDocument = nil
         }
         .alert("Error", isPresented: Binding(
             get: { errorMessage != nil },
@@ -148,53 +158,99 @@ struct FileView: View {
         }
     }
 
-    // MARK: - Write
+    // MARK: - Export
 
-    private func writeContent(_ text: String) async {
-        guard let repo else { return }
+    private func exportOverlay(_ fraction: Double) -> some View {
+        ZStack {
+            Color.black.opacity(0.2).ignoresSafeArea()
+            VStack(spacing: 12) {
+                ProgressView(value: fraction) { Text("Preparing \(fileName)…") }
+                Text("\(Int(fraction * 100))%").foregroundStyle(.secondary)
+            }
+            .padding(24)
+            .frame(maxWidth: 320)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+
+    /// Streams the repository file into a temporary file on disk, updating
+    /// `exportProgress` as it goes. The returned URL lives in a unique temp
+    /// subdirectory. Throws (and cleans up) on failure.
+    private func downloadToTemp() async throws -> URL {
+        guard let repo else { throw CocoaError(.fileNoSuchFile) }
+
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent(fileName)
+
         do {
-            let data = Data(text.utf8)
-            let file = try await repo.createFile(path)
+            try FileManager.default.createDirectory(
+                at: tempURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: tempURL.path, contents: nil)
+
+            let output = try FileHandle(forWritingTo: tempURL)
+            defer { try? output.close() }
+
+            let file = try await repo.openFile(path)
             defer { Task { try? await file.close() } }
-            try await file.write(0, data)
-            try await file.flush()
-            await loadFile()
+
+            let length = try await file.getLength()
+            let chunkSize: UInt64 = 65536
+            var offset: UInt64 = 0
+
+            while offset < length {
+                let chunk = try await file.read(offset, min(chunkSize, length - offset))
+                if chunk.isEmpty { break }
+                try output.write(contentsOf: chunk)
+                offset += UInt64(chunk.count)
+                exportProgress = length > 0 ? Double(offset) / Double(length) : 1.0
+            }
+
+            return tempURL
         } catch {
-            errorMessage = error.localizedDescription
+            try? FileManager.default.removeItem(at: tempURL.deletingLastPathComponent())
+            throw error
+        }
+    }
+
+    /// Downloads the file to a temp location and presents the system exporter
+    /// so the user can save it wherever they like.
+    private func prepareExport() async {
+        exportProgress = 0
+        do {
+            let tempURL = try await downloadToTemp()
+            exportProgress = nil
+            exportDocument = ExportedFile(url: tempURL)
+            isExporting = true
+        } catch {
+            exportProgress = nil
+            errorMessage = "Failed to export \(fileName): \(error.localizedDescription)"
         }
     }
 }
 
-// MARK: - Write-content sheet
+// MARK: - Exported file document
 
-private struct WriteContentSheet: View {
-    let onSubmit: (String) -> Void
-    let onCancel: () -> Void
+/// Wraps an on-disk temporary file for use with `.fileExporter`. The exporter
+/// copies it to the user-chosen destination without loading it into memory.
+private struct ExportedFile: FileDocument {
+    static var readableContentTypes: [UTType] { [.data] }
 
-    @State private var text = ""
+    let url: URL
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Write content").font(.headline)
-            TextEditor(text: $text)
-                .font(.system(.body, design: .monospaced))
-#if os(macOS)
-                .frame(width: 380, height: 160)
-#else
-                .frame(minHeight: 160)
-#endif
-                .border(Color.secondary.opacity(0.3))
-            HStack {
-                Spacer()
-                Button("Cancel") { onCancel() }
-                Button("Write") { onSubmit(text) }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(text.isEmpty)
-            }
-        }
-#if os(macOS)
-        .frame(width: 400)
-#endif
+    init(url: URL) { self.url = url }
+
+    init(configuration: ReadConfiguration) throws {
+        throw CocoaError(.fileReadUnsupportedScheme)
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        try FileWrapper(url: url)
+    }
+
+    /// Removes the temporary directory backing this document.
+    func cleanup() {
+        try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
     }
 }
 
