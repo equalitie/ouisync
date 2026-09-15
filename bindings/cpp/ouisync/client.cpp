@@ -211,10 +211,7 @@ void Client::receive_job(std::shared_ptr<State> state, boost::asio::yield_contex
     auto subscriptions = std::move(state->subscriptions);
 
     for (auto& [res_id, handler] : responses) {
-        auto bound_handler = [
-            handler = std::move(handler),
-            ec
-        ] () mutable {
+        auto bound_handler = [handler = std::move(handler), ec] () mutable {
             apply_result(std::move(handler), ec);
         };
 
@@ -329,9 +326,14 @@ void Client::invoke_impl(
         [state, msg_id](system::error_code ec) mutable {
             if (ec) {
                 auto i = state->responses.find(msg_id.value);
-                if (i != state->responses.end()) {
-                    (i->second)(ec, Response {});
+                if (i == state->responses.end()) {
+                    return;
                 }
+
+                auto handler = std::move(i->second);
+                state->responses.erase(i);
+
+                handler(ec, Response {});
             }
         }
     );
