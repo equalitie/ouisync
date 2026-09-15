@@ -10,7 +10,7 @@ use ouisync_lib::Repository;
 use std::io;
 use std::{
     collections::{HashMap, hash_map},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -65,11 +65,13 @@ impl MultiRepoMount for MultiRepoVFS {
 
             let join_handle = thread::spawn({
                 let repos = repos.clone();
+                let rt = tokio::runtime::Handle::current();
                 move || {
                     // TODO: Ensure this is done only once.
                     init();
 
                     let handler = Handler {
+                        rt,
                         root_id,
                         repos,
                         next_debug_id: AtomicU64::new(0),
@@ -193,6 +195,7 @@ enum DebugType {
 }
 
 struct Handler {
+    rt: tokio::runtime::Handle,
     root_id: u64,
     repos: Arc<BlockingRwLock<RepoMap>>,
     next_debug_id: AtomicU64,
@@ -627,7 +630,80 @@ impl Handler {
         &'h self,
         _info: &OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<DiskSpaceInfo> {
-        Err(STATUS_NOT_IMPLEMENTED)
+        let repos: Vec<_> = self
+            .repos
+            .read()
+            .unwrap()
+            .values()
+            .map(|vfs| vfs.repo.clone())
+            .collect();
+
+        // Returns a string representing the disk the path is on.
+        fn disk_key(path: &Path) -> Option<String> {
+            let absolute = path.canonicalize().ok()?; // resolves relative paths too
+            match absolute.components().next()? {
+                Component::Prefix(prefix) => Some(format!("{:?}", prefix.kind())),
+                _ => None,
+            }
+        }
+
+        // Find each disk on which repository databases are stored. For each such disk remember one
+        // "sample" path which we'll use to get the available space on that disk.
+        let mut disks: HashMap<String, PathBuf> = HashMap::new();
+
+        for repo in &repos {
+            let store_path: &Path = repo.store_path();
+            if let Some(key) = disk_key(store_path) {
+                disks.entry(key).or_insert_with(|| store_path.to_path_buf());
+            } else {
+                tracing::error!("VFS: Failed to determine disk for {store_path:?}");
+            }
+        }
+
+        let free_space: u64 = disks
+            .values()
+            .map(|sample_path| match fs4::available_space(sample_path) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    tracing::error!(
+                        "VFS: Failed to determine free space on disk where {:?} is on: {:?}",
+                        sample_path,
+                        error
+                    );
+                    0
+                }
+            })
+            .sum();
+
+        let used_space: u64 = repos
+            .iter()
+            .map(|repo| {
+                self.rt.block_on(async {
+                    match repo.size().await {
+                        Ok(size) => size.to_bytes(),
+                        Err(error) => {
+                            tracing::error!(
+                                "VFS: Failed to get size of repository {:?}: {error:?}",
+                                repo.store_path()
+                            );
+                            0
+                        }
+                    }
+                })
+            })
+            .sum();
+
+        // Windows file explorer will show this next to the drive:
+        //   `available_byte_count` free of `byte_count`
+        // Then when one does right click > properties on the drive:
+        //   Used space: `byte_count` - `available_byte_count`
+        //   Free space: `available_byte_count`
+        //   Capacity:   `byte_count`
+        Ok(DiskSpaceInfo {
+            byte_count: free_space + used_space,
+            free_byte_count: free_space,
+            available_byte_count: free_space,
+        })
     }
 
     fn get_volume_information_<'c, 'h: 'c>(

@@ -80,6 +80,11 @@ impl Store {
         }
     }
 
+    /// Returns path to the underlying database file
+    pub fn path(&self) -> &Path {
+        self.db.store_path()
+    }
+
     /// Runs data migrations. Does nothing if already at the latest version.
     pub async fn migrate_data(
         &self,

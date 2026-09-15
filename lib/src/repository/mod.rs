@@ -218,6 +218,10 @@ impl Repository {
         Ok(metadata::requires_local_secret_for_writing(&mut conn).await?)
     }
 
+    pub fn store_path(&self) -> &Path {
+        self.shared.vault.store().path()
+    }
+
     /// Sets, unsets or changes local secrets for accessing the repository or disables the given
     /// access mode.
     ///

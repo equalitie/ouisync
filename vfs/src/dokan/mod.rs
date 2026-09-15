@@ -973,11 +973,28 @@ impl VirtualFilesystem {
         _info: &OperationInfo<'c, 'h, Super>,
     ) -> Result<DiskSpaceInfo, Error> {
         tracing::trace!("enter");
-        // TODO
+        let used_space = self.repo.size().await?.to_bytes();
+        let free_space = match fs4::available_space(self.repo.store_path()) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::error!(
+                    "VFS: Failed to determine free space on disk where {:?} is on: {:?}",
+                    self.repo.store_path(),
+                    error
+                );
+                0
+            }
+        };
+        // Windows file explorer will show this next to the drive:
+        //   `available_byte_count` free of `byte_count`
+        // Then when one does right click > properties on the drive:
+        //   Used space: `byte_count` - `available_byte_count`
+        //   Free space: `available_byte_count`
+        //   Capacity:   `byte_count`
         Ok(DiskSpaceInfo {
-            byte_count: 1024 * 1024 * 1024,
-            free_byte_count: 512 * 1024 * 1024,
-            available_byte_count: 512 * 1024 * 1024,
+            byte_count: used_space + free_space,
+            free_byte_count: free_space,
+            available_byte_count: free_space,
         })
     }
 
