@@ -37,6 +37,7 @@ use state::State;
 use std::{
     convert::Infallible,
     io,
+    net::Ipv4Addr,
     path::{Path, PathBuf},
     pin::Pin,
     sync::Arc,
@@ -74,6 +75,7 @@ impl Service {
         let local_endpoint = match local_endpoint_entry.get().await {
             Ok(value) => value,
             Err(ConfigError::NotFound) => LocalEndpoint {
+                addr: Ipv4Addr::LOCALHOST,
                 port: 0,
                 auth_key: AuthKey::random(),
             },

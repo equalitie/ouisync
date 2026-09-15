@@ -22,8 +22,14 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct LocalEndpoint {
+    #[serde(default = "default_addr")]
+    pub addr: Ipv4Addr,
     pub port: u16,
     pub auth_key: AuthKey,
+}
+
+fn default_addr() -> Ipv4Addr {
+    Ipv4Addr::LOCALHOST
 }
 
 pub(crate) struct LocalServer {
@@ -33,7 +39,7 @@ pub(crate) struct LocalServer {
 
 impl LocalServer {
     pub async fn bind(endpoint: LocalEndpoint) -> io::Result<Self> {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, endpoint.port)).await?;
+        let listener = TcpListener::bind((endpoint.addr, endpoint.port)).await?;
         let port = listener.local_addr()?.port();
 
         Ok(Self {
@@ -249,6 +255,7 @@ mod tests {
         let service = Service::init(temp_dir.path().join("config")).await.unwrap();
 
         let invalid_endpoint = LocalEndpoint {
+            addr: Ipv4Addr::LOCALHOST,
             port: service.local_endpoint().port,
             auth_key: AuthKey::random(),
         };
