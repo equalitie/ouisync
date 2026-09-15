@@ -3,6 +3,14 @@
 proptest-regressions
 bindings/dart/darwin/libouisync_service.a
 
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+
 # This is a symbolic link created by {windows,linux}/CMakeLists.txt scripts
 # because git often doesn't support symlinks by default (depends on which OS,
 # git version and .gitconfig).
