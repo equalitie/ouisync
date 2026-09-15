@@ -23,7 +23,7 @@ use std::{
     fmt, io,
     ops::{Deref, DerefMut},
     panic::Location,
-    path::Path,
+    path::{Path, PathBuf},
     time::Duration,
 };
 #[cfg(test)]
@@ -40,6 +40,8 @@ pub use self::connection::Connection;
 /// Database connection pool.
 #[derive(Clone)]
 pub struct Pool {
+    // Path to the main database file
+    path: PathBuf,
     // Pool with multiple read-only connections
     reads: SqlitePool,
     // Pool with a single writable connection.
@@ -48,10 +50,9 @@ pub struct Pool {
 
 impl Pool {
     async fn create(conn_options: SqliteConnectOptions) -> Result<Self, sqlx::Error> {
-        if fs::try_exists(conn_options.get_filename())
-            .await
-            .unwrap_or(false)
-        {
+        let path = conn_options.get_filename().to_path_buf();
+
+        if fs::try_exists(&path).await.unwrap_or(false) {
             // Try to enable auto-vacuum, but if it fails [^1] it's not a critical failure as we can
             // keep using the db without auto-vacuum [^2]. Just log the error and keep going.
             //
@@ -90,7 +91,12 @@ impl Pool {
             .connect_with(conn_options.read_only(true))
             .await?;
 
-        Ok(Self { reads, write })
+        Ok(Self { path, reads, write })
+    }
+
+    /// Return path to the database file.
+    pub fn store_path(&self) -> &Path {
+        self.path.as_ref()
     }
 
     /// Acquire a read-only database connection.
