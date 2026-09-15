@@ -33,6 +33,7 @@ xpc-connection = "0.2.3"
 deadlock = { path = "../deadlock" }
 widestring = "1.0.2"
 winapi = { workspace = true, features = ["ntstatus", "winnt"]  }
+fs4 = { version = "1", features = ["sync"] }
 
 [target.'cfg(target_os = "windows")'.dependencies.dokan]
 git = "https://github.com/dokan-dev/dokan-rust"
