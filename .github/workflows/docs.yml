@@ -60,6 +60,11 @@ jobs:
             channel: 'stable'
             cache: true
 
+      - name: Setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Setup Pages
         id: pages
         uses: actions/configure-pages@v5
@@ -77,12 +82,19 @@ jobs:
           dart run tool/bindgen.dart
           dart doc --verbose
 
+      - name: Build docs for the python bindings
+        working-directory: bindings/python
+        run: |
+          pip install -e ".[docs]"
+          python -m pdoc --output-directory doc-output ouisync
+
       - name: Prepare the files
         run: |
           mkdir -p _site
           cp -r target/doc _site/rust
           cp -r bindings/kotlin/build/dokka/html _site/kotlin
           cp -r bindings/dart/doc/api _site/dart
+          cp -r bindings/python/doc-output _site/python
           cp doc/index.html _site/
 
       - name: Upload artifact
