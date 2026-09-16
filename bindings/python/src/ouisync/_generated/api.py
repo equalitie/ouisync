@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import ClassVar
 
+if typing.TYPE_CHECKING:
+    from ..client import Client
+
+
 @dataclass
 class SecretKey:
     """
@@ -306,7 +310,7 @@ class ErrorCode(IntEnum):
     """Unspecified error"""
 
 class OuisyncError(Exception):
-    def __init__(self, code: "ErrorCode", message: str | None = None, sources: list[str] | None = None):
+    def __init__(self, code: ErrorCode, message: str | None = None, sources: list[str] | None = None):
         self.code = code
         self.message = message
         self.sources = sources or []
@@ -457,7 +461,7 @@ class OuisyncError_MountDirUnspecified(OuisyncError):
     def __init__(self, message: str | None = None, sources: list[str] | None = None):
         super().__init__(ErrorCode.MOUNT_DIR_UNSPECIFIED, message, sources)
 
-def dispatch_error(code: "ErrorCode", message: str | None = None, sources: list[str] | None = None) -> OuisyncError:
+def dispatch_error(code: ErrorCode, message: str | None = None, sources: list[str] | None = None) -> OuisyncError:
     variant = _ERROR_VARIANTS.get(code)
     if variant is not None:
         return variant(message, sources)
@@ -1724,7 +1728,7 @@ Response._variants = {
 }
 
 class Session:
-    def __init__(self, client: "Client"):
+    def __init__(self, client: Client):
         self._client = client
 
     async def add_user_provided_peers(
@@ -1790,7 +1794,7 @@ class Session:
         self,
         *,
         addr: str | None = None,
-    ) -> "int":
+    ) -> int:
         request = Request_SessionBindRemoteControl(
             addr,
         )
@@ -1838,7 +1842,7 @@ class Session:
         sync_enabled: bool = False,
         dht_enabled: bool = False,
         pex_enabled: bool = False,
-    ) -> "Repository":
+    ) -> Repository:
         """
         Creates a new repository.
 
@@ -1890,7 +1894,7 @@ class Session:
         *,
         password: Password,
         salt: PasswordSalt,
-    ) -> "SecretKey":
+    ) -> SecretKey:
         request = Request_SessionDeriveSecretKey(
             password,
             salt,
@@ -1904,7 +1908,7 @@ class Session:
         self,
         *,
         name: str,
-    ) -> "Repository":
+    ) -> Repository:
         request = Request_SessionFindRepository(
             name,
         )
@@ -1915,7 +1919,7 @@ class Session:
 
     async def generate_password_salt(
         self,
-    ) -> "PasswordSalt":
+    ) -> PasswordSalt:
         request = Request_SessionGeneratePasswordSalt()
         response = await self._client.invoke(request)
         if isinstance(response, Response_PasswordSalt):
@@ -1924,7 +1928,7 @@ class Session:
 
     async def generate_secret_key(
         self,
-    ) -> "SecretKey":
+    ) -> SecretKey:
         request = Request_SessionGenerateSecretKey()
         response = await self._client.invoke(request)
         if isinstance(response, Response_SecretKey):
@@ -1933,7 +1937,7 @@ class Session:
 
     async def get_current_protocol_version(
         self,
-    ) -> "int":
+    ) -> int:
         """
         Returns our Ouisync protocol version.
 
@@ -1950,7 +1954,7 @@ class Session:
 
     async def get_default_block_expiration(
         self,
-    ) -> "int | None":
+    ) -> int | None:
         request = Request_SessionGetDefaultBlockExpiration()
         response = await self._client.invoke(request)
         if isinstance(response, Response_Duration):
@@ -1961,7 +1965,7 @@ class Session:
 
     async def get_default_quota(
         self,
-    ) -> "StorageSize | None":
+    ) -> StorageSize | None:
         request = Request_SessionGetDefaultQuota()
         response = await self._client.invoke(request)
         if isinstance(response, Response_StorageSize):
@@ -1972,7 +1976,7 @@ class Session:
 
     async def get_default_repository_expiration(
         self,
-    ) -> "int | None":
+    ) -> int | None:
         request = Request_SessionGetDefaultRepositoryExpiration()
         response = await self._client.invoke(request)
         if isinstance(response, Response_Duration):
@@ -1983,7 +1987,7 @@ class Session:
 
     async def get_dht_routers(
         self,
-    ) -> "list[str]":
+    ) -> list[str]:
         """
         Returns the current DHT routers (bootstrap nodes). If the routers haven't been changed by
         the user yet, returns the default routers.
@@ -1996,7 +2000,7 @@ class Session:
 
     async def get_external_addr_v4(
         self,
-    ) -> "str | None":
+    ) -> str | None:
         request = Request_SessionGetExternalAddrV4()
         response = await self._client.invoke(request)
         if isinstance(response, Response_SocketAddr):
@@ -2007,7 +2011,7 @@ class Session:
 
     async def get_external_addr_v6(
         self,
-    ) -> "str | None":
+    ) -> str | None:
         request = Request_SessionGetExternalAddrV6()
         response = await self._client.invoke(request)
         if isinstance(response, Response_SocketAddr):
@@ -2018,7 +2022,7 @@ class Session:
 
     async def get_highest_seen_protocol_version(
         self,
-    ) -> "int":
+    ) -> int:
         """
         Returns the highest protocol version of all known peers.
 
@@ -2034,7 +2038,7 @@ class Session:
 
     async def get_local_listener_addrs(
         self,
-    ) -> "list[str]":
+    ) -> list[str]:
         """Returns the listener addresses of this Ouisync instance."""
         request = Request_SessionGetLocalListenerAddrs()
         response = await self._client.invoke(request)
@@ -2044,7 +2048,7 @@ class Session:
 
     async def get_metrics_listener_addr(
         self,
-    ) -> "str | None":
+    ) -> str | None:
         request = Request_SessionGetMetricsListenerAddr()
         response = await self._client.invoke(request)
         if isinstance(response, Response_SocketAddr):
@@ -2055,7 +2059,7 @@ class Session:
 
     async def get_mount_root(
         self,
-    ) -> "str | None":
+    ) -> str | None:
         request = Request_SessionGetMountRoot()
         response = await self._client.invoke(request)
         if isinstance(response, Response_Path):
@@ -2066,7 +2070,7 @@ class Session:
 
     async def get_nat_behavior(
         self,
-    ) -> "NatBehavior | None":
+    ) -> NatBehavior | None:
         request = Request_SessionGetNatBehavior()
         response = await self._client.invoke(request)
         if isinstance(response, Response_NatBehavior):
@@ -2077,7 +2081,7 @@ class Session:
 
     async def get_network_stats(
         self,
-    ) -> "Stats":
+    ) -> Stats:
         request = Request_SessionGetNetworkStats()
         response = await self._client.invoke(request)
         if isinstance(response, Response_Stats):
@@ -2086,7 +2090,7 @@ class Session:
 
     async def get_peers(
         self,
-    ) -> "list[PeerInfo]":
+    ) -> list[PeerInfo]:
         """
         Returns info about all known peers (both discovered and explicitly added).
 
@@ -2101,7 +2105,7 @@ class Session:
 
     async def get_remote_control_listener_addr(
         self,
-    ) -> "str | None":
+    ) -> str | None:
         request = Request_SessionGetRemoteControlListenerAddr()
         response = await self._client.invoke(request)
         if isinstance(response, Response_SocketAddr):
@@ -2114,7 +2118,7 @@ class Session:
         self,
         *,
         host: str,
-    ) -> "list[str]":
+    ) -> list[str]:
         """
         Returns the listener addresses of the specified remote Ouisync instance. Works only if the
         remote control API is enabled on the remote instance. Typically used with cache servers.
@@ -2129,7 +2133,7 @@ class Session:
 
     async def get_runtime_id(
         self,
-    ) -> "PublicRuntimeId":
+    ) -> PublicRuntimeId:
         """
         Returns the runtime id of this Ouisync instance.
 
@@ -2146,7 +2150,7 @@ class Session:
         self,
         *,
         token: str,
-    ) -> "AccessMode":
+    ) -> AccessMode:
         """Returns the access mode that the given token grants."""
         request = Request_SessionGetShareTokenAccessMode(
             token,
@@ -2160,7 +2164,7 @@ class Session:
         self,
         *,
         token: str,
-    ) -> "str":
+    ) -> str:
         """
         Return the info-hash of the repository corresponding to the given token, formatted as hex
         string.
@@ -2179,7 +2183,7 @@ class Session:
         self,
         *,
         token: str,
-    ) -> "str":
+    ) -> str:
         """Returns the suggested name for the repository corresponding to the given token."""
         request = Request_SessionGetShareTokenSuggestedName(
             token,
@@ -2193,7 +2197,7 @@ class Session:
         self,
         *,
         path: list[MonitorId],
-    ) -> "typing.Any | None":
+    ) -> typing.Any | None:
         request = Request_SessionGetStateMonitor(
             path,
         )
@@ -2206,7 +2210,7 @@ class Session:
 
     async def get_store_dirs(
         self,
-    ) -> "list[str]":
+    ) -> list[str]:
         request = Request_SessionGetStoreDirs()
         response = await self._client.invoke(request)
         if isinstance(response, Response_Paths):
@@ -2215,7 +2219,7 @@ class Session:
 
     async def get_user_provided_peers(
         self,
-    ) -> "list[str]":
+    ) -> list[str]:
         request = Request_SessionGetUserProvidedPeers()
         response = await self._client.invoke(request)
         if isinstance(response, Response_PeerAddrs):
@@ -2254,7 +2258,7 @@ class Session:
 
     async def is_local_dht_enabled(
         self,
-    ) -> "bool":
+    ) -> bool:
         """Checks whether local DHT is enabled."""
         request = Request_SessionIsLocalDhtEnabled()
         response = await self._client.invoke(request)
@@ -2264,7 +2268,7 @@ class Session:
 
     async def is_local_discovery_enabled(
         self,
-    ) -> "bool":
+    ) -> bool:
         """Is local discovery enabled?"""
         request = Request_SessionIsLocalDiscoveryEnabled()
         response = await self._client.invoke(request)
@@ -2274,7 +2278,7 @@ class Session:
 
     async def is_pex_recv_enabled(
         self,
-    ) -> "bool":
+    ) -> bool:
         """Checks whether accepting peers discovered on the peer exchange is enabled."""
         request = Request_SessionIsPexRecvEnabled()
         response = await self._client.invoke(request)
@@ -2284,7 +2288,7 @@ class Session:
 
     async def is_pex_send_enabled(
         self,
-    ) -> "bool":
+    ) -> bool:
         request = Request_SessionIsPexSendEnabled()
         response = await self._client.invoke(request)
         if isinstance(response, Response_Bool):
@@ -2293,7 +2297,7 @@ class Session:
 
     async def is_port_forwarding_enabled(
         self,
-    ) -> "bool":
+    ) -> bool:
         """Is port forwarding (UPnP) enabled?"""
         request = Request_SessionIsPortForwardingEnabled()
         response = await self._client.invoke(request)
@@ -2303,7 +2307,7 @@ class Session:
 
     async def list_repositories(
         self,
-    ) -> "dict[str, Repository]":
+    ) -> dict[str, Repository]:
         request = Request_SessionListRepositories()
         response = await self._client.invoke(request)
         if isinstance(response, Response_Repositories):
@@ -2315,7 +2319,7 @@ class Session:
         *,
         token: str,
         host: str,
-    ) -> "bool":
+    ) -> bool:
         request = Request_SessionMirrorExists(
             token,
             host,
@@ -2327,7 +2331,7 @@ class Session:
 
     async def open_network_socket_v4(
         self,
-    ) -> "NetworkSocket | None":
+    ) -> NetworkSocket | None:
         """
         Opens a side channel to the underlying IPv4 UDP socket. The side channel is used to
         send/receive raw UDP datagrams on the same socket that the sync protocol uses. This is
@@ -2345,7 +2349,7 @@ class Session:
 
     async def open_network_socket_v6(
         self,
-    ) -> "NetworkSocket | None":
+    ) -> NetworkSocket | None:
         """
         Opens a side channel to the underlying IPv6 UDP socket. The side channel is used to
         send/receive raw UDP datagrams on the same socket that the sync protocol uses. This is
@@ -2366,7 +2370,7 @@ class Session:
         *,
         addr: str,
         topic_id: TopicId,
-    ) -> "NetworkStream":
+    ) -> NetworkStream:
         """Opens a raw byte streams to the given peer, bound to the given topic."""
         request = Request_SessionOpenNetworkStream(
             addr,
@@ -2382,7 +2386,7 @@ class Session:
         *,
         path: str,
         local_secret: LocalSecret | None = None,
-    ) -> "Repository":
+    ) -> Repository:
         """
         Opens an existing repository.
 
@@ -2620,7 +2624,7 @@ class Session:
         self,
         *,
         token: str,
-    ) -> "str":
+    ) -> str:
         """Checks whether the given string is a valid share token."""
         request = Request_SessionValidateShareToken(
             token,
@@ -2632,7 +2636,7 @@ class Session:
 
 
 class Repository:
-    def __init__(self, client: "Client", handle: "RepositoryHandle"):
+    def __init__(self, client: Client, handle: RepositoryHandle):
         self._client = client
         self._handle = handle
 
@@ -2667,7 +2671,7 @@ class Repository:
         self,
         *,
         path: str,
-    ) -> "File":
+    ) -> File:
         """Creates a new file at the given path in the repository."""
         request = Request_RepositoryCreateFile(
             self._handle,
@@ -2737,7 +2741,7 @@ class Repository:
         self,
         *,
         output_path: str,
-    ) -> "str":
+    ) -> str:
         """Export repository to file"""
         request = Request_RepositoryExport(
             self._handle,
@@ -2752,7 +2756,7 @@ class Repository:
         self,
         *,
         path: str,
-    ) -> "bool":
+    ) -> bool:
         request = Request_RepositoryFileExists(
             self._handle,
             path,
@@ -2764,7 +2768,7 @@ class Repository:
 
     async def get_access_mode(
         self,
-    ) -> "AccessMode":
+    ) -> AccessMode:
         """Returns the access mode (*blind*, *read* or *write*) the repository is currently opened in."""
         request = Request_RepositoryGetAccessMode(
             self._handle,
@@ -2776,7 +2780,7 @@ class Repository:
 
     async def get_block_expiration(
         self,
-    ) -> "int | None":
+    ) -> int | None:
         request = Request_RepositoryGetBlockExpiration(
             self._handle,
         )
@@ -2789,7 +2793,7 @@ class Repository:
 
     async def get_credentials(
         self,
-    ) -> "bytes":
+    ) -> bytes:
         """
         Gets the current credentials of this repository. Can be used to restore access after closing
         and reopening the repository.
@@ -2806,7 +2810,7 @@ class Repository:
         self,
         *,
         path: str,
-    ) -> "EntryType | None":
+    ) -> EntryType | None:
         """
         Returns the type of repository entry (file, directory, ...) or `None` if the entry doesn't
         exist.
@@ -2824,7 +2828,7 @@ class Repository:
 
     async def get_expiration(
         self,
-    ) -> "int | None":
+    ) -> int | None:
         request = Request_RepositoryGetExpiration(
             self._handle,
         )
@@ -2837,7 +2841,7 @@ class Repository:
 
     async def get_info_hash(
         self,
-    ) -> "str":
+    ) -> str:
         """
         Return the info-hash of the repository formatted as hex string. This can be used as a
         globally unique, non-secret identifier of the repository.
@@ -2854,7 +2858,7 @@ class Repository:
         self,
         *,
         key: str,
-    ) -> "str | None":
+    ) -> str | None:
         request = Request_RepositoryGetMetadata(
             self._handle,
             key,
@@ -2868,7 +2872,7 @@ class Repository:
 
     async def get_mount_point(
         self,
-    ) -> "str | None":
+    ) -> str | None:
         request = Request_RepositoryGetMountPoint(
             self._handle,
         )
@@ -2881,7 +2885,7 @@ class Repository:
 
     async def get_path(
         self,
-    ) -> "str":
+    ) -> str:
         request = Request_RepositoryGetPath(
             self._handle,
         )
@@ -2892,7 +2896,7 @@ class Repository:
 
     async def get_quota(
         self,
-    ) -> "QuotaInfo":
+    ) -> QuotaInfo:
         request = Request_RepositoryGetQuota(
             self._handle,
         )
@@ -2903,7 +2907,7 @@ class Repository:
 
     async def get_short_name(
         self,
-    ) -> "str":
+    ) -> str:
         request = Request_RepositoryGetShortName(
             self._handle,
         )
@@ -2914,7 +2918,7 @@ class Repository:
 
     async def get_stats(
         self,
-    ) -> "Stats":
+    ) -> Stats:
         request = Request_RepositoryGetStats(
             self._handle,
         )
@@ -2925,7 +2929,7 @@ class Repository:
 
     async def get_sync_progress(
         self,
-    ) -> "Progress":
+    ) -> Progress:
         """
         Returns the synchronization progress of this repository as the number of bytes already
         synced ([Progress.value]) vs. the total size of the repository in bytes ([Progress.total]).
@@ -2940,7 +2944,7 @@ class Repository:
 
     async def is_dht_enabled(
         self,
-    ) -> "bool":
+    ) -> bool:
         """Is Bittorrent DHT enabled?"""
         request = Request_RepositoryIsDhtEnabled(
             self._handle,
@@ -2952,7 +2956,7 @@ class Repository:
 
     async def is_pex_enabled(
         self,
-    ) -> "bool":
+    ) -> bool:
         """Is Peer Exchange enabled?"""
         request = Request_RepositoryIsPexEnabled(
             self._handle,
@@ -2964,7 +2968,7 @@ class Repository:
 
     async def is_sync_enabled(
         self,
-    ) -> "bool":
+    ) -> bool:
         """Returns whether syncing with other replicas is enabled for this repository."""
         request = Request_RepositoryIsSyncEnabled(
             self._handle,
@@ -2978,7 +2982,7 @@ class Repository:
         self,
         *,
         host: str,
-    ) -> "bool":
+    ) -> bool:
         """Checks if this repository is mirrored on the given cache server host."""
         request = Request_RepositoryMirrorExists(
             self._handle,
@@ -2991,7 +2995,7 @@ class Repository:
 
     async def mount(
         self,
-    ) -> "str":
+    ) -> str:
         request = Request_RepositoryMount(
             self._handle,
         )
@@ -3035,7 +3039,7 @@ class Repository:
         self,
         *,
         path: str,
-    ) -> "File":
+    ) -> File:
         """Opens an existing file at the given path in the repository."""
         request = Request_RepositoryOpenFile(
             self._handle,
@@ -3050,7 +3054,7 @@ class Repository:
         self,
         *,
         path: str,
-    ) -> "list[DirectoryEntry]":
+    ) -> list[DirectoryEntry]:
         """Returns the entries of the directory at the given path in the repository."""
         request = Request_RepositoryReadDirectory(
             self._handle,
@@ -3237,7 +3241,7 @@ class Repository:
         self,
         *,
         edits: list[MetadataEdit],
-    ) -> "bool":
+    ) -> bool:
         request = Request_RepositorySetMetadata(
             self._handle,
             edits,
@@ -3300,7 +3304,7 @@ class Repository:
         *,
         access_mode: AccessMode,
         local_secret: LocalSecret | None = None,
-    ) -> "str":
+    ) -> str:
         """
         Creates a *share token* to share this repository with other devices.
 
@@ -3337,7 +3341,7 @@ class Repository:
 
 
 class File:
-    def __init__(self, client: "Client", handle: "FileHandle"):
+    def __init__(self, client: Client, handle: FileHandle):
         self._client = client
         self._handle = handle
 
@@ -3367,7 +3371,7 @@ class File:
 
     async def get_length(
         self,
-    ) -> "int":
+    ) -> int:
         """Returns the length of the file in bytes"""
         request = Request_FileGetLength(
             self._handle,
@@ -3379,7 +3383,7 @@ class File:
 
     async def get_progress(
         self,
-    ) -> "int":
+    ) -> int:
         """
         Returns the sync progress of this file, that is, the total byte size of all the blocks of
         this file that's already been downloaded.
@@ -3401,7 +3405,7 @@ class File:
         *,
         offset: int,
         size: int,
-    ) -> "bytes":
+    ) -> bytes:
         """Reads `size` bytes from the file starting at `offset` bytes from the beginning of the file."""
         request = Request_FileRead(
             self._handle,
@@ -3447,7 +3451,7 @@ class File:
 
 
 class NetworkSocket:
-    def __init__(self, client: "Client", handle: "NetworkSocketHandle"):
+    def __init__(self, client: Client, handle: NetworkSocketHandle):
         self._client = client
         self._handle = handle
 
@@ -3466,7 +3470,7 @@ class NetworkSocket:
         self,
         *,
         len: int,
-    ) -> "Datagram":
+    ) -> Datagram:
         request = Request_NetworkSocketRecvFrom(
             self._handle,
             len,
@@ -3481,7 +3485,7 @@ class NetworkSocket:
         *,
         data: bytes,
         addr: str,
-    ) -> "int":
+    ) -> int:
         request = Request_NetworkSocketSendTo(
             self._handle,
             data,
@@ -3494,7 +3498,7 @@ class NetworkSocket:
 
 
 class NetworkStream:
-    def __init__(self, client: "Client", handle: "NetworkStreamHandle"):
+    def __init__(self, client: Client, handle: NetworkStreamHandle):
         self._client = client
         self._handle = handle
 
@@ -3514,7 +3518,7 @@ class NetworkStream:
         self,
         *,
         len: int,
-    ) -> "bytes":
+    ) -> bytes:
         """Reads exactly the given number of bytes from the given raw byte stream."""
         request = Request_NetworkStreamReadExact(
             self._handle,

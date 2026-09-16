@@ -14,6 +14,10 @@ pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     writeln!(out, "from enum import IntEnum")?;
     writeln!(out, "from typing import ClassVar")?;
     writeln!(out)?;
+    writeln!(out, "if typing.TYPE_CHECKING:")?;
+    writeln!(out, "    from ..client import Client")?;
+    writeln!(out)?;
+    writeln!(out)?;
 
     for (name, item) in &ctx.items {
         match item {
@@ -172,7 +176,7 @@ fn write_exception(out: &mut dyn Write, item: &SimpleEnum) -> Result<()> {
     writeln!(out, "class OuisyncError(Exception):")?;
     writeln!(
         out,
-        "    def __init__(self, code: \"ErrorCode\", message: str | None = None, sources: list[str] | None = None):"
+        "    def __init__(self, code: ErrorCode, message: str | None = None, sources: list[str] | None = None):"
     )?;
     writeln!(out, "        self.code = code")?;
     writeln!(out, "        self.message = message")?;
@@ -201,7 +205,7 @@ fn write_exception(out: &mut dyn Write, item: &SimpleEnum) -> Result<()> {
 
     writeln!(
         out,
-        "def dispatch_error(code: \"ErrorCode\", message: str | None = None, sources: list[str] | None = None) -> OuisyncError:"
+        "def dispatch_error(code: ErrorCode, message: str | None = None, sources: list[str] | None = None) -> OuisyncError:"
     )?;
     writeln!(out, "    variant = _ERROR_VARIANTS.get(code)")?;
     writeln!(out, "    if variant is not None:")?;
@@ -240,12 +244,12 @@ fn write_api_class(
     if handle {
         writeln!(
             out,
-            "    def __init__(self, client: \"Client\", handle: \"{name}Handle\"):"
+            "    def __init__(self, client: Client, handle: {name}Handle):"
         )?;
         writeln!(out, "        self._client = client")?;
         writeln!(out, "        self._handle = handle")?;
     } else {
-        writeln!(out, "    def __init__(self, client: \"Client\"):")?;
+        writeln!(out, "    def __init__(self, client: Client):")?;
         writeln!(out, "        self._client = client")?;
     }
 
@@ -315,7 +319,7 @@ fn write_api_class(
             Type::Unit => (),
             _ => {
                 let ty = ret_stripped.as_ref().unwrap_or(ret);
-                write!(out, " -> \"{}\"", PythonType(ty))?;
+                write!(out, " -> {}", PythonType(ty))?;
             }
         }
 
