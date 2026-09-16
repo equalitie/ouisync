@@ -1,8 +1,8 @@
 use anyhow::Result;
 use heck::{AsPascalCase, AsShoutySnakeCase, AsSnakeCase};
 use ouisync_api_parser::{
-    ComplexEnum, Context, Fields, Item, RequestVariant, SimpleEnum, Struct, Type,
-    ToResponseVariantName,
+    ComplexEnum, Context, Docs, Fields, Item, RequestVariant, SimpleEnum, Struct,
+    ToResponseVariantName, Type,
 };
 use std::{fmt, io::Write};
 
@@ -78,6 +78,7 @@ fn shape_of(fields: &Fields) -> Shape {
 
 fn write_simple_enum(out: &mut dyn Write, name: &str, item: &SimpleEnum) -> Result<()> {
     writeln!(out, "class {name}(IntEnum):")?;
+    write_docs(out, "    ", &item.docs)?;
 
     for (variant_name, variant) in &item.variants {
         writeln!(
@@ -86,6 +87,7 @@ fn write_simple_enum(out: &mut dyn Write, name: &str, item: &SimpleEnum) -> Resu
             AsShoutySnakeCase(variant_name),
             variant.value
         )?;
+        write_docs(out, "    ", &variant.docs)?;
     }
 
     writeln!(out)?;
@@ -95,6 +97,7 @@ fn write_simple_enum(out: &mut dyn Write, name: &str, item: &SimpleEnum) -> Resu
 
 fn write_complex_enum(out: &mut dyn Write, name: &str, item: &ComplexEnum) -> Result<()> {
     writeln!(out, "class {name}:")?;
+    write_docs(out, "    ", &item.docs)?;
     writeln!(out, "    _variants: ClassVar[dict[str, type]] = {{}}")?;
     writeln!(out)?;
 
@@ -104,6 +107,7 @@ fn write_complex_enum(out: &mut dyn Write, name: &str, item: &ComplexEnum) -> Re
 
         writeln!(out, "@dataclass")?;
         writeln!(out, "class {class_name}({name}):")?;
+        write_docs(out, "    ", &variant.docs)?;
         writeln!(out, "    _tag: ClassVar[str] = {variant_name:?}")?;
         writeln!(out, "    _shape: ClassVar[str] = {:?}", shape.as_str())?;
 
@@ -139,6 +143,7 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
 
     writeln!(out, "@dataclass")?;
     writeln!(out, "class {name}:")?;
+    write_docs(out, "    ", &item.docs)?;
     writeln!(out, "    _shape: ClassVar[str] = {:?}", shape.as_str())?;
 
     match &item.fields {
@@ -175,12 +180,13 @@ fn write_exception(out: &mut dyn Write, item: &SimpleEnum) -> Result<()> {
     writeln!(out, "        super().__init__(message or str(code))")?;
     writeln!(out)?;
 
-    for (variant_name, _) in &item.variants {
+    for (variant_name, variant) in &item.variants {
         if variant_name == "Ok" || variant_name == "Other" {
             continue;
         }
 
         writeln!(out, "class OuisyncError_{variant_name}(OuisyncError):")?;
+        write_docs(out, "    ", &variant.docs)?;
         writeln!(
             out,
             "    def __init__(self, message: str | None = None, sources: list[str] | None = None):"
@@ -275,7 +281,10 @@ fn write_api_class(
         writeln!(out, "    async def {op_name}(")?;
         writeln!(out, "        self,")?;
 
-        let remaining_fields = variant.fields.len().saturating_sub(if handle { 1 } else { 0 });
+        let remaining_fields = variant
+            .fields
+            .len()
+            .saturating_sub(if handle { 1 } else { 0 });
 
         // Keyword-only: defaulted fields aren't guaranteed to trail non-defaulted ones.
         if remaining_fields > 0 {
@@ -311,6 +320,7 @@ fn write_api_class(
         }
 
         writeln!(out, ":")?;
+        write_docs(out, "        ", &variant.docs)?;
 
         write!(out, "        request = {request_class}(")?;
 
@@ -388,6 +398,39 @@ fn write_api_class(
     }
 
     writeln!(out)?;
+
+    Ok(())
+}
+
+fn write_docs(out: &mut dyn Write, prefix: &str, docs: &Docs) -> Result<()> {
+    if docs.lines.is_empty() {
+        return Ok(());
+    }
+
+    // Rustdoc's `///` produces a single leading space before the actual content; strip it so
+    // the docstring isn't indented by one extra column.
+    fn strip(line: &str) -> &str {
+        line.strip_prefix(' ').unwrap_or(line)
+    }
+
+    if let [line] = docs.lines.as_slice() {
+        writeln!(out, "{prefix}\"\"\"{}\"\"\"", strip(line))?;
+        return Ok(());
+    }
+
+    writeln!(out, "{prefix}\"\"\"")?;
+
+    for line in &docs.lines {
+        let line = strip(line);
+
+        if line.is_empty() {
+            writeln!(out)?;
+        } else {
+            writeln!(out, "{prefix}{line}")?;
+        }
+    }
+
+    writeln!(out, "{prefix}\"\"\"")?;
 
     Ok(())
 }
