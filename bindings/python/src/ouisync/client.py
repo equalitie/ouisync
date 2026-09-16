@@ -20,6 +20,7 @@ from ._generated.api import (
     Response_None,
     dispatch_error,
 )
+from .state_monitor import MonitorId
 
 AUTH_CHALLENGE_SIZE = 256
 AUTH_PROOF_SIZE = 32  # SHA-256 output size
@@ -230,6 +231,9 @@ def encode_value(value):
     if isinstance(value, dict):
         return {encode_value(k): encode_value(v) for k, v in value.items()}
 
+    if isinstance(value, MonitorId):
+        return str(value)
+
     if dataclasses.is_dataclass(value):
         cls = type(value)
         shape = getattr(cls, "_shape", "named")
@@ -259,6 +263,9 @@ def decode_value(raw, target: typing.Any):
 
     if target in (int, str, bool, float, bytes):
         return raw
+
+    if target is MonitorId:
+        return MonitorId.parse(raw)
 
     origin = typing.get_origin(target)
 

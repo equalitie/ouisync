@@ -16,6 +16,7 @@ pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
     writeln!(out)?;
     writeln!(out, "if typing.TYPE_CHECKING:")?;
     writeln!(out, "    from ..client import Client")?;
+    writeln!(out, "    from ..state_monitor import MonitorId")?;
     writeln!(out)?;
     writeln!(out)?;
 

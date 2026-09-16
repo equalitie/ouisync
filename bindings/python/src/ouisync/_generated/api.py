@@ -7,6 +7,7 @@ from typing import ClassVar
 
 if typing.TYPE_CHECKING:
     from ..client import Client
+    from ..state_monitor import MonitorId
 
 
 @dataclass
