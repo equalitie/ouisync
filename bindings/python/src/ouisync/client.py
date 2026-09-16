@@ -142,8 +142,8 @@ class Client:
 
         try:
             await self._writer.wait_closed()
-        except Exception:
-            pass
+        except OSError:
+            pass  # peer may have already dropped the connection
 
     async def _receive_loop(self):
         try:
@@ -154,7 +154,7 @@ class Client:
 
                 try:
                     result = _decode_response_result(raw)
-                except Exception as error:  # deliver decode failures to the waiter
+                except Exception as error:  # noqa: BLE001 -- deliver decode failures to the waiter
                     result = error
 
                 self._dispatch(message_id, result)
@@ -242,7 +242,9 @@ def encode_value(value):
         if shape == "unit":
             inner = None
         elif shape == "unnamed":
-            inner = encode_value(value.value)
+            # Generated "unnamed"-shape dataclasses always have a `value` field;
+            # the type checker only sees the generic DataclassInstance protocol.
+            inner = encode_value(value.value)  # pyright: ignore[reportAttributeAccessIssue]
         else:
             inner = [encode_value(getattr(value, f.name)) for f in dataclasses.fields(value)]
 
