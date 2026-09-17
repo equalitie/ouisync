@@ -1,61 +1,54 @@
-"""Spawns a real `ouisync` daemon binary as a subprocess per test, mirroring
-cli/tests/utils.rs's `Bin::start()`."""
+"""Starts an in-process `ouisync-service` per test, mirroring
+`bindings/python/service/tests/conftest.py`'s own use of `Service` (and,
+before this, the way `cli/tests/utils.rs` spawns a real `ouisync` binary for
+the Rust project's tests)."""
 
+import os
+import platform
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
 
+from ouisync.service import Service
+
 WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
 
 
-@pytest.fixture(scope="session")
-def ouisync_binary() -> Path:
-    # Default `vfs` feature pulls in xpc-connection, broken on current toolchains.
+def _lib_filename() -> str:
+    system = platform.system()
+    if system == "Linux":
+        return "libouisync_service.so"
+    elif system == "Darwin":
+        return "libouisync_service.dylib"
+    elif system == "Windows":
+        return "ouisync_service.dll"
+    else:
+        raise RuntimeError(f"unsupported platform {system!r}")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def ouisync_service_lib() -> Path:
     subprocess.run(
-        ["cargo", "build", "--bin", "ouisync", "--no-default-features"],
+        ["cargo", "build", "--package", "ouisync-service", "--lib"],
         cwd=WORKSPACE_ROOT,
         check=True,
     )
-    return WORKSPACE_ROOT / "target" / "debug" / "ouisync"
+
+    path = WORKSPACE_ROOT / "target" / "debug" / _lib_filename()
+    os.environ["OUISYNC_LIB"] = str(path)
+    return path
 
 
 @pytest.fixture
-def daemon(tmp_path, ouisync_binary):
+async def daemon(tmp_path):
     config_dir = tmp_path / "config"
     store_dir = tmp_path / "store"
     config_dir.mkdir()
     store_dir.mkdir()
 
-    process = subprocess.Popen(
-        [str(ouisync_binary), "--config-dir", str(config_dir), "start"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-    conf_path = config_dir / "local_endpoint.conf"
-    deadline = time.monotonic() + 30
-
-    while not conf_path.exists():
-        if process.poll() is not None:
-            stdout = process.stdout.read() if process.stdout else ""
-            stderr = process.stderr.read() if process.stderr else ""
-            raise RuntimeError(f"ouisync exited early:\nstdout: {stdout}\nstderr: {stderr}")
-
-        if time.monotonic() > deadline:
-            process.terminate()
-            raise TimeoutError("local_endpoint.conf did not appear in time")
-
-        time.sleep(0.05)
-
+    service = await Service.start(str(config_dir))
     try:
         yield config_dir, store_dir
     finally:
-        process.terminate()
-
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
+        await service.stop()

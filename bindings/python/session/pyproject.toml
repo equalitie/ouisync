@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = ["msgpack>=1.0"]
 
 [project.optional-dependencies]
-test = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+test = ["pytest>=8.0", "pytest-asyncio>=0.24", "ouisync-service"]
 docs = ["pdoc>=15.0"]
 
 [tool.hatch.version]

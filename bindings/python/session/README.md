@@ -38,10 +38,11 @@ token = await repo.share()
 
 ```
 cd bindings/python/session
-pip install -e .
+pip install -e . -e ../service
 pytest
 ```
 
-Tests spawn a real `ouisync` binary as a subprocess per test (see
-`tests/conftest.py`), the same way `cli/tests/utils.rs` does for the Rust
-project's own tests -- no Docker, no mocks.
+Tests start a real `ouisync-service` in-process per test (see
+`tests/conftest.py`, which builds the `ouisync-service` cdylib itself and
+points `OUISYNC_LIB` at it, mirroring `bindings/python/service/tests/conftest.py`)
+and connect a `Session` to it -- no Docker, no mocks.
