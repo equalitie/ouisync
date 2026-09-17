@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ouisync"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Python client for the Ouisync local control socket protocol"
 requires-python = ">=3.11"
 dependencies = ["msgpack>=1.0"]
@@ -12,6 +12,11 @@ dependencies = ["msgpack>=1.0"]
 [project.optional-dependencies]
 test = ["pytest>=8.0", "pytest-asyncio>=0.24"]
 docs = ["pdoc>=15.0"]
+
+[tool.hatch.version]
+# Keep the version in sync with the top-level Cargo.toml
+path = "../../Cargo.toml"
+pattern = "^version = \"(?P<version>[^\"]+)\""
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ouisync"]
