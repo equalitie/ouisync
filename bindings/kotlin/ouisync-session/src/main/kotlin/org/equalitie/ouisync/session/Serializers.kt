@@ -2,6 +2,7 @@
 
 package org.equalitie.ouisync.session
 
+import java.net.InetAddress
 import kotlinx.datetime.Instant
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.PrimitiveKind
@@ -68,5 +69,18 @@ internal object OuisyncExceptionSerializer : KSerializer<OuisyncException> {
         val sources = decodeSerializableElement<List<String>>(descriptor, 2, serializer())
 
         OuisyncException.dispatch(code, message, sources)
+    }
+}
+
+/** Serializer for [java.net.InetAddress] */
+internal object InetAddressSerializer : KSerializer<InetAddress> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("java.net.InetAddress") {}
+
+    override fun serialize(encoder: Encoder, value: InetAddress) {
+        encoder.encodeString(value.hostAddress)
+    }
+
+    override fun deserialize(decoder: Decoder): InetAddress {
+        return InetAddress.getByName(decoder.decodeString())
     }
 }

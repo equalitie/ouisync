@@ -1,4 +1,4 @@
-@file:UseSerializers(OuisyncExceptionSerializer::class)
+@file:UseSerializers(OuisyncExceptionSerializer::class, InetAddressSerializer::class)
 
 package org.equalitie.ouisync.session
 
@@ -66,10 +66,9 @@ internal class Client private constructor(private val socket: AsynchronousSocket
         ): Client {
             val endpointRaw = File("$configPath/local_endpoint.conf").readText()
             val endpoint = Json.decodeFromString<LocalEndpoint>(endpointRaw)
-            val port = endpoint.port
             val authKey = endpoint.authKey.hexToByteArray()
 
-            val addr = InetSocketAddress(InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)), port)
+            val addr = InetSocketAddress(endpoint.addr, endpoint.port)
 
             var start = Clock.System.now()
             var wait = minWait
@@ -238,7 +237,12 @@ internal class Client private constructor(private val socket: AsynchronousSocket
 }
 
 @Serializable
-private data class LocalEndpoint(val port: Int, @SerialName("auth_key") val authKey: String)
+private data class LocalEndpoint(
+    val port: Int,
+    val addr: InetAddress = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)),
+    @SerialName("auth_key")
+    val authKey: String
+)
 
 @Serializable
 private sealed interface ResponseResult {
