@@ -270,8 +270,8 @@ jobs:
                   RUST_LOG: ouisync=debug,sqlx=warn
               run: flutter test
 
-    build_python_session_package:
-        name: build python session package
+    build_session_python_bindings:
+        name: build session python bindings package
         runs-on: ubuntu-24.04
         steps:
             - uses: actions/checkout@v7
@@ -295,7 +295,7 @@ jobs:
               working-directory: bindings/python/session/dist
               run: |
                   for f in ouisync_*; do
-                      mv "$f" "${f/ouisync_/ouisync-python-}"
+                      mv "$f" "${f/ouisync_session-/ouisync-session-python-}"
                   done
 
             - name: Upload wheel
@@ -310,8 +310,8 @@ jobs:
                   path: bindings/python/session/dist/*.tar.gz
                   archive: false
 
-    build_python_service_package:
-        name: build python service package (${{ matrix.name }})
+    build_service_python_bindings:
+        name: build service python bindings package (${{ matrix.name }})
         runs-on: ${{ matrix.os }}
 
         strategy:
@@ -329,6 +329,18 @@ jobs:
 
         steps:
             - uses: actions/checkout@v7
+
+            - uses: actions/cache@v5
+              with:
+                  path: |
+                      ~/.cargo/bin/
+                      ~/.cargo/registry/index/
+                      ~/.cargo/registry/cache/
+                      ~/.cargo/git/db/
+                      target/
+                  key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+                  restore-keys: |
+                      ${{ runner.os }}-cargo-
 
             - name: Setup python
               uses: actions/setup-python@v7
@@ -350,7 +362,7 @@ jobs:
               shell: bash
               run: |
                   for f in ouisync_*; do
-                      mv "$f" "${f/ouisync_/ouisync-python-}"
+                      mv "$f" "${f/ouisync_service-/ouisync-service-python-}"
                   done
 
             - name: Upload wheel
