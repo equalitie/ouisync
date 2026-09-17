@@ -3,6 +3,7 @@
 import ctypes
 import os
 import platform
+from pathlib import Path
 
 # Callback invoked by `start_service`/`stop_service` once the corresponding
 # operation completes. First argument is the `callback_context` passed in
@@ -35,20 +36,28 @@ class Bindings:
 
 
 def _default_library_path() -> str:
-    name = "ouisync_service"
-
     if "OUISYNC_LIB" in os.environ:
         return os.environ["OUISYNC_LIB"]
 
+    name = "ouisync_service"
     system = platform.system()
     if system == "Linux":
-        return f"lib{name}.so"
+        filename = f"lib{name}.so"
     elif system == "Darwin":
-        return f"lib{name}.dylib"
+        filename = f"lib{name}.dylib"
     elif system == "Windows":
-        return f"{name}.dll"
+        filename = f"{name}.dll"
     else:
         raise RuntimeError(f"unsupported platform {system!r}")
+
+    # `hatch_build.py` bundles a native library built for the current platform
+    # (currently linux x86_64 only) right next to this package -- prefer it
+    # over relying on the system's shared library search path.
+    bundled = Path(__file__).resolve().parent / "_native" / filename
+    if bundled.is_file():
+        return str(bundled)
+
+    return filename
 
 
 _instance: Bindings | None = None

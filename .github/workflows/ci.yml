@@ -293,7 +293,10 @@ jobs:
 
             - name: Build service package
               working-directory: bindings/python/service
-              run: python -m build
+              # --wheel only: the build hook needs the workspace's Rust sources to build
+              # the bundled native library, which aren't available when building from an
+              # extracted sdist.
+              run: python -m build --wheel
 
             - name: Rename package files
               working-directory: bindings/python

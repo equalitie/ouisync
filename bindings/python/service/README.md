@@ -19,12 +19,19 @@ session = await connect("/path/to/config")
 ...
 ```
 
-## Loading the native library
+## Building and loading the native library
 
-By default the `ouisync_service` shared library is looked up by its bare
-name (`libouisync_service.so`/`.dylib`/`ouisync_service.dll`), relying on
-the platform's normal shared library search path. Set the `OUISYNC_LIB`
-environment variable to point at a specific file instead.
+The native library is built automatically via a build hook and bundled into the wheel (next to
+`ouisync/service`), so `pip install ouisync-service` doesn't require a separate Rust build step. For
+now this only happens on linux x86_64; on other platforms the hook skips bundling with a warning.
+
+At runtime, `ouisync.service` looks for the native library in this order:
+
+1. The `OUISYNC_LIB` environment variable, if set, naming a specific file.
+2. The bundled copy next to the installed package, if there is one.
+3. The bare library name (`libouisync_service.so`/`.dylib`/
+   `ouisync_service.dll`), relying on the platform's normal shared library
+   search path.
 
 ## Tests
 

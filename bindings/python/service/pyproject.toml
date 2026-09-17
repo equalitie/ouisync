@@ -21,5 +21,8 @@ pattern = "^version = \"(?P<version>[^\"]+)\""
 [tool.hatch.build.targets.wheel]
 packages = ["src/ouisync"]
 
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
