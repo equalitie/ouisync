@@ -1,16 +1,46 @@
-"""Session API parts bindgen doesn't generate: connect/close, and the
-streaming endpoints (handled by hand in every other binding too)."""
+"""Session API: connects to a running Ouisync service's local control socket.
+
+Includes the bindgen-generated data types, `Request`/`Response` tagged unions
+and `Session`/`Repository`/`File` API classes, plus the parts bindgen doesn't
+generate: connect/close, and the streaming endpoints (handled by hand in
+every other binding too)."""
 
 import typing
 
 from ._generated.api import (
+    AccessMode,
+    ErrorCode,
+    File,
     NetworkEvent,
+    NetworkSocket,
+    NetworkStream,
+    OuisyncError,
+    Repository,
     Request_SessionSubscribeToNetwork,
     Response_NetworkEvent,
     Response_Unit,
     Session,
+    dispatch_error,
 )
 from .client import Client
+from .state_monitor import MonitorId
+
+__all__ = [
+    "AccessMode",
+    "Client",
+    "ErrorCode",
+    "File",
+    "MonitorId",
+    "NetworkSocket",
+    "NetworkStream",
+    "OuisyncError",
+    "Repository",
+    "Session",
+    "close",
+    "connect",
+    "dispatch_error",
+    "subscribe_to_network_events",
+]
 
 
 async def connect(config_dir, host: str = "127.0.0.1") -> Session:

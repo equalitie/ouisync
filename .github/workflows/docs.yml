@@ -85,8 +85,8 @@ jobs:
       - name: Build docs for the python bindings
         working-directory: bindings/python
         run: |
-          pip install -e ".[docs]"
-          python -m pdoc --output-directory doc-output ouisync
+          pip install -e "session[docs]" -e "service[docs]"
+          python -m pdoc --output-directory doc-output ouisync.session ouisync.service
 
       - name: Prepare the files
         run: |

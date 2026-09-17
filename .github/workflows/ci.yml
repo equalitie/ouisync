@@ -285,27 +285,31 @@ jobs:
               run: pip install build
 
             - name: Generate bindings
-              run: python bindings/python/tool/bindgen.py
+              run: python bindings/python/session/tool/bindgen.py
 
-            - name: Build package
-              working-directory: bindings/python
+            - name: Build session package
+              working-directory: bindings/python/session
+              run: python -m build
+
+            - name: Build service package
+              working-directory: bindings/python/service
               run: python -m build
 
             - name: Rename package files
-              working-directory: bindings/python/dist
+              working-directory: bindings/python
               run: |
-                  for f in ouisync-*; do
-                      mv "$f" "${f/ouisync-/ouisync-python-}"
+                  for f in session/dist/ouisync_* service/dist/ouisync_*; do
+                      mv "$f" "${f/ouisync_/ouisync-python-}"
                   done
 
-            - name: Upload wheel
+            - name: Upload wheels
               uses: actions/upload-artifact@v7
               with:
-                  path: bindings/python/dist/*.whl
+                  path: bindings/python/*/dist/*.whl
                   archive: false
 
-            - name: Upload sdist
+            - name: Upload sdists
               uses: actions/upload-artifact@v7
               with:
-                  path: bindings/python/dist/*.tar.gz
+                  path: bindings/python/*/dist/*.tar.gz
                   archive: false

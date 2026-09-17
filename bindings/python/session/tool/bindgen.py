@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerates src/ouisync/_generated/api.py from the Rust API surface.
+"""Regenerates src/ouisync/session/_generated/api.py from the Rust API surface.
 
 Run from anywhere; invokes `cargo run --package ouisync-bindgen -- python`
 from the workspace root and writes its stdout to the generated file, the
@@ -10,8 +10,8 @@ Gradle task use for their own languages.
 import subprocess
 from pathlib import Path
 
-WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
-OUT_FILE = Path(__file__).resolve().parents[1] / "src" / "ouisync" / "_generated" / "api.py"
+WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
+OUT_FILE = Path(__file__).resolve().parents[1] / "src" / "ouisync" / "session" / "_generated" / "api.py"
 
 
 def main() -> None:

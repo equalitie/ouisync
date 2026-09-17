@@ -4,7 +4,7 @@ uses, end to end against a real daemon -- the parity check from the design
 plan, run for real rather than just cross-referenced by name.
 """
 
-from ouisync import AccessMode, connect, close
+from ouisync.session import AccessMode, connect, close
 
 
 async def test_session_protocol_version(daemon):
