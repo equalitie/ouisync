@@ -51,8 +51,8 @@ def _default_library_path() -> str:
         raise RuntimeError(f"unsupported platform {system!r}")
 
     # `hatch_build.py` bundles a native library built for the current platform
-    # (currently linux x86_64 only) right next to this package -- prefer it
-    # over relying on the system's shared library search path.
+    # right next to this package -- prefer it over relying on the system's
+    # shared library search path.
     bundled = Path(__file__).resolve().parent / "_native" / filename
     if bundled.is_file():
         return str(bundled)

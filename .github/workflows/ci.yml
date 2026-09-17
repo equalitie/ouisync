@@ -270,8 +270,8 @@ jobs:
                   RUST_LOG: ouisync=debug,sqlx=warn
               run: flutter test
 
-    build_python_bindings:
-        name: build python bindings package
+    build_python_session_package:
+        name: build python session package
         runs-on: ubuntu-24.04
         steps:
             - uses: actions/checkout@v7
@@ -287,11 +287,58 @@ jobs:
             - name: Generate bindings
               run: python bindings/python/session/tool/bindgen.py
 
-            - name: Build session package
+            - name: Build package
               working-directory: bindings/python/session
               run: python -m build
 
-            - name: Build service package
+            - name: Rename package files
+              working-directory: bindings/python/session/dist
+              run: |
+                  for f in ouisync_*; do
+                      mv "$f" "${f/ouisync_/ouisync-python-}"
+                  done
+
+            - name: Upload wheel
+              uses: actions/upload-artifact@v7
+              with:
+                  path: bindings/python/session/dist/*.whl
+                  archive: false
+
+            - name: Upload sdist
+              uses: actions/upload-artifact@v7
+              with:
+                  path: bindings/python/session/dist/*.tar.gz
+                  archive: false
+
+    build_python_service_package:
+        name: build python service package (${{ matrix.name }})
+        runs-on: ${{ matrix.os }}
+
+        strategy:
+            fail-fast: false
+            matrix:
+                name: [linux-x86_64, windows-x86_64]
+                include:
+                    # Native builds only, one per target -- the resulting wheel is tagged for
+                    # exactly this (os, arch) in bindings/python/service/hatch_build.py.
+                    - name: linux-x86_64
+                      os: ubuntu-24.04
+
+                    - name: windows-x86_64
+                      os: windows-latest
+
+        steps:
+            - uses: actions/checkout@v7
+
+            - name: Setup python
+              uses: actions/setup-python@v7
+              with:
+                  python-version: "3.11"
+
+            - name: Install build dependencies
+              run: pip install build
+
+            - name: Build package
               working-directory: bindings/python/service
               # --wheel only: the build hook needs the workspace's Rust sources to build
               # the bundled native library, which aren't available when building from an
@@ -299,20 +346,15 @@ jobs:
               run: python -m build --wheel
 
             - name: Rename package files
-              working-directory: bindings/python
+              working-directory: bindings/python/service/dist
+              shell: bash
               run: |
-                  for f in session/dist/ouisync_* service/dist/ouisync_*; do
+                  for f in ouisync_*; do
                       mv "$f" "${f/ouisync_/ouisync-python-}"
                   done
 
-            - name: Upload wheels
+            - name: Upload wheel
               uses: actions/upload-artifact@v7
               with:
-                  path: bindings/python/*/dist/*.whl
-                  archive: false
-
-            - name: Upload sdists
-              uses: actions/upload-artifact@v7
-              with:
-                  path: bindings/python/*/dist/*.tar.gz
+                  path: bindings/python/service/dist/*.whl
                   archive: false
