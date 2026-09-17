@@ -1,5 +1,6 @@
 from ._generated.api import (
     AccessMode,
+    EntryType,
     ErrorCode,
     File,
     NetworkSocket,
