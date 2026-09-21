@@ -1730,6 +1730,7 @@ Response._variants = {
 
 class Session:
     def __init__(self, client: Client):
+        """@private"""
         self._client = client
 
     async def add_user_provided_peers(
@@ -2638,6 +2639,7 @@ class Session:
 
 class Repository:
     def __init__(self, client: Client, handle: RepositoryHandle):
+        """@private"""
         self._client = client
         self._handle = handle
 
@@ -3343,6 +3345,7 @@ class Repository:
 
 class File:
     def __init__(self, client: Client, handle: FileHandle):
+        """@private"""
         self._client = client
         self._handle = handle
 
@@ -3453,6 +3456,7 @@ class File:
 
 class NetworkSocket:
     def __init__(self, client: Client, handle: NetworkSocketHandle):
+        """@private"""
         self._client = client
         self._handle = handle
 
@@ -3500,6 +3504,7 @@ class NetworkSocket:
 
 class NetworkStream:
     def __init__(self, client: Client, handle: NetworkStreamHandle):
+        """@private"""
         self._client = client
         self._handle = handle
 

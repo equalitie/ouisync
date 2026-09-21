@@ -247,10 +247,12 @@ fn write_api_class(
             out,
             "    def __init__(self, client: Client, handle: {name}Handle):"
         )?;
+        writeln!(out, "        \"\"\"@private\"\"\"")?; // hide constructor from the API docs
         writeln!(out, "        self._client = client")?;
         writeln!(out, "        self._handle = handle")?;
     } else {
         writeln!(out, "    def __init__(self, client: Client):")?;
+        writeln!(out, "        \"\"\"@private\"\"\"")?; // hide constructor from the API docs
         writeln!(out, "        self._client = client")?;
     }
 
