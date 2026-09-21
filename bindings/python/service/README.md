@@ -43,9 +43,13 @@ different target (cross-compiling), set:
 On an unsupported host platform (with `OUISYNC_TARGET` unset) the hook skips bundling with a warning,
 and `pip install`/`pip install -e .` still works, just without a bundled library (see "Tests" below).
 
-The linux wheels use plain `linux_x86_64`/`linux_aarch64` tags rather than `manylinux_*`/`musllinux_*`,
-so they aren't guaranteed to run on every glibc/musl system -- only ones close enough to the build
-environment (currently ubuntu-24.04).
+The build hook itself tags linux wheels as plain `linux_x86_64`/`linux_aarch64`, which pip doesn't
+compatibility-check the way it does `manylinux_*`/`musllinux_*` tags. CI repairs this: after building,
+it runs [`auditwheel repair`](https://github.com/pypa/auditwheel) on the two linux legs, which inspects
+the glibc symbol versions actually used by the bundled library and re-tags the wheel with the real
+(and pip-checked) `manylinux_*` tag -- currently `manylinux_2_34_*`, since that's what the ubuntu-24.04
+build environment's glibc floor works out to. A wheel built locally outside CI (e.g. via
+`python -m build`) keeps the plain `linux_*` tag unless you run `auditwheel repair` on it yourself.
 
 At runtime, `ouisync.service` looks for the native library in this order:
 

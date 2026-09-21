@@ -373,6 +373,19 @@ jobs:
                   OUISYNC_TARGET: ${{ matrix.target }}
                   OUISYNC_CARGO: ${{ matrix.cargo-command }}
 
+            - name: Repair wheel (manylinux)
+              # The build hook only tags linux wheels as plain linux_*; auditwheel inspects
+              # the glibc symbol versions actually used and re-tags with the real (and
+              # pip-compatibility-checked) manylinux_* tag. Not needed/applicable on
+              # Windows or macOS.
+              if: runner.os == 'Linux'
+              working-directory: bindings/python/service
+              run: |
+                  pip install auditwheel patchelf
+                  whl=$(ls dist/*.whl)
+                  auditwheel repair --wheel-dir dist "$whl"
+                  rm "$whl"
+
             - name: Upload wheel
               uses: actions/upload-artifact@v7
               with:
