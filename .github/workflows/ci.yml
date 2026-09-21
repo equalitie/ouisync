@@ -291,13 +291,6 @@ jobs:
               working-directory: bindings/python/session
               run: python -m build
 
-            - name: Rename package files
-              working-directory: bindings/python/session/dist
-              run: |
-                  for f in ouisync_*; do
-                      mv "$f" "${f/ouisync_session-/ouisync-session-python-}"
-                  done
-
             - name: Upload wheel
               uses: actions/upload-artifact@v7
               with:
@@ -356,14 +349,6 @@ jobs:
               # the bundled native library, which aren't available when building from an
               # extracted sdist.
               run: python -m build --wheel
-
-            - name: Rename package files
-              working-directory: bindings/python/service/dist
-              shell: bash
-              run: |
-                  for f in ouisync_*; do
-                      mv "$f" "${f/ouisync_service-/ouisync-service-python-}"
-                  done
 
             - name: Upload wheel
               uses: actions/upload-artifact@v7

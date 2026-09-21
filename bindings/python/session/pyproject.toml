@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ouisync-session"
+name = "ouisync.session"
 dynamic = ["version"]
 description = "Python client for the Ouisync local control socket protocol"
 requires-python = ">=3.11"
 dependencies = ["msgpack>=1.0"]
 
 [project.optional-dependencies]
-test = ["pytest>=8.0", "pytest-asyncio>=0.24", "ouisync-service"]
+test = ["pytest>=8.0", "pytest-asyncio>=0.24", "ouisync.service"]
 docs = ["pdoc>=15.0"]
 
 [tool.hatch.version]

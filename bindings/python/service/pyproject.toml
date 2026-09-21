@@ -3,11 +3,11 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ouisync-service"
+name = "ouisync.service"
 dynamic = ["version"]
 description = "Python bindings for embedding the Ouisync service in-process"
 requires-python = ">=3.11"
-dependencies = ["ouisync-session"]
+dependencies = ["ouisync.session"]
 
 [project.optional-dependencies]
 test = ["pytest>=8.0", "pytest-asyncio>=0.24"]
