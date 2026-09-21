@@ -428,3 +428,40 @@ jobs:
             - name: Run service package tests
               working-directory: bindings/python/service
               run: pytest
+
+    release_python_bindings:
+        name: create github release for python bindings
+        runs-on: ubuntu-24.04
+        # Only for version tags (v1.2.3, ...), and only once the packages have
+        # actually been built and tested.
+        if: startsWith(github.ref, 'refs/tags/v')
+        needs:
+            - build_session_python_bindings
+            - build_service_python_bindings
+            - test_python_bindings
+        permissions:
+            contents: write
+
+        steps:
+            - name: Download python packages
+              uses: actions/download-artifact@v8
+              with:
+                  path: dist
+                  merge-multiple: true
+                  skip-decompress: true
+
+            - name: Create release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: >
+                  gh release create "${{ github.ref_name }}"
+                  --repo "${{ github.repository }}"
+                  --title "Python bindings ${{ github.ref_name }}"
+                  --generate-notes
+                  --verify-tag
+                  --prerelease=${{
+                      contains(github.ref_name, 'pre') ||
+                      contains(github.ref_name, 'beta') ||
+                      contains(github.ref_name, 'alpha')
+                  }}
+                  dist/*
