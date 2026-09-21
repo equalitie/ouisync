@@ -23,20 +23,29 @@ session = await connect("/path/to/config")
 
 The native library is built automatically via a build hook (`hatch_build.py`) and bundled into the
 wheel (next to `ouisync/service`), so `pip install ouisync-service` doesn't require a separate Rust
-build step. Each wheel is platform-specific, built natively (no cross-compilation) for one of:
+build step. Each wheel is platform-specific, built for exactly one Rust target triple:
 
-- linux x86_64
-- Windows x86_64
+- `x86_64-unknown-linux-gnu`
+- `aarch64-unknown-linux-gnu`
+- `x86_64-pc-windows-msvc` / `x86_64-pc-windows-gnu`
+- `aarch64-pc-windows-msvc` / `aarch64-pc-windows-gnu`
+- `x86_64-apple-darwin`
+- `aarch64-apple-darwin`
 
-(macOS and non-x86_64 targets aren't built yet.)
+By default the hook builds for the host platform, with no extra configuration needed. To build for a
+different target (cross-compiling), set:
 
-`.github/workflows/ci.yml`'s `build_python_service_package` job runs one matrix leg per target and
-uploads the resulting wheels. On any other platform the hook skips bundling with a warning, and
-`pip install`/`pip install -e .` still works, just without a bundled library (see "Tests" below).
+- `OUISYNC_TARGET` to one of the triples above.
+- `OUISYNC_CARGO`, if the host can't build that triple natively (e.g. linux aarch64 from an x86_64
+  host), to a cargo-compatible binary that can, such as [`cross`](https://github.com/cross-rs/cross).
+  Defaults to plain `cargo`.
 
-The linux wheel uses a plain `linux_x86_64` tag rather than `manylinux_*`/`musllinux_*`, so it isn't
-guaranteed to run on every glibc/musl system -- only ones close enough to the CI build environment
-(currently ubuntu-24.04).
+On an unsupported host platform (with `OUISYNC_TARGET` unset) the hook skips bundling with a warning,
+and `pip install`/`pip install -e .` still works, just without a bundled library (see "Tests" below).
+
+The linux wheels use plain `linux_x86_64`/`linux_aarch64` tags rather than `manylinux_*`/`musllinux_*`,
+so they aren't guaranteed to run on every glibc/musl system -- only ones close enough to the build
+environment (currently ubuntu-24.04).
 
 At runtime, `ouisync.service` looks for the native library in this order:
 
