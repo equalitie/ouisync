@@ -205,12 +205,6 @@ jobs:
         steps:
             - uses: actions/checkout@v7
 
-            - name: Free disk space
-              uses: jlumbroso/free-disk-space@v1.3.1
-              with:
-                  android: false
-                  tool-cache: true
-
             - name: Add rust targets
               run: rustup target add x86_64-linux-android armv7-linux-androideabi aarch64-linux-android
 
@@ -257,11 +251,67 @@ jobs:
               working-directory: bindings/kotlin
               run: ./gradlew --stacktrace publishToMavenLocal
 
-            - name: Upload packages
+            - name: Get package version
+              id: version
+              working-directory: bindings/kotlin
+              run: echo "version=$(./gradlew -q printVersion)" >> "$GITHUB_OUTPUT"
+
+            - name: Package artifacts
+              # Bundle each package variant (aars/jars, poms, ...) into its own archive
+              # since gh release create can only attach files, not directories.
+              env:
+                  VERSION: ${{ steps.version.outputs.version }}
+              run: |
+                  cd ~/.m2/repository/ie/equalit/ouinet
+
+                  # Copies the contents of the variant's <artifactId>/<version> directory
+                  # into a top-level dir named after the archive (without the .tar.gz
+                  # extension).
+                  package() {
+                      local artifact_id=$1
+                      local name="$artifact_id-$VERSION.kotlin"
+                      local archive="$name.tar.gz"
+                      local staging=$(mktemp -d)
+                      mkdir "$staging/$name"
+                      cp -r "$artifact_id/$VERSION/." "$staging/$name/"
+                      tar -czf "$GITHUB_WORKSPACE/$archive" -C "$staging" "$name"
+                      rm -rf "$staging"
+                  }
+
+                  package ouisync-session
+                  package ouisync-service
+                  package ouisync-service-debug
+                  package ouisync-android
+                  package ouisync-android-debug
+
+            - name: Upload session package
               uses: actions/upload-artifact@v7
               with:
-                  name: kotlin-bindings
-                  path: ~/.m2/repository/ie/equalit/ouinet/**
+                  path: ouisync-session-${{ steps.version.outputs.version }}.kotlin.tar.gz
+                  archive: false
+
+            - name: Upload service package
+              uses: actions/upload-artifact@v7
+              with:
+                  path: ouisync-service-${{ steps.version.outputs.version }}.kotlin.tar.gz
+                  archive: false
+
+            - name: Upload service debug package
+              uses: actions/upload-artifact@v7
+              with:
+                  path: ouisync-service-debug-${{ steps.version.outputs.version }}.kotlin.tar.gz
+                  archive: false
+
+            - name: Upload android package
+              uses: actions/upload-artifact@v7
+              with:
+                  path: ouisync-android-${{ steps.version.outputs.version }}.kotlin.tar.gz
+                  archive: false
+
+            - name: Upload android debug package
+              uses: actions/upload-artifact@v7
+              with:
+                  path: ouisync-android-debug-${{ steps.version.outputs.version }}.kotlin.tar.gz
                   archive: false
 
     check_dart_bindings:
@@ -502,8 +552,8 @@ jobs:
               working-directory: bindings/python/service
               run: pytest -s
 
-    release_python_bindings:
-        name: create github release for python bindings
+    release:
+        name: create github release
         runs-on: ubuntu-24.04
         # Only for version tags (v1.2.3, ...), and only once the packages have
         # actually been built and tested.
@@ -512,11 +562,12 @@ jobs:
             - build_session_python_bindings
             - build_service_python_bindings
             - test_python_bindings
+            - build_kotlin_bindings
         permissions:
             contents: write
 
         steps:
-            - name: Download python packages
+            - name: Download packages
               uses: actions/download-artifact@v8
               with:
                   path: dist
@@ -529,7 +580,7 @@ jobs:
               run: >
                   gh release create "${{ github.ref_name }}"
                   --repo "${{ github.repository }}"
-                  --title "Python bindings ${{ github.ref_name }}"
+                  --title "${{ github.ref_name }}"
                   --verify-tag
                   --prerelease=${{
                       contains(github.ref_name, 'alpha') ||

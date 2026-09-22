@@ -55,6 +55,12 @@ def cargoVersion = (cargoManifest =~ cargoVersionPattern)[0][1].trim()
 version = "$cargoVersion-$revision"
 group   = "ie.equalit.ouinet"
 
+tasks.register('printVersion') {
+    doLast {
+        println version
+    }
+}
+
 // Use system environment variables for signing and publishing
 ext {
     ossrhUsername = System.getenv('OSSRH_USERNAME')
