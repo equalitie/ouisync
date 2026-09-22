@@ -490,13 +490,19 @@ jobs:
             contents: write
 
         steps:
-            - name: Download packages
+            - name: Download python packages
               uses: actions/download-artifact@v8
               with:
                   path: dist
-                  pattern: |
-                      *.whl
-                      *.kotlin.tar.gz
+                  pattern: "*.whl"
+                  merge-multiple: true
+                  skip-decompress: true
+
+            - name: Download kotlin packages
+              uses: actions/download-artifact@v8
+              with:
+                  path: dist
+                  pattern: "*.kotlin.tar.gz"
                   merge-multiple: true
                   skip-decompress: true
 
