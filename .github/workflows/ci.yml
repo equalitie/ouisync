@@ -460,8 +460,9 @@ jobs:
                   --generate-notes
                   --verify-tag
                   --prerelease=${{
-                      contains(github.ref_name, 'pre') ||
+                      contains(github.ref_name, 'alpha') ||
                       contains(github.ref_name, 'beta') ||
-                      contains(github.ref_name, 'alpha')
+                      contains(github.ref_name, 'pre') ||
+                      contains(github.ref_name, 'rc')
                   }}
                   dist/*
