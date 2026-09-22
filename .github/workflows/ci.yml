@@ -377,18 +377,12 @@ jobs:
 
             - name: Build package
               working-directory: bindings/python/session
-              run: python -m build
+              run: python -m build --wheel
 
             - name: Upload wheel
               uses: actions/upload-artifact@v7
               with:
                   path: bindings/python/session/dist/*.whl
-                  archive: false
-
-            - name: Upload sdist
-              uses: actions/upload-artifact@v7
-              with:
-                  path: bindings/python/session/dist/*.tar.gz
                   archive: false
 
     build_service_python_bindings:
@@ -520,6 +514,9 @@ jobs:
               uses: actions/download-artifact@v8
               with:
                   path: dist
+                  pattern: |
+                      *.whl
+                      *.kotlin.tar.gz
                   merge-multiple: true
                   skip-decompress: true
 
