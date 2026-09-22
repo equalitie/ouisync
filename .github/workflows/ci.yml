@@ -134,16 +134,6 @@ jobs:
             - name: Cache cargo artifacts
               uses: Swatinem/rust-cache@v2
 
-            - name: Cache gradle artifacts
-              uses: actions/cache@v5
-              with:
-                  path: |
-                      ~/.gradle/caches
-                      ~/.gradle/wrapper
-                  key: ${{ runner.os }}-gradle-${{ hashFiles('bindings/kotlin/**/*.gradle*', 'bindings/kotlin/**/gradle-wrapper.properties') }}
-                  restore-keys: |
-                      ${{ runner.os }}-gradle-
-
             # Needed by the gradle task which builds the rust library
             - name: Install cargo-ndk
               run: cargo install --force cargo-ndk
@@ -202,16 +192,6 @@ jobs:
 
             - name: Cache cargo artifacts
               uses: Swatinem/rust-cache@v2
-
-            - name: Cache gradle artifacts
-              uses: actions/cache@v5
-              with:
-                  path: |
-                      ~/.gradle/caches
-                      ~/.gradle/wrapper
-                  key: ${{ runner.os }}-gradle-${{ hashFiles('bindings/kotlin/**/*.gradle*', 'bindings/kotlin/**/gradle-wrapper.properties') }}
-                  restore-keys: |
-                      ${{ runner.os }}-gradle-
 
             # Needed by the gradle task which builds the rust library
             - name: Install cargo-ndk
