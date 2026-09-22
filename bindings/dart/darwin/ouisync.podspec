@@ -17,8 +17,8 @@ A new Flutter plugin project.
   s.public_header_files = 'Classes**/*.h'
   s.source_files     = 'Classes/**/*'
   s.static_framework = true
-  s.ios.vendored_libraries = "**/*.a"
-  s.osx.vendored_libraries = "**/*.dylib"
+  s.ios.vendored_frameworks = "ios/OuisyncService.framework"
+  s.osx.vendored_frameworks = "OuisyncService.framework"
   s.ios.dependency 'Flutter'
   s.osx.dependency 'FlutterMacOS'
 

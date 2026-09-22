@@ -11,6 +11,15 @@ build/
 dist/
 .venv/
 
+# Prebuilt Apple native artifacts — reproducible via bindings/swift/OuisyncLib/
+# build-xcframework.sh (see also bindings/dart/darwin/build-framework.sh).
+/output
+bindings/dart/darwin/*.dylib
+bindings/dart/darwin/ios/*.dylib
+bindings/dart/darwin/OuisyncService.framework/
+bindings/dart/darwin/ios/OuisyncService.framework/
+bindings/swift/OuisyncLib/OuisyncLibFFI.xcframework
+
 # This is a symbolic link created by {windows,linux}/CMakeLists.txt scripts
 # because git often doesn't support symlinks by default (depends on which OS,
 # git version and .gitconfig).

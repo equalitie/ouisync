@@ -78,6 +78,11 @@ DynamicLibrary _defaultLib() {
       build = join('..', '..');
     }
     path = join(build, 'target', kReleaseMode ? 'release' : 'debug', name);
+  } else if (Platform.isIOS || Platform.isMacOS) {
+    // In the packaged app the native core is embedded as OuisyncService.framework
+    // (a loose .dylib is rejected by App Store validation). dyld resolves this
+    // @rpath-relative path to the framework binary under the app's Frameworks dir.
+    path = 'OuisyncService.framework/OuisyncService';
   } else {
     // assume that the library is available globally by name only
     path = name;
