@@ -196,6 +196,74 @@ jobs:
               working-directory: bindings/kotlin
               run: ./gradlew --stacktrace example:assembleDebug
 
+    build_kotlin_bindings:
+        name: build kotlin bindings packages
+        runs-on: ubuntu-24.04
+        # Build the packages only when pushing version tags (v1.2.3, ...)
+        if: startsWith(github.ref, 'refs/tags/v')
+
+        steps:
+            - uses: actions/checkout@v7
+
+            - name: Free disk space
+              uses: jlumbroso/free-disk-space@v1.3.1
+              with:
+                  android: false
+                  tool-cache: true
+
+            - name: Add rust targets
+              run: rustup target add x86_64-linux-android armv7-linux-androideabi aarch64-linux-android
+
+            - name: Setup java
+              uses: actions/setup-java@v6
+              with:
+                  distribution: "temurin"
+                  java-version: "17"
+
+            - name: Setup gradle
+              uses: gradle/gradle-build-action@v2.4.2
+
+            - name: Cache cargo artifacts
+              uses: actions/cache@v5
+              with:
+                  path: |
+                      ~/.cargo/bin/
+                      ~/.cargo/registry/index/
+                      ~/.cargo/registry/cache/
+                      ~/.cargo/git/db/
+                      target/
+                  key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+                  restore-keys: |
+                      ${{ runner.os }}-cargo-
+
+            - name: Cache gradle artifacts
+              uses: actions/cache@v5
+              with:
+                  path: |
+                      ~/.gradle/caches
+                      ~/.gradle/wrapper
+                  key: ${{ runner.os }}-gradle-${{ hashFiles('bindings/kotlin/**/*.gradle*', 'bindings/kotlin/**/gradle-wrapper.properties') }}
+                  restore-keys: |
+                      ${{ runner.os }}-gradle-
+
+            # Needed by the gradle task which builds the rust library
+            - name: Install cargo-ndk
+              run: cargo install --force cargo-ndk
+
+            # Publishing to Maven local (rather than just assembling) also produces the
+            # sources/javadoc jars and poms that make up the full package, without requiring
+            # the Sonatype credentials / signing key needed to publish to Maven Central.
+            - name: Build packages
+              working-directory: bindings/kotlin
+              run: ./gradlew --stacktrace publishToMavenLocal
+
+            - name: Upload packages
+              uses: actions/upload-artifact@v7
+              with:
+                  name: kotlin-bindings
+                  path: ~/.m2/repository/ie/equalit/ouinet/**
+                  archive: false
+
     check_dart_bindings:
         name: check dart bindings on ${{ matrix.name }}
         runs-on: ${{ matrix.os }}
