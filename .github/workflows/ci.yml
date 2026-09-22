@@ -457,7 +457,6 @@ jobs:
                   gh release create "${{ github.ref_name }}"
                   --repo "${{ github.repository }}"
                   --title "Python bindings ${{ github.ref_name }}"
-                  --generate-notes
                   --verify-tag
                   --prerelease=${{
                       contains(github.ref_name, 'alpha') ||
