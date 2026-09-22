@@ -273,6 +273,9 @@ jobs:
     build_session_python_bindings:
         name: build session python bindings package
         runs-on: ubuntu-24.04
+        # Build the packages only when pushing version tags (v1.2.3, ...)
+        if: startsWith(github.ref, 'refs/tags/v')
+
         steps:
             - uses: actions/checkout@v7
 
@@ -306,6 +309,8 @@ jobs:
     build_service_python_bindings:
         name: build service python bindings package (${{ matrix.name }})
         runs-on: ${{ matrix.os }}
+        # Build the packages only when pushing version tags (v1.2.3, ...)
+        if: startsWith(github.ref, 'refs/tags/v')
 
         strategy:
             fail-fast: false
