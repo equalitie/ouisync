@@ -423,11 +423,11 @@ jobs:
 
             - name: Run session package tests
               working-directory: bindings/python/session
-              run: pytest
+              run: pytest -s
 
             - name: Run service package tests
               working-directory: bindings/python/service
-              run: pytest
+              run: pytest -s
 
     release_python_bindings:
         name: create github release for python bindings
