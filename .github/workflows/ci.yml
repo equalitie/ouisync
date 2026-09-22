@@ -50,16 +50,9 @@ jobs:
               if: matrix.target != ''
               run: rustup target add ${{ matrix.target }}
 
-            - uses: actions/cache@v5
+            - uses: Swatinem/rust-cache@v2
               with:
-                  path: |
-                      ~/.cargo/bin/
-                      ~/.cargo/registry/index/
-                      ~/.cargo/registry/cache/
-                      ~/.cargo/git/db/
-                      target/
-                  key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
-                  restore-keys: ${{ runner.os }}-cargo-
+                  key: ${{ matrix.name }}
 
             - name: Install system dependencies (linux)
               if: matrix.name == 'linux'
@@ -139,17 +132,7 @@ jobs:
               run: sudo apt-get install libfuse-dev
 
             - name: Cache cargo artifacts
-              uses: actions/cache@v5
-              with:
-                  path: |
-                      ~/.cargo/bin/
-                      ~/.cargo/registry/index/
-                      ~/.cargo/registry/cache/
-                      ~/.cargo/git/db/
-                      target/
-                  key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
-                  restore-keys: |
-                      ${{ runner.os }}-cargo-
+              uses: Swatinem/rust-cache@v2
 
             - name: Cache gradle artifacts
               uses: actions/cache@v5
@@ -218,17 +201,7 @@ jobs:
               uses: gradle/gradle-build-action@v2.4.2
 
             - name: Cache cargo artifacts
-              uses: actions/cache@v5
-              with:
-                  path: |
-                      ~/.cargo/bin/
-                      ~/.cargo/registry/index/
-                      ~/.cargo/registry/cache/
-                      ~/.cargo/git/db/
-                      target/
-                  key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
-                  restore-keys: |
-                      ${{ runner.os }}-cargo-
+              uses: Swatinem/rust-cache@v2
 
             - name: Cache gradle artifacts
               uses: actions/cache@v5
@@ -344,15 +317,9 @@ jobs:
                   cache: true
 
             # Cache rust artifacts
-            - uses: actions/cache@v5
+            - uses: Swatinem/rust-cache@v2
               with:
-                  path: |
-                      ~/.cargo/bin/
-                      ~/.cargo/registry/index/
-                      ~/.cargo/registry/cache/
-                      ~/.cargo/git/db/
-                      target/
-                  key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+                  key: ${{ matrix.name }}
 
             - name: Install system dependencies (linux)
               if: matrix.name == 'linux'
@@ -462,17 +429,9 @@ jobs:
         steps:
             - uses: actions/checkout@v7
 
-            - uses: actions/cache@v5
+            - uses: Swatinem/rust-cache@v2
               with:
-                  path: |
-                      ~/.cargo/bin/
-                      ~/.cargo/registry/index/
-                      ~/.cargo/registry/cache/
-                      ~/.cargo/git/db/
-                      target/
-                  key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
-                  restore-keys: |
-                      ${{ runner.os }}-cargo-
+                  key: ${{ matrix.name }}
 
             - name: Setup python
               uses: actions/setup-python@v7
@@ -521,17 +480,7 @@ jobs:
         steps:
             - uses: actions/checkout@v7
 
-            - uses: actions/cache@v5
-              with:
-                  path: |
-                      ~/.cargo/bin/
-                      ~/.cargo/registry/index/
-                      ~/.cargo/registry/cache/
-                      ~/.cargo/git/db/
-                      target/
-                  key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
-                  restore-keys: |
-                      ${{ runner.os }}-cargo-
+            - uses: Swatinem/rust-cache@v2
 
             - name: Setup python
               uses: actions/setup-python@v7
