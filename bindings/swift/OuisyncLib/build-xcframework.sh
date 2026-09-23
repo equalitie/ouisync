@@ -118,3 +118,39 @@ add_slice ios-simulator "${sim_libs[@]}"
 
 xcodebuild -create-xcframework "${XCF_PARAMS[@]}" -output "$XCF"
 echo "==> Done: $XCF"
+
+# ── 4. Package the dynamic library as OuisyncService.framework ─────────────────
+# The xcframework above holds the STATIC libs used by the Swift File Provider
+# extension. The Dart FfiServer instead dlopen's a DYNAMIC library at runtime, and
+# a loose .dylib is rejected by App Store validation — so wrap it as a framework.
+# cargo already emitted libouisync_service.dylib next to the .a for each target
+# (crate-type includes "cdylib"). We assemble the macOS universal + iOS device
+# dylibs and hand each to build-framework.sh.
+DART_DARWIN="$PROJECT_ROOT/bindings/dart/darwin"
+MK_FRAMEWORK="$DART_DARWIN/build-framework.sh"
+
+# macOS universal dylib (arm64 + x86_64) -> DART_DARWIN/OuisyncService.framework
+macos_dylibs=()
+for TARGET in aarch64-apple-darwin x86_64-apple-darwin; do
+    if target_enabled "$TARGET"; then
+        macos_dylibs+=("$BUILD_DIR/$TARGET/$CONFIGURATION/libouisync_service.dylib")
+    fi
+done
+if [[ ${#macos_dylibs[@]} -gt 0 ]]; then
+    macos_dylib="$BUILD_DIR/lipo-macos/libouisync_service.dylib"
+    mkdir -p "$(dirname "$macos_dylib")"
+    if [[ ${#macos_dylibs[@]} -eq 1 ]]; then
+        cp "${macos_dylibs[0]}" "$macos_dylib"
+    else
+        echo "==> lipo macos dylib: ${macos_dylibs[*]}"
+        lipo -create "${macos_dylibs[@]}" -output "$macos_dylib"
+    fi
+    bash "$MK_FRAMEWORK" "$macos_dylib" "$DART_DARWIN" macos
+fi
+
+# iOS device dylib (arm64) -> DART_DARWIN/ios/OuisyncService.framework
+if target_enabled aarch64-apple-ios; then
+    bash "$MK_FRAMEWORK" \
+        "$BUILD_DIR/aarch64-apple-ios/$CONFIGURATION/libouisync_service.dylib" \
+        "$DART_DARWIN/ios" ios
+fi
