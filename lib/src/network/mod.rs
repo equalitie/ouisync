@@ -376,8 +376,8 @@ impl Network {
 
     /// Register a local repository into the network. This links the repository with all matching
     /// repositories of currently connected remote replicas as well as any replicas connected in
-    /// the future. The repository is automatically deregistered when the returned handle is
-    /// dropped.
+    /// the future. The repository is automatically deregistered when the returned `Registration`
+    /// is dropped.
     ///
     /// Note: A repository should have at most one registration - creating more than one has
     /// undesired effects. This is currently not enforced and so it's a responsibility of the
