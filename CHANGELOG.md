@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implement cancellation in the C++ and Kotlin bindings
 - Add swift bindings
 - Improve the swift example app
+- Implement python bindings
+- Setup automatic releases of the python and kotlin bindings to github
 - Increase Android target API level to 37 to conform to the [new Google Play Store requirements](https://support.google.com/googleplay/android-developer/answer/11926878)
 - Change local discovery to announce all listening ports, not just the first one
 - Fix calculation of `O:` drive disk space on Windows
