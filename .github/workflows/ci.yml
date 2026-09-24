@@ -133,6 +133,8 @@ jobs:
 
             - name: Cache cargo artifacts
               uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: kotlin-bindings-cargo
 
             # Needed by the gradle task which builds the rust library
             - name: Install cargo-ndk
@@ -190,8 +192,15 @@ jobs:
             - name: Setup gradle
               uses: gradle/gradle-build-action@v2.4.2
 
+            # This job only runs on tag pushes, and each tag is a distinct, never-repeated
+            # ref, so a cache saved here could never be restored by a later run. Share the
+            # key with check_kotlin_bindings (which runs on master) to read its cache instead,
+            # and skip saving our own.
             - name: Cache cargo artifacts
               uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: kotlin-bindings-cargo
+                  save-if: false
 
             # Needed by the gradle task which builds the rust library
             - name: Install cargo-ndk
