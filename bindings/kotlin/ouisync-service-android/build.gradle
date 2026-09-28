@@ -42,6 +42,31 @@ dependencies {
     api 'net.java.dev.jna:jna:5.17.0@aar'
 }
 
+// Both this package and `ouisync-service-jvm` provide the `ouisync-service` capability, so that
+// gradle reports a conflict if both of them end up in the same dependency graph. Declaring a
+// capability explicitly removes the implicit one (`<group>:<name>`), so it needs to be declared too.
+// Non-release variants are published with the variant name as suffix (e.g.,
+// `ouisync-service-android-debug`, see below), so they provide that capability as well.
+//
+// This applies both to the configurations used by other projects in this build (e.g.,
+// `debugApiElements`) and to the ones used for publishing (e.g., `debugVariantDebugApiPublication`).
+configurations.configureEach { configuration ->
+    def matcher = configuration.name =~ /^(\w+?)(?:Variant\w+?)?(Api|Runtime)(?:Elements|Publication)$/
+    if (!matcher.matches()) {
+        return
+    }
+
+    def variant = matcher.group(1)
+
+    configuration.outgoing.capability("${project.group}:${project.name}:${project.version}")
+
+    if (variant != 'release') {
+        configuration.outgoing.capability("${project.group}:${project.name}-${variant}:${project.version}")
+    }
+
+    configuration.outgoing.capability("${project.group}:ouisync-service:${project.version}")
+}
+
 //--------------------------------------------------------------------------------------------------
 // Build and package the rust library
 

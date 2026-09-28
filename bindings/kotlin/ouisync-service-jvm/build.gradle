@@ -17,6 +17,16 @@ dependencies {
     api 'net.java.dev.jna:jna:5.17.0'
 }
 
+// Both this package and `ouisync-service-android` provide the `ouisync-service` capability, so that
+// gradle reports a conflict if both of them end up in the same dependency graph. Declaring a
+// capability explicitly removes the implicit one (`<group>:<name>`), so it needs to be declared too.
+['apiElements', 'runtimeElements'].each { name ->
+    configurations.named(name) {
+        outgoing.capability("${project.group}:${project.name}:${project.version}")
+        outgoing.capability("${project.group}:ouisync-service:${project.version}")
+    }
+}
+
 java {
     // Build with any JDK >= 17 but target Java 17. There is no code here but this also determines
     // the minimal JVM version consumers of this package need.
