@@ -125,12 +125,6 @@ jobs:
             - name: Setup gradle
               uses: gradle/gradle-build-action@v2.4.2
 
-            - name: Install system dependencies
-              # NOTE: fuse isn't used by the bindings themselves but it's required for the unit tests
-              # because they use the linux version of the ouisync_service library, not the android one
-              # and the linux version does currently unconditionally depend on fuse.
-              run: sudo apt-get install libfuse-dev
-
             - name: Cache cargo artifacts
               uses: Swatinem/rust-cache@v2
               with:
@@ -144,9 +138,11 @@ jobs:
               working-directory: bindings/kotlin
               run: ./gradlew --stacktrace lint
 
+            # The ouisync-session tests use the ouisync-service-jvm package, which builds the native
+            # library for the host (linux).
             - name: Run unit tests
               working-directory: bindings/kotlin
-              run: ./gradlew --stacktrace testDebugUnitTest
+              run: ./gradlew --stacktrace testDebugUnitTest :ouisync-session:test
 
             - name: Run instrumented tests
               uses: reactivecircus/android-emulator-runner@v2
@@ -171,14 +167,115 @@ jobs:
               working-directory: bindings/kotlin
               run: ./gradlew --stacktrace example:assembleDebug
 
+    build_kotlin_native_libs:
+        name: build kotlin bindings native library (${{ matrix.name }})
+        runs-on: ${{ matrix.os }}
+        # Build the packages only when pushing version tags (v1.2.3, ...)
+        if: startsWith(github.ref, 'refs/tags/v')
+
+        strategy:
+            fail-fast: false
+            matrix:
+                name:
+                    - linux-x86_64
+                    - linux-aarch64
+                    - windows-x86_64
+                    - windows-aarch64
+                    - macos-aarch64
+                    - macos-x86_64
+                include:
+                    # Native libraries for the ouisync-service-jvm package, one matrix leg per
+                    # target triple. The linux targets are built with `cross` (also the native one)
+                    # because its images use an older glibc than the runner, so the library works on
+                    # more distros. The other targets are built with cargo on their native runner,
+                    # except windows-aarch64 which is cross-compiled on the x86_64 one (its image
+                    # includes the MSVC ARM64 build tools).
+                    - name: linux-x86_64
+                      os: ubuntu-24.04
+                      target: x86_64-unknown-linux-gnu
+                      cargo-command: cross
+
+                    - name: linux-aarch64
+                      os: ubuntu-24.04
+                      target: aarch64-unknown-linux-gnu
+                      cargo-command: cross
+
+                    - name: windows-x86_64
+                      os: windows-latest
+                      target: x86_64-pc-windows-msvc
+                      cargo-command: cargo
+
+                    - name: windows-aarch64
+                      os: windows-latest
+                      target: aarch64-pc-windows-msvc
+                      cargo-command: cargo
+
+                    - name: macos-aarch64
+                      os: macos-latest
+                      target: aarch64-apple-darwin
+                      cargo-command: cargo
+
+                    - name: macos-x86_64
+                      os: macos-latest
+                      target: x86_64-apple-darwin
+                      cargo-command: cargo
+
+        steps:
+            - uses: actions/checkout@v7
+
+            - name: Add rust target
+              run: rustup target add ${{ matrix.target }}
+
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  key: kotlin-${{ matrix.name }}
+
+            - name: Setup java
+              uses: actions/setup-java@v6
+              with:
+                  distribution: "temurin"
+                  java-version: "17"
+
+            - name: Setup gradle
+              uses: gradle/gradle-build-action@v2.4.2
+
+            - name: Install cross
+              if: matrix.cargo-command == 'cross'
+              run: cargo install cross --force --git https://github.com/cross-rs/cross
+
+            # Builds the library into `build/ouisync-service-jvm/rustLibs/<jna prefix>/`, which is
+            # the layout expected by the `ouisync.nativeLibsDir` property.
+            - name: Build native library
+              working-directory: bindings/kotlin
+              shell: bash
+              run: >
+                  ./gradlew --stacktrace :ouisync-service-jvm:cargoBuild
+                  -Pouisync.targets=${{ matrix.target }}
+                  -Pouisync.cargo=${{ matrix.cargo-command }}
+
+            - name: Upload native library
+              uses: actions/upload-artifact@v7
+              with:
+                  name: kotlin-native-libs-${{ matrix.name }}
+                  path: bindings/kotlin/build/ouisync-service-jvm/rustLibs/
+                  if-no-files-found: error
+
     build_kotlin_bindings:
         name: build kotlin bindings packages
         runs-on: ubuntu-24.04
         # Build the packages only when pushing version tags (v1.2.3, ...)
         if: startsWith(github.ref, 'refs/tags/v')
+        needs: build_kotlin_native_libs
 
         steps:
             - uses: actions/checkout@v7
+
+            - name: Download native libraries for the ouisync-service-jvm package
+              uses: actions/download-artifact@v8
+              with:
+                  path: native-libs
+                  pattern: kotlin-native-libs-*
+                  merge-multiple: true
 
             - name: Add rust targets
               run: rustup target add x86_64-linux-android armv7-linux-androideabi aarch64-linux-android
@@ -209,9 +306,15 @@ jobs:
             # Publishing to Maven local (rather than just assembling) also produces the
             # sources/javadoc jars and poms that make up the full package, without requiring
             # the Sonatype credentials / signing key needed to publish to Maven Central.
+            #
+            # The android native libraries are built here (using cargo-ndk), the ones for the
+            # ouisync-service-jvm package are the prebuilt ones from the `build_kotlin_native_libs`
+            # job.
             - name: Build packages
               working-directory: bindings/kotlin
-              run: ./gradlew --stacktrace publishToMavenLocal
+              run: >
+                  ./gradlew --stacktrace publishToMavenLocal
+                  -Pouisync.nativeLibsDir=$GITHUB_WORKSPACE/native-libs
 
             - name: Get package version
               id: version
@@ -241,8 +344,10 @@ jobs:
                   }
 
                   package ouisync-session
-                  package ouisync-service
-                  package ouisync-service-debug
+                  package ouisync-service-common
+                  package ouisync-service-jvm
+                  package ouisync-service-android
+                  package ouisync-service-android-debug
                   package ouisync-android
                   package ouisync-android-debug
 
@@ -252,16 +357,28 @@ jobs:
                   path: ouisync-session-${{ steps.version.outputs.version }}.kotlin.tar.gz
                   archive: false
 
-            - name: Upload service package
+            - name: Upload service common package
               uses: actions/upload-artifact@v7
               with:
-                  path: ouisync-service-${{ steps.version.outputs.version }}.kotlin.tar.gz
+                  path: ouisync-service-common-${{ steps.version.outputs.version }}.kotlin.tar.gz
                   archive: false
 
-            - name: Upload service debug package
+            - name: Upload service jvm package
               uses: actions/upload-artifact@v7
               with:
-                  path: ouisync-service-debug-${{ steps.version.outputs.version }}.kotlin.tar.gz
+                  path: ouisync-service-jvm-${{ steps.version.outputs.version }}.kotlin.tar.gz
+                  archive: false
+
+            - name: Upload service android package
+              uses: actions/upload-artifact@v7
+              with:
+                  path: ouisync-service-android-${{ steps.version.outputs.version }}.kotlin.tar.gz
+                  archive: false
+
+            - name: Upload service android debug package
+              uses: actions/upload-artifact@v7
+              with:
+                  path: ouisync-service-android-debug-${{ steps.version.outputs.version }}.kotlin.tar.gz
                   archive: false
 
             - name: Upload android package
