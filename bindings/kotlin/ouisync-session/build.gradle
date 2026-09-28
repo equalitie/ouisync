@@ -21,8 +21,9 @@ dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly    'org.junit.platform:junit-platform-launcher'
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2'
-    testImplementation 'net.java.dev.jna:jna:5.17.0'
-    testImplementation project(':ouisync-service-common')
+    // The tests run against a real service, including the native library for the host platform
+    // (built by `ouisync-service-jvm`).
+    testImplementation project(':ouisync-service-jvm')
 }
 
 kotlin {
@@ -117,26 +118,12 @@ tasks.register('generateApi', Exec) {
     }
 }
 
-tasks.register('cargoBuildUnitTest', Exec) {
-    description = 'Build the native library for unit tests'
-    workingDir "$rootDir/../.."
-    commandLine 'cargo', 'build', '--package', 'ouisync-service', '--lib'
-}
-
 afterEvaluate {
     // Generate bindings before compiling the kotlin sources. This happens during both
     // 'assemble' and 'test'.
     tasks.named('compileKotlin') {
         dependsOn 'generateApi'
     }
-
-    // Build the native library for the host platform and set 'jna.library.path' to point to
-    // it. This happens only during 'test'.
-    tasks.named('test') {
-        dependsOn 'cargoBuildUnitTest'
-        systemProperty('jna.library.path', "$rootDir/../../target/debug")
-    }
-
 }
 
 dokka {
