@@ -138,6 +138,11 @@ project.parent.publishing {
 
             artifactId = packageName
 
+            // The capabilities declared above can't be represented in the pom. That's expected,
+            // they are in the gradle module metadata.
+            suppressPomMetadataWarningsFor('apiElements')
+            suppressPomMetadataWarningsFor('runtimeElements')
+
             pom {
                 name = packageName
                 description = "Secure peer-to-peer file syncing library (service component for desktop JVM)"

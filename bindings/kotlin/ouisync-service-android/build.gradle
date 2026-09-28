@@ -185,6 +185,12 @@ afterEvaluate {
 
                     artifactId = packageName
 
+                    // The capabilities declared above can't be represented in the pom. That's
+                    // expected, they are in the gradle module metadata.
+                    ['Api', 'Runtime'].each { usage ->
+                        suppressPomMetadataWarningsFor("${variant}Variant${variant.capitalize()}${usage}Publication")
+                    }
+
                     pom {
                         name = packageName
                         description = "Secure peer-to-peer file syncing library (service component for android)"
