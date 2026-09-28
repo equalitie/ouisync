@@ -1,0 +1,148 @@
+import org.equalitie.ouisync.CargoBuild
+import org.equalitie.ouisync.RustTarget
+
+plugins {
+    id 'java-library'
+    id 'org.equalitie.ouisync.convention'
+}
+
+version = rootProject.version
+group   = rootProject.group
+
+// This package contains no code of its own. It bundles the `ouisync-service-common` package with
+// the native libraries for desktop platforms (linux, macos, windows) and the desktop flavor of JNA.
+
+dependencies {
+    api project(':ouisync-service-common')
+    api 'net.java.dev.jna:jna:5.17.0'
+}
+
+java {
+    // Build with any JDK >= 17 but target Java 17. There is no code here but this also determines
+    // the minimal JVM version consumers of this package need.
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+
+    // Include javadoc and sources jars - this is needed for publishing to Maven Central.
+    withJavadocJar()
+    withSourcesJar()
+}
+
+//--------------------------------------------------------------------------------------------------
+// Build and package the rust library
+//
+// The native libraries are packaged as resources under the paths where JNA looks for them (e.g.,
+// `linux-x86-64/libouisync_service.so`), so JNA can load them directly from the jar.
+//
+// Controlled by the following properties:
+//
+// - `ouisync.nativeLibsDir`: Package prebuilt libraries from this directory instead of building
+//   them. The directory must already have the JNA layout (`<prefix>/<library file>`).
+// - `ouisync.targets`: Comma separated list of target triples to build for. Defaults to the host
+//   target.
+// - `ouisync.cargo`: Tool to use to build the targets from `ouisync.targets` (`cargo` or `cross`).
+//   Defaults to `cross`. The host target is always built with `cargo`.
+// - `ouisync.cargoProfile`: Cargo profile to use (`release` or `debug`). Defaults to `release`.
+
+def nativeLibsDir = providers.gradleProperty('ouisync.nativeLibsDir')
+def targets = providers.gradleProperty('ouisync.targets')
+    .map { it.split(',').collect { it.trim() }.findAll { !it.isEmpty() } }
+def cargoTool = providers.gradleProperty('ouisync.cargo').orElse('cross')
+def cargoRelease = providers.gradleProperty('ouisync.cargoProfile').orElse('release')
+    .map { profile ->
+        if (!(profile in ['release', 'debug'])) {
+            throw new GradleException("Invalid ouisync.cargoProfile: '$profile'")
+        }
+        profile == 'release'
+    }
+
+def rustCratesDir = file("$rootDir/../..")
+
+def configureCargoTask = { task, outputDirName ->
+    task.workspaceDir = rustCratesDir
+    task.packageName = 'ouisync-service'
+    task.libraryName = 'ouisync_service'
+    task.release = cargoRelease
+    task.outputDir = layout.buildDirectory.dir("rustLibs/$outputDirName")
+}
+
+def cargoTasks = []
+
+if (!nativeLibsDir.isPresent()) {
+    if (targets.isPresent()) {
+        targets.get().each { target ->
+            def taskName = 'cargoBuild' + target.split('-').collect { it.capitalize() }.join()
+
+            cargoTasks += tasks.register(taskName, CargoBuild) { task ->
+                description = "Builds the rust crate for $target"
+                configureCargoTask(task, RustTarget.jnaResourcePrefix(target))
+                task.tool = cargoTool
+                task.target = target
+            }
+        }
+    } else {
+        cargoTasks += tasks.register('cargoBuildHost', CargoBuild) { task ->
+            description = 'Builds the rust crate for the host target'
+            configureCargoTask(task, 'host')
+        }
+    }
+}
+
+tasks.named('processResources') {
+    if (nativeLibsDir.isPresent()) {
+        from(nativeLibsDir)
+    } else {
+        cargoTasks.each { cargoTask ->
+            from(cargoTask) {
+                into { RustTarget.jnaResourcePrefix(cargoTask.get().target.get()) }
+            }
+        }
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+// Publication and signing
+
+project.parent.publishing {
+    publications {
+        serviceJvm(MavenPublication) {
+            def packageName = project.name
+
+            from components.java
+
+            artifactId = packageName
+
+            pom {
+                name = packageName
+                description = "Secure peer-to-peer file syncing library (service component for desktop JVM)"
+                url = 'https://github.com/equalitie/ouisync'
+                licenses {
+                    license {
+                        name = 'MPL-2.0'
+                        url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
+                    }
+                }
+                developers {
+                    developer {
+                        name = 'Ouisync Developers'
+                        email = 'ouisync@equalit.ie'
+                    }
+                }
+
+                scm {
+                    connection = 'scm:git:github.com/equalitie/ouisync.git'
+                    developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
+                    url = 'https://github.com/equalitie/ouisync/tree/master/bindings/kotlin'
+                }
+            }
+        }
+    }
+}
+
+project.parent.signing {
+    if (project.signingKey) {
+        useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
+    }
+
+    sign project.publishing.publications
+}
