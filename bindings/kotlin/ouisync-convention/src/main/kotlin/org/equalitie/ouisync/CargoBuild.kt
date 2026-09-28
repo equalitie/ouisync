@@ -94,7 +94,16 @@ constructor(
                 }
 
                 if (ndkDir.isPresent) {
-                    environment("ANDROID_NDK_HOME", ndkDir.get().asFile.absolutePath)
+                    // cargo-ndk uses the first of these that is set, but warns if the others are
+                    // set to something else (e.g., the environment points to a different NDK than
+                    // the one configured in the build). Set all of them to avoid that.
+                    val ndkPath = ndkDir.get().asFile.absolutePath
+                    for (
+                    name in
+                    listOf("ANDROID_NDK_HOME", "ANDROID_NDK_ROOT", "ANDROID_NDK_PATH", "NDK_HOME")
+                    ) {
+                        environment(name, ndkPath)
+                    }
                 }
 
                 args("build")
