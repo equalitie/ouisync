@@ -37,7 +37,13 @@ android {
 dependencies {
     def kotlinx_coroutines_version = '1.10.2'
 
-    implementation project(':ouisync-service-android')
+    // Depend on the service package by its published coordinates (substituted with the project
+    // below) so that each variant of this package is published with a dependency on the matching
+    // variant of the service package (`ouisync-android-debug` -> `ouisync-service-android-debug`,
+    // ...). With a plain project dependency, all the variants would depend on the same one.
+    releaseImplementation "${project.group}:ouisync-service-android:${project.version}"
+    debugImplementation   "${project.group}:ouisync-service-android-debug:${project.version}"
+
     implementation project(':ouisync-session')
 
     // HACK: Using `implementation` here fails compilation in the downstream packages for some
@@ -52,6 +58,13 @@ dependencies {
     androidTestImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$kotlinx_coroutines_version"
 
     testImplementation 'junit:junit:4.13.2'
+}
+
+configurations.configureEach {
+    resolutionStrategy.dependencySubstitution {
+        substitute module("${project.group}:ouisync-service-android") using project(':ouisync-service-android')
+        substitute module("${project.group}:ouisync-service-android-debug") using project(':ouisync-service-android')
+    }
 }
 
 def libraryVariants = []
