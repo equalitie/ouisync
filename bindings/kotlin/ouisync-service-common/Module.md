@@ -1,11 +1,13 @@
-# Module ouisync-service
+# Module ouisync-service-common
 
 Provides the [Service][org.equalitie.ouisync.service.Service] class which maintains the
 repositories and runs the sync protocol.
 
-This package contains native libraries written in Rust and needs a [rust toolchain]
-(https://www.rust-lang.org/learn/get-started) to be installed on the system in order to build
-them.
+This package contains only the platform independent Kotlin code and is not meant to be used
+directly. Use `ouisync-service-jvm` (desktop JVM) or `ouisync-service-android` (Android) instead,
+which depend on this package and additionally bundle the native libraries for their platform.
+Building those native libraries requires a [rust toolchain]
+(https://www.rust-lang.org/learn/get-started) to be installed on the system.
 
 To interact with a `Service`, use one or more [Session][org.equalitie.ouisync.session.Session]s from
 the `ouisync-session` package. The `Session`(s) must use the same *config directory* as the

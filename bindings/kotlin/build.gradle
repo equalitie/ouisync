@@ -12,7 +12,7 @@ plugins {
 
 dependencies {
     dokka project(':ouisync-android')
-    dokka project(':ouisync-service')
+    dokka project(':ouisync-service-common')
     dokka project(':ouisync-session')
 }
 

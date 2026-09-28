@@ -22,8 +22,9 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    kotlin {
-        jvmToolchain(17)
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     publishing {
@@ -36,7 +37,7 @@ android {
 dependencies {
     def kotlinx_coroutines_version = '1.10.2'
 
-    implementation project(':ouisync-service')
+    implementation project(':ouisync-service-common')
     implementation project(':ouisync-session')
 
     // HACK: Using `implementation` here fails compilation in the downstream packages for some

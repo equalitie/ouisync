@@ -1,0 +1,97 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+plugins {
+    id 'org.jetbrains.kotlin.jvm'
+    id 'java-library'
+
+    id 'dokka-convention'
+}
+
+version = rootProject.version
+group   = rootProject.group
+
+// Build with any JDK >= 17 but target Java 17.
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
+        freeCompilerArgs.add('-Xjdk-release=17')
+    }
+}
+
+dependencies {
+    implementation project(':ouisync-session')
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2'
+
+    // JNA comes in two incompatible flavors: a jar for desktop JVM and an aar for android. The
+    // flavor is chosen by the platform-specific packages (`ouisync-service-jvm` and
+    // `ouisync-service-android`) which depend on this one, so here it's needed only for
+    // compilation.
+    compileOnly 'net.java.dev.jna:jna:5.17.0'
+}
+
+// Include javadoc and sources jars - this is needed for publishing to Maven Central.
+java {
+    withJavadocJar()
+    withSourcesJar()
+}
+
+//--------------------------------------------------------------------------------------------------
+// Publication and signing
+
+project.parent.publishing {
+    publications {
+        serviceCommon(MavenPublication) {
+            def packageName = project.name
+
+            from components.java
+
+            artifactId = packageName
+
+            pom {
+                name = packageName
+                description = "Secure peer-to-peer file syncing library (common parts of the service component, not meant to be used directly)"
+                url = 'https://github.com/equalitie/ouisync'
+                licenses {
+                    license {
+                        name = 'MPL-2.0'
+                        url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
+                    }
+                }
+                developers {
+                    developer {
+                        name = 'Ouisync Developers'
+                        email = 'ouisync@equalit.ie'
+                    }
+                }
+
+                scm {
+                    connection = 'scm:git:github.com/equalitie/ouisync.git'
+                    developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
+                    url = 'https://github.com/equalitie/ouisync/tree/master/bindings/kotlin'
+                }
+            }
+        }
+    }
+}
+
+project.parent.signing {
+    // Only sign when publishing to sonatype, not local
+    required = gradle.taskGraph.hasTask("publishServiceCommonPublicationToSonatypeRepository")
+
+    if (project.signingKey) {
+        useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
+    }
+
+    sign project.publishing.publications
+}
+
+dokka {
+    dokkaSourceSets.configureEach {
+        includes.from("Module.md")
+    }
+}
