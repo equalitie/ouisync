@@ -123,7 +123,7 @@ jobs:
                   java-version: "17"
 
             - name: Setup gradle
-              uses: gradle/gradle-build-action@v2.4.2
+              uses: gradle/actions/setup-gradle@v6
 
             - name: Cache cargo artifacts
               uses: Swatinem/rust-cache@v2
@@ -154,7 +154,7 @@ jobs:
                   script: ./gradlew ouisync-android:connectedDebugAndroidTest -Ptarget-platform=android-x64
 
             - name: Upload test results
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@v7
               with:
                   name: test-results
                   path: |
@@ -237,7 +237,7 @@ jobs:
                   java-version: "17"
 
             - name: Setup gradle
-              uses: gradle/gradle-build-action@v2.4.2
+              uses: gradle/actions/setup-gradle@v6
 
             - name: Install cross
               if: matrix.cargo-command == 'cross'
@@ -287,7 +287,7 @@ jobs:
                   java-version: "17"
 
             - name: Setup gradle
-              uses: gradle/gradle-build-action@v2.4.2
+              uses: gradle/actions/setup-gradle@v6
 
             # This job only runs on tag pushes, and each tag is a distinct, never-repeated
             # ref, so a cache saved here could never be restored by a later run. Share the
