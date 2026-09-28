@@ -1,0 +1,4 @@
+# Version of the Android NDK used by all the android gradle builds in this repository. Read by the
+# ouisync convention gradle plugin (see bindings/kotlin/ouisync-convention). The NDK needs to be
+# installed (e.g., `sdkmanager --install "ndk;<version>"`).
+28.2.13676358
