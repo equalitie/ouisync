@@ -1,0 +1,181 @@
+plugins {
+    id 'com.android.library'
+    id 'org.equalitie.ouisync.convention'
+}
+
+version = rootProject.version
+group   = rootProject.group
+
+// This package contains no code of its own. It bundles the `ouisync-service-common` package with
+// the native libraries for android and the android flavor of JNA.
+
+android {
+    namespace = 'org.equalitie.ouisync.service'
+
+    compileSdk = 37
+
+    defaultConfig {
+        minSdk = 23
+        targetSdk = 37
+        versionCode = 1
+        versionName = version
+
+        consumerProguardFiles 'proguard-rules.pro'
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    publishing {
+        singleVariant 'release'
+        singleVariant 'debug'
+    }
+}
+
+dependencies {
+    api project(':ouisync-service-common')
+    api 'net.java.dev.jna:jna:5.17.0@aar'
+}
+
+//--------------------------------------------------------------------------------------------------
+// Build and package the rust library
+
+def rustCratesDir = file("$rootDir/../..")
+def rustOutputDir = file("$buildDir/rustJniLibs")
+
+// Flutter passes -Ptarget-platform for the device(s) being targeted.
+def flutterPlatformToAbi = [
+    'android-arm'  : 'armeabi-v7a',
+    'android-arm64': 'arm64-v8a',
+    'android-x64'  : 'x86_64',
+]
+def allAbis = flutterPlatformToAbi.values().toList()
+def requestedAbis = project.hasProperty('target-platform')
+    ? project.property('target-platform').split(',')
+             .collect { flutterPlatformToAbi[it.trim()] }
+             .findAll { it != null }
+    : allAbis
+
+// For each build type define a task to build the rust library using the corresponding cargo profile
+// and hook it into the build.
+android.buildTypes.all { buildType ->
+    def name = buildType.name
+    def outputDir = file("$rustOutputDir/$name")
+    def taskName = "cargoBuild${name.capitalize()}"
+
+    android.sourceSets.maybeCreate(name).jniLibs.srcDir(outputDir)
+
+    tasks.register(taskName, Exec) {
+        group = 'rust'
+        description = "Builds the rust crate for $name"
+
+        doNotTrackState('state is tracked by cargo')
+
+        workingDir = rustCratesDir
+        executable = "cargo"
+        args = ["ndk", "--output-dir", outputDir.absolutePath]
+
+        requestedAbis.each { abi ->
+            args += ["--target", abi]
+        }
+
+        if (android.defaultConfig.minSdk != null) {
+            args += ['--platform', android.defaultConfig.minSdk as String]
+        }
+
+        args += ['build', '--package', 'ouisync-service']
+
+        if (name != 'debug') {
+            args += '--release'
+        }
+
+        doFirst {
+            // Resolve the NDK only when the task actually runs so that configuring the project
+            // (e.g., when building only the jvm packages) doesn't require the NDK to be installed.
+            environment 'ANDROID_NDK_HOME',
+                androidComponents.sdkComponents.ndkDirectory.get().asFile.absolutePath
+
+            outputDir.mkdirs()
+        }
+    }
+
+    tasks.whenTaskAdded { task ->
+        if (task.name == "merge${name.capitalize()}JniLibFolders") {
+            task.dependsOn "cargoBuild${name.capitalize()}"
+        }
+    }
+}
+
+tasks.named('clean') { delete rustOutputDir }
+
+//--------------------------------------------------------------------------------------------------
+// Publication and signing
+
+def libraryVariants = []
+
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        libraryVariants.add(variant.name);
+    }
+}
+
+afterEvaluate {
+    project.parent.publishing {
+        publications {
+            libraryVariants.each { variant ->
+                def packageNameSuffix = variant == 'release' ? '' : "-${variant}"
+
+                create("${variant}ServiceAndroid", MavenPublication) {
+                    def packageName = "${project.name}${packageNameSuffix}"
+
+                    from components.getByName(variant)
+
+                    artifactId = packageName
+
+                    pom {
+                        name = packageName
+                        description = "Secure peer-to-peer file syncing library (service component for android)"
+                        url = 'https://github.com/equalitie/ouisync'
+                        licenses {
+                            license {
+                                name = 'MPL-2.0'
+                                url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
+                            }
+                        }
+                        developers {
+                            developer {
+                                name = 'Ouisync Developers'
+                                email = 'ouisync@equalit.ie'
+                            }
+                        }
+
+                        scm {
+                            connection = 'scm:git:github.com/equalitie/ouisync.git'
+                            developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
+                            url = 'https://github.com/equalitie/ouisync/tree/master/bindings/kotlin'
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+project.parent.signing {
+    // Only sign when publishing to sonatype, not local
+    required = libraryVariants.any { variant ->
+        gradle.taskGraph.hasTask("publish${variant.capitalize()}ServiceAndroidPublicationToSonatypeRepository")
+    }
+
+    if (project.signingKey) {
+        useInMemoryPgpKeys(
+            project.signingKeyId,
+            project.signingKey,
+            project.signingPassword
+        )
+    }
+
+    sign project.publishing.publications
+}
