@@ -31,20 +31,15 @@ object RustTarget {
 
     private val androidAbis =
         mapOf(
-            "arm64-v8a" to "aarch64-linux-android",
-            "armeabi-v7a" to "armv7-linux-androideabi",
-            "x86_64" to "x86_64-linux-android",
-            "x86" to "i686-linux-android",
+            "aarch64-linux-android" to "arm64-v8a",
+            "armv7-linux-androideabi" to "armeabi-v7a",
+            "x86_64-linux-android" to "x86_64",
+            "i686-linux-android" to "x86",
         )
-
-    /** Target triple corresponding to the given android ABI (e.g., `arm64-v8a`). */
-    @JvmStatic
-    fun fromAndroidAbi(abi: String): String = androidAbis[abi] ?: error("Unsupported android ABI: $abi")
 
     /** Android ABI (e.g., `arm64-v8a`) corresponding to the given target triple. */
     @JvmStatic
-    fun toAndroidAbi(target: String): String = androidAbis.entries.firstOrNull { it.value == target }?.key
-        ?: error("Unsupported android target: $target")
+    fun toAndroidAbi(target: String): String = androidAbis[target] ?: error("Unsupported android target: $target")
 
     /**
      * Resource path prefix under which JNA looks for native libraries for the given target when

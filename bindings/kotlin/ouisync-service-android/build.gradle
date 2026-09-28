@@ -49,25 +49,25 @@ def rustCratesDir = file("$rootDir/../..")
 def rustOutputDir = file("$buildDir/rustJniLibs")
 
 // Flutter passes -Ptarget-platform for the device(s) being targeted.
-def flutterPlatformToAbi = [
-    'android-arm'  : 'armeabi-v7a',
-    'android-arm64': 'arm64-v8a',
-    'android-x64'  : 'x86_64',
+def flutterPlatformToTarget = [
+    'android-arm'  : 'armv7-linux-androideabi',
+    'android-arm64': 'aarch64-linux-android',
+    'android-x64'  : 'x86_64-linux-android',
 ]
-def allAbis = flutterPlatformToAbi.values().toList()
-def requestedAbis = project.hasProperty('target-platform')
+def allTargets = flutterPlatformToTarget.values().toList()
+def requestedTargets = project.hasProperty('target-platform')
     ? project.property('target-platform').split(',')
-             .collect { flutterPlatformToAbi[it.trim()] }
+             .collect { flutterPlatformToTarget[it.trim()] }
              .findAll { it != null }
-    : allAbis
+    : allTargets
 
-// For each build type and requested ABI define a task to build the rust library using the
+// For each build type and requested target define a task to build the rust library using the
 // corresponding cargo profile and hook it into the build.
 android.buildTypes.all { buildType ->
     def name = buildType.name
 
-    def cargoTasks = requestedAbis.collect { abi ->
-        def target = RustTarget.fromAndroidAbi(abi)
+    def cargoTasks = requestedTargets.collect { target ->
+        def abi = RustTarget.toAndroidAbi(target)
         def taskName = "cargoBuild${name.capitalize()}" +
             target.split('-').collect { it.capitalize() }.join()
 
