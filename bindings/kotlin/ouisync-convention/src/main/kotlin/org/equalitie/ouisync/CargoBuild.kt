@@ -7,6 +7,7 @@ import org.gradle.api.provider.Property
 import org.gradle.api.provider.ProviderFactory
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
@@ -22,7 +23,7 @@ constructor(
     private val execOperations: ExecOperations,
     providers: ProviderFactory,
 ) : DefaultTask() {
-    /** The build tool to use: `cargo` or `cross`. Defaults to `cargo`. */
+    /** The build tool to use: `cargo`, `cross` or `cargo-ndk`. Defaults to `cargo`. */
     @get:Input abstract val tool: Property<String>
 
     /** Target triple to build for. Defaults to the host target. */
@@ -42,6 +43,13 @@ constructor(
 
     /** Directory where the built library is copied to. */
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    /** Android API level to build for. Used only with `cargo-ndk`. */
+    @get:Input @get:Optional
+    abstract val androidApiLevel: Property<Int>
+
+    /** Android NDK directory. Used only with `cargo-ndk`. Resolved only when the task runs. */
+    @get:Internal abstract val ndkDir: DirectoryProperty
 
     /** Target triple of the host machine. Detected automatically, normally doesn't need to be set. */
     @get:Internal abstract val hostTarget: Property<String>
@@ -65,32 +73,59 @@ constructor(
         val workspaceDir = workspaceDir.get().asFile
 
         // Pass `--target` only when needed so that building for the host target reuses the
-        // artifacts from plain `cargo build`. `cross` always needs it.
+        // artifacts from plain `cargo build`. `cross` and `cargo-ndk` always need it.
         val explicitTarget = tool != "cargo" || target != hostTarget.get()
+
+        // cargo-ndk strips the library when copying it into its output dir, so take it from there
+        // instead of from the cargo target dir.
+        val ndkOutputDir = temporaryDir.resolve("ndk")
+        ndkOutputDir.deleteRecursively()
 
         execOperations.exec {
             workingDir = workspaceDir
-            executable = tool
-            args("build", "--package", packageName.get(), "--lib")
 
-            if (explicitTarget) {
-                args("--target", target)
+            if (tool == "cargo-ndk") {
+                // cargo-ndk passes the target to cargo itself.
+                executable = "cargo"
+                args("ndk", "--target", target, "--output-dir", ndkOutputDir.absolutePath)
+
+                if (androidApiLevel.isPresent) {
+                    args("--platform", androidApiLevel.get().toString())
+                }
+
+                if (ndkDir.isPresent) {
+                    environment("ANDROID_NDK_HOME", ndkDir.get().asFile.absolutePath)
+                }
+
+                args("build")
+            } else {
+                executable = tool
+                args("build")
+
+                if (explicitTarget) {
+                    args("--target", target)
+                }
             }
+
+            args("--package", packageName.get(), "--lib")
 
             if (release) {
                 args("--release")
             }
         }
 
-        val targetDir =
-            System.getenv("CARGO_TARGET_DIR")?.let { File(it) } ?: workspaceDir.resolve("target")
-        val profileDir =
-            (if (explicitTarget) targetDir.resolve(target) else targetDir).resolve(
-                if (release) "release" else "debug",
-            )
-
         val fileName = RustTarget.libraryFileName(target, libraryName.get())
-        val srcFile = profileDir.resolve(fileName)
+        val srcFile =
+            if (tool == "cargo-ndk") {
+                ndkOutputDir.resolve(RustTarget.toAndroidAbi(target)).resolve(fileName)
+            } else {
+                val targetDir =
+                    System.getenv("CARGO_TARGET_DIR")?.let { File(it) } ?: workspaceDir.resolve("target")
+
+                (if (explicitTarget) targetDir.resolve(target) else targetDir)
+                    .resolve(if (release) "release" else "debug")
+                    .resolve(fileName)
+            }
 
         if (!srcFile.exists()) {
             throw GradleException("Built library not found at '$srcFile'")

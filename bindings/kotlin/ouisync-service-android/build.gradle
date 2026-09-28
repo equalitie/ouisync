@@ -1,3 +1,6 @@
+import org.equalitie.ouisync.CargoBuild
+import org.equalitie.ouisync.RustTarget
+
 plugins {
     id 'com.android.library'
     id 'org.equalitie.ouisync.convention'
@@ -58,47 +61,44 @@ def requestedAbis = project.hasProperty('target-platform')
              .findAll { it != null }
     : allAbis
 
-// For each build type define a task to build the rust library using the corresponding cargo profile
-// and hook it into the build.
+// For each build type and requested ABI define a task to build the rust library using the
+// corresponding cargo profile and hook it into the build.
 android.buildTypes.all { buildType ->
     def name = buildType.name
-    def outputDir = file("$rustOutputDir/$name")
-    def taskName = "cargoBuild${name.capitalize()}"
 
-    android.sourceSets.maybeCreate(name).jniLibs.srcDir(outputDir)
+    def cargoTasks = requestedAbis.collect { abi ->
+        def target = RustTarget.fromAndroidAbi(abi)
+        def taskName = "cargoBuild${name.capitalize()}" +
+            target.split('-').collect { it.capitalize() }.join()
 
-    tasks.register(taskName, Exec) {
+        // Each ABI gets its own jniLibs dir, so that libraries for ABIs which are not requested
+        // (e.g., left over from previous builds) don't get packaged.
+        def jniLibsDir = file("$rustOutputDir/$name/$abi")
+        android.sourceSets.maybeCreate(name).jniLibs.srcDir(jniLibsDir)
+
+        tasks.register(taskName, CargoBuild) { task ->
+            description = "Builds the rust crate for $name ($abi)"
+
+            task.tool = 'cargo-ndk'
+            task.target = target
+            task.ndkDir = androidComponents.sdkComponents.ndkDirectory
+
+            if (android.defaultConfig.minSdk != null) {
+                task.androidApiLevel = android.defaultConfig.minSdk
+            }
+
+            task.workspaceDir = rustCratesDir
+            task.packageName = 'ouisync-service'
+            task.libraryName = 'ouisync_service'
+            task.release = name != 'debug'
+            task.outputDir = file("$jniLibsDir/$abi")
+        }
+    }
+
+    tasks.register("cargoBuild${name.capitalize()}") {
         group = 'rust'
-        description = "Builds the rust crate for $name"
-
-        doNotTrackState('state is tracked by cargo')
-
-        workingDir = rustCratesDir
-        executable = "cargo"
-        args = ["ndk", "--output-dir", outputDir.absolutePath]
-
-        requestedAbis.each { abi ->
-            args += ["--target", abi]
-        }
-
-        if (android.defaultConfig.minSdk != null) {
-            args += ['--platform', android.defaultConfig.minSdk as String]
-        }
-
-        args += ['build', '--package', 'ouisync-service']
-
-        if (name != 'debug') {
-            args += '--release'
-        }
-
-        doFirst {
-            // Resolve the NDK only when the task actually runs so that configuring the project
-            // (e.g., when building only the jvm packages) doesn't require the NDK to be installed.
-            environment 'ANDROID_NDK_HOME',
-                androidComponents.sdkComponents.ndkDirectory.get().asFile.absolutePath
-
-            outputDir.mkdirs()
-        }
+        description = "Builds the rust crate for $name (all requested ABIs)"
+        dependsOn cargoTasks
     }
 
     tasks.whenTaskAdded { task ->
