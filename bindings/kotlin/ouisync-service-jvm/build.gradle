@@ -39,14 +39,14 @@ java {
 // - `ouisync.nativeLibsDir`: Package prebuilt libraries from this directory instead of building
 //   them. The directory must already have the JNA layout (`<prefix>/<library file>`).
 // - `ouisync.targets`: Comma separated list of target triples to build for. Defaults to the host
-//   target.
+//   target. Android targets are ignored (they are used by `ouisync-service-android`).
 // - `ouisync.cargo`: Tool to use to build the targets from `ouisync.targets` (`cargo` or `cross`).
 //   Defaults to `cross`. The host target is always built with `cargo`.
 // - `ouisync.cargoProfile`: Cargo profile to use (`release` or `debug`). Defaults to `release`.
 
 def nativeLibsDir = providers.gradleProperty('ouisync.nativeLibsDir')
 def targets = providers.gradleProperty('ouisync.targets')
-    .map { it.split(',').collect { it.trim() }.findAll { !it.isEmpty() } }
+    .map { it.split(',').collect { it.trim() }.findAll { !it.isEmpty() && !RustTarget.isAndroid(it) } }
 def cargoTool = providers.gradleProperty('ouisync.cargo').orElse('cross')
 def cargoRelease = providers.gradleProperty('ouisync.cargoProfile').orElse('release')
     .map { profile ->
@@ -88,10 +88,26 @@ if (!nativeLibsDir.isPresent()) {
     }
 }
 
+if (!nativeLibsDir.isPresent()) {
+    tasks.register('cargoBuild') {
+        group = 'rust'
+        description = 'Builds the rust crate for all requested targets'
+        dependsOn cargoTasks
+
+        if (cargoTasks.isEmpty()) {
+            // Fail only when the native libraries are actually needed so that this doesn't break
+            // builds of the other projects.
+            doFirst { throw new GradleException('No non-android targets to build the rust crate for') }
+        }
+    }
+}
+
 tasks.named('processResources') {
     if (nativeLibsDir.isPresent()) {
         from(nativeLibsDir)
     } else {
+        dependsOn 'cargoBuild'
+
         cargoTasks.each { cargoTask ->
             from(cargoTask) {
                 into { RustTarget.jnaResourcePrefix(cargoTask.get().target.get()) }

@@ -37,6 +37,9 @@ object RustTarget {
             "i686-linux-android" to "x86",
         )
 
+    /** Whether the given target triple is an android target. */
+    @JvmStatic fun isAndroid(target: String): Boolean = target.contains("-android")
+
     /** Android ABI (e.g., `arm64-v8a`) corresponding to the given target triple. */
     @JvmStatic
     fun toAndroidAbi(target: String): String = androidAbis[target] ?: error("Unsupported android target: $target")

@@ -48,18 +48,38 @@ dependencies {
 def rustCratesDir = file("$rootDir/../..")
 def rustOutputDir = file("$buildDir/rustJniLibs")
 
-// Flutter passes -Ptarget-platform for the device(s) being targeted.
+// The targets to build for are controlled by the following properties (at most one of them can be
+// provided):
+//
+// - `ouisync.targets`: Comma separated list of target triples to build for. Non-android targets are
+//   ignored (they are used by `ouisync-service-jvm`).
+// - `target-platform`: Comma separated list of flutter target platforms (e.g., `android-arm64`).
+//   Flutter passes this for the device(s) being targeted.
+//
+// If neither is provided, builds for all the supported targets.
+
 def flutterPlatformToTarget = [
     'android-arm'  : 'armv7-linux-androideabi',
     'android-arm64': 'aarch64-linux-android',
     'android-x64'  : 'x86_64-linux-android',
 ]
 def allTargets = flutterPlatformToTarget.values().toList()
-def requestedTargets = project.hasProperty('target-platform')
-    ? project.property('target-platform').split(',')
-             .collect { flutterPlatformToTarget[it.trim()] }
-             .findAll { it != null }
-    : allTargets
+
+def splitList = { String value -> value.split(',').collect { it.trim() }.findAll { !it.isEmpty() } }
+def targetsProperty = providers.gradleProperty('ouisync.targets')
+def flutterPlatformProperty = providers.gradleProperty('target-platform')
+
+if (targetsProperty.isPresent() && flutterPlatformProperty.isPresent()) {
+    throw new GradleException("Only one of 'ouisync.targets' and 'target-platform' can be provided")
+}
+
+def requestedTargets = targetsProperty.isPresent()
+    ? splitList(targetsProperty.get()).findAll { RustTarget.isAndroid(it) }
+    : flutterPlatformProperty.isPresent()
+        ? splitList(flutterPlatformProperty.get())
+            .collect { flutterPlatformToTarget[it] }
+            .findAll { it != null }
+        : allTargets
 
 // For each build type and requested target define a task to build the rust library using the
 // corresponding cargo profile and hook it into the build.
@@ -99,6 +119,12 @@ android.buildTypes.all { buildType ->
         group = 'rust'
         description = "Builds the rust crate for $name (all requested ABIs)"
         dependsOn cargoTasks
+
+        if (cargoTasks.isEmpty()) {
+            // Fail only when the native libraries are actually needed so that this doesn't break
+            // builds of the other projects.
+            doFirst { throw new GradleException('No android targets to build the rust crate for') }
+        }
     }
 
     tasks.whenTaskAdded { task ->
