@@ -84,3 +84,11 @@ nexusPublishing {
     }
 }
 
+// The publications of all the subprojects are registered in this project, so signing is configured
+// here too.
+signing {
+    // Only require signing when publishing to sonatype, not local. Note this needs to be a closure
+    // so it's evaluated only after the task graph has been populated.
+    required = { gradle.taskGraph.allTasks.any { it.name.endsWith('ToSonatypeRepository') } }
+}
+

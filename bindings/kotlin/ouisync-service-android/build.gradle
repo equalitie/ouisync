@@ -164,11 +164,6 @@ afterEvaluate {
 }
 
 project.parent.signing {
-    // Only sign when publishing to sonatype, not local
-    required = libraryVariants.any { variant ->
-        gradle.taskGraph.hasTask("publish${variant.capitalize()}ServiceAndroidPublicationToSonatypeRepository")
-    }
-
     if (project.signingKey) {
         useInMemoryPgpKeys(
             project.signingKeyId,

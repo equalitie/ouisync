@@ -97,9 +97,6 @@ project.parent.publishing {
 }
 
 project.parent.signing {
-    // Only sign when publishing to sonatype, not local
-    required = gradle.taskGraph.hasTask("publishSessionPublicationToSonatypeRepository")
-
     if (project.signingKey) {
         useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
     }
