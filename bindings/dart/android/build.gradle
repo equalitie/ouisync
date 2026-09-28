@@ -62,8 +62,8 @@ android {
 
         implementation        'ie.equalit.ouinet:ouisync-session:+'
 
-        debugImplementation   'ie.equalit.ouinet:ouisync-service-debug:+'
-        releaseImplementation 'ie.equalit.ouinet:ouisync-service:+'
+        debugImplementation   'ie.equalit.ouinet:ouisync-service-android-debug:+'
+        releaseImplementation 'ie.equalit.ouinet:ouisync-service-android:+'
 
         implementation        'androidx.lifecycle:lifecycle-runtime-ktx:2.9.4'
 
