@@ -116,10 +116,6 @@ jobs:
             - name: Add rust targets
               run: rustup target add x86_64-linux-android armv7-linux-androideabi aarch64-linux-android
 
-            # Needed to strip the native library for the ouisync-session tests
-            - name: Add llvm-tools
-              run: rustup component add llvm-tools
-
             - name: Setup java
               uses: actions/setup-java@v6
               with:
@@ -143,10 +139,10 @@ jobs:
               run: ./gradlew --stacktrace lint
 
             # The ouisync-session tests use the ouisync-service-jvm package, which builds the native
-            # library for the host (linux).
+            # library for the host (linux). Build it with the debug profile which is faster.
             - name: Run unit tests
               working-directory: bindings/kotlin
-              run: ./gradlew --stacktrace testDebugUnitTest :ouisync-session:test
+              run: ./gradlew --stacktrace testDebugUnitTest :ouisync-session:test -Pouisync.profile=debug
 
             - name: Run instrumented tests
               uses: reactivecircus/android-emulator-runner@v2
