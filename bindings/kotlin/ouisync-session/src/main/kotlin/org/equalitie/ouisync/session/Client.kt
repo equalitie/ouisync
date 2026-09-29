@@ -112,20 +112,19 @@ internal class Client private constructor(private val socket: AsynchronousSocket
         val deferred = CompletableDeferred<ResponseResult>()
         messageMatcher.register(id, deferred)
 
-        val response = try {
-            send(id, request)
-            deferred.await()
-        } catch (e: CancellationException) {
+        val response =
             try {
-                withContext(NonCancellable) {
-                    invoke(Request.Cancel(MessageId(id)))
+                send(id, request)
+                deferred.await()
+            } catch (e: CancellationException) {
+                try {
+                    withContext(NonCancellable) { invoke(Request.Cancel(MessageId(id))) }
+                } catch (cancelException: Exception) {
+                    e.addSuppressed(cancelException)
                 }
-            } catch (cancelException: Exception) {
-                e.addSuppressed(cancelException)
-            }
 
-            throw e
-        }
+                throw e
+            }
 
         when (response) {
             is ResponseResult.Success -> return response.value
@@ -240,8 +239,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
 private data class LocalEndpoint(
     val port: Int,
     val addr: InetAddress = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)),
-    @SerialName("auth_key")
-    val authKey: String
+    @SerialName("auth_key") val authKey: String,
 )
 
 @Serializable
