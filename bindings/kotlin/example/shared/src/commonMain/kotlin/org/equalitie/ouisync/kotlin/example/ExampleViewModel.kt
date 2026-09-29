@@ -125,7 +125,11 @@ class ExampleViewModel(
 
     private suspend fun openRepositories() {
         val session = this.session ?: return
-        repositories = repositories + session.listRepositories()
+
+        // `listRepositories` returns the repositories keyed by their paths, but we key them by
+        // their names (which is also what `createRepository` takes).
+        repositories =
+            repositories + session.listRepositories().values.associateBy { it.getShortName() }
     }
 
     /**
