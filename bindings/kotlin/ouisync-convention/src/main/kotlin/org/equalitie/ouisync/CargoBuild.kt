@@ -11,6 +11,7 @@ import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
 import org.gradle.process.ExecOperations
+import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.inject.Inject
 
@@ -38,6 +39,14 @@ constructor(
     /** Whether to build with the release profile (otherwise debug). Defaults to `true`. */
     @get:Input abstract val release: Property<Boolean>
 
+    /**
+     * Whether to strip the symbols from the library. Only the copy in [outputDir] is stripped, the
+     * original in the cargo target dir is kept intact. Requires `llvm-strip` from the `llvm-tools`
+     * rustup component. Ignored with `cargo-ndk` (which strips the library itself) and for MSVC
+     * targets (which keep the symbols in separate files). Defaults to `false`.
+     */
+    @get:Input abstract val strip: Property<Boolean>
+
     /** Root directory of the cargo workspace. */
     @get:Internal abstract val workspaceDir: DirectoryProperty
 
@@ -61,6 +70,7 @@ constructor(
         hostTarget.convention(RustTarget.host(providers))
         target.convention(hostTarget)
         release.convention(true)
+        strip.convention(false)
 
         doNotTrackState("state is tracked by cargo")
     }
@@ -144,6 +154,52 @@ constructor(
         outputDir.deleteRecursively()
         outputDir.mkdirs()
 
-        srcFile.copyTo(outputDir.resolve(fileName))
+        val dstFile = outputDir.resolve(fileName)
+        srcFile.copyTo(dstFile)
+
+        if (strip.get() && tool != "cargo-ndk" && !target.endsWith("-msvc")) {
+            stripLibrary(dstFile, target, workspaceDir)
+        }
+    }
+
+    private fun stripLibrary(file: File, target: String, workspaceDir: File) {
+        val llvmStrip = findLlvmStrip(workspaceDir)
+
+        execOperations.exec {
+            executable = llvmStrip.absolutePath
+
+            // Same as what rustc does with `-C strip=symbols`: on Apple platforms remove only the
+            // local symbols (`-x`), elsewhere remove all the symbols not needed for dynamic linking.
+            if (target.contains("-apple-")) {
+                args("-x")
+            } else {
+                args("--strip-all")
+            }
+
+            args(file.absolutePath)
+        }
+    }
+
+    // Finds `llvm-strip` from the `llvm-tools` rustup component of the active toolchain.
+    private fun findLlvmStrip(workspaceDir: File): File {
+        val output = ByteArrayOutputStream()
+        execOperations.exec {
+            workingDir = workspaceDir
+            commandLine("rustc", "--print", "sysroot")
+            standardOutput = output
+        }
+
+        val sysroot = File(output.toString().trim())
+        val host = hostTarget.get()
+        val exe = if (host.contains("-windows")) "llvm-strip.exe" else "llvm-strip"
+        val file = sysroot.resolve("lib/rustlib/$host/bin/$exe")
+
+        if (!file.exists()) {
+            throw GradleException(
+                "llvm-strip not found at '$file'. Install it with `rustup component add llvm-tools`.",
+            )
+        }
+
+        return file
     }
 }

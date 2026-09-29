@@ -116,6 +116,10 @@ jobs:
             - name: Add rust targets
               run: rustup target add x86_64-linux-android armv7-linux-androideabi aarch64-linux-android
 
+            # Needed to strip the native library for the ouisync-session tests
+            - name: Add llvm-tools
+              run: rustup component add llvm-tools
+
             - name: Setup java
               uses: actions/setup-java@v6
               with:
@@ -225,6 +229,10 @@ jobs:
 
             - name: Add rust target
               run: rustup target add ${{ matrix.target }}
+
+            # Needed to strip the native library
+            - name: Add llvm-tools
+              run: rustup component add llvm-tools
 
             - uses: Swatinem/rust-cache@v2
               with:

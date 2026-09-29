@@ -52,7 +52,9 @@ java {
 //   target. Android targets are ignored (they are used by `ouisync-service-android`).
 // - `ouisync.cargo`: Tool to use to build the targets from `ouisync.targets` (`cargo` or `cross`).
 //   Defaults to `cross`. The host target is always built with `cargo`.
-// - `ouisync.cargoProfile`: Cargo profile to use (`release` or `debug`). Defaults to `release`.
+// - `ouisync.cargoProfile`: Cargo profile to use (`release` or `debug`). Defaults to `release`. The
+//   release libraries are stripped, which requires the `llvm-tools` rustup component
+//   (`rustup component add llvm-tools`).
 
 def nativeLibsDir = providers.gradleProperty('ouisync.nativeLibsDir')
 def targets = providers.gradleProperty('ouisync.targets')
@@ -73,6 +75,8 @@ def configureCargoTask = { task, outputDirName ->
     task.packageName = 'ouisync-service'
     task.libraryName = 'ouisync_service'
     task.release = cargoRelease
+    // Strip the release libraries to reduce the package size.
+    task.strip = cargoRelease
     task.outputDir = layout.buildDirectory.dir("rustLibs/$outputDirName")
 }
 
