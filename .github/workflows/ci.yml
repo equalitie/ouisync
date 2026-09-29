@@ -5,6 +5,9 @@ on: [push]
 env:
     PROPTEST_CASES: 32
     RUST_BACKTRACE: 1
+    # Version (git revision) of cross to use. When updating it, update also the pinned images in
+    # Cross.toml.
+    CROSS_REV: 74e99b2223de06166f8cdcc1af7f1308ec52baf4
 
 jobs:
     check_rust_crates:
@@ -64,7 +67,7 @@ jobs:
 
             - name: Install cross
               if: matrix.cargo-command == 'cross'
-              run: cargo install cross --force --git https://github.com/cross-rs/cross
+              run: cargo install cross --force --git https://github.com/cross-rs/cross --rev $CROSS_REV
 
             - name: Run clippy
               run: >
@@ -245,7 +248,7 @@ jobs:
 
             - name: Install cross
               if: matrix.cargo-command == 'cross'
-              run: cargo install cross --force --git https://github.com/cross-rs/cross
+              run: cargo install cross --force --git https://github.com/cross-rs/cross --rev $CROSS_REV
 
             # Builds the library into `build/ouisync-service-jvm/rustLibs/<jna prefix>/`, which is
             # the layout expected by the `ouisync.nativeLibsDir` property.
@@ -533,7 +536,7 @@ jobs:
 
             - name: Install cross
               if: matrix.cargo-command == 'cross'
-              run: cargo install cross --force --git https://github.com/cross-rs/cross
+              run: cargo install cross --force --git https://github.com/cross-rs/cross --rev $CROSS_REV
 
             - name: Build package
               working-directory: bindings/python/service
