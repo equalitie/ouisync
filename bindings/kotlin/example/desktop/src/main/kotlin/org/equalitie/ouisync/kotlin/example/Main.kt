@@ -3,6 +3,8 @@ package org.equalitie.ouisync.kotlin.example
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
+import kotlinx.coroutines.runBlocking
+import kotlin.system.exitProcess
 
 fun main(args: Array<String>) {
     // The directory to store the app data in can be passed as the first argument. This is useful
@@ -14,7 +16,8 @@ fun main(args: Array<String>) {
 
     val viewModel = ExampleViewModel(configDir, storeDir)
 
-    application {
+    // Don't exit the process immediately when the app exits so we can clean up first.
+    application(exitProcessOnExit = false) {
         Window(
             onCloseRequest = ::exitApplication,
             title = "Ouisync Kotlin bindings example",
@@ -22,4 +25,10 @@ fun main(args: Array<String>) {
             MaterialTheme { ExampleApp(viewModel) }
         }
     }
+
+    // The view model is not managed by any `ViewModelStore` here (so `onCleared` is never called),
+    // so close it explicitly.
+    runBlocking { viewModel.close() }
+
+    exitProcess(0)
 }
