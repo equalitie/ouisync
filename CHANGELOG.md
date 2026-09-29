@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-<!--## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.10.1...master)-->
+## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.10.1...master)
+
+- Add support for desktop JVM (Linux, macOS and Windows, each on x86_64 and arm64) to the Kotlin
+  bindings (new `ouisync-service-jvm` package), making them usable also in Kotlin Multiplatform apps
+- **Breaking:** Rename the Kotlin `ouisync-service` package to `ouisync-service-android`
+- **Breaking:** Stop publishing the debug variants of the Kotlin packages (`ouisync-service-debug`,
+  `ouisync-android-debug`)
 
 ## [v0.10.1](https://github.com/equalitie/ouisync/compare/v0.10.0...v0.10.1) - 2026-09-24
 

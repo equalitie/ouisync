@@ -40,6 +40,11 @@ different target (cross-compiling), set:
   host), to a cargo-compatible binary that can, such as [`cross`](https://github.com/cross-rs/cross).
   Defaults to plain `cargo`.
 
+Alternatively, to bundle an already built library instead of building it, set `OUISYNC_PREBUILT_LIB`
+to its path. It must match the target the wheel is built for (`OUISYNC_TARGET`, or the host if
+unset). CI uses this to share the native libraries with the kotlin bindings instead of building them
+twice.
+
 On an unsupported host platform (with `OUISYNC_TARGET` unset) the hook skips bundling with a warning,
 and `pip install`/`pip install -e .` still works, just without a bundled library (see "Tests" below).
 
@@ -47,8 +52,8 @@ The build hook itself tags linux wheels as plain `linux_x86_64`/`linux_aarch64`,
 compatibility-check the way it does `manylinux_*`/`musllinux_*` tags. CI repairs this: after building,
 it runs [`auditwheel repair`](https://github.com/pypa/auditwheel) on the two linux legs, which inspects
 the glibc symbol versions actually used by the bundled library and re-tags the wheel with the real
-(and pip-checked) `manylinux_*` tag -- currently `manylinux_2_34_*`, since that's what the ubuntu-24.04
-build environment's glibc floor works out to. A wheel built locally outside CI (e.g. via
+(and pip-checked) `manylinux_*` tag, determined by the glibc of the (pinned, see `Cross.toml`)
+[`cross`](https://github.com/cross-rs/cross) images the linux libraries are built in. A wheel built locally outside CI (e.g. via
 `python -m build`) keeps the plain `linux_*` tag unless you run `auditwheel repair` on it yourself.
 
 At runtime, `ouisync.service` looks for the native library in this order:

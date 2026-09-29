@@ -22,13 +22,14 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    kotlin {
-        jvmToolchain(17)
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     publishing {
+        // Only the release variant is published, the debug one is meant only for local use.
         singleVariant 'release'
-        singleVariant 'debug'
     }
 }
 
@@ -36,7 +37,7 @@ android {
 dependencies {
     def kotlinx_coroutines_version = '1.10.2'
 
-    implementation project(':ouisync-service')
+    implementation project(':ouisync-service-android')
     implementation project(':ouisync-session')
 
     // HACK: Using `implementation` here fails compilation in the downstream packages for some
@@ -53,49 +54,38 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
 }
 
-def libraryVariants = []
-
-androidComponents {
-    onVariants(selector().all()) { variant ->
-        libraryVariants.add(variant.name);
-    }
-}
-
+// Only the release variant is published (see `singleVariant` above).
 afterEvaluate {
     project.parent.publishing {
         publications {
-            libraryVariants.each { variant ->
-                def packageNameSuffix = variant == 'release' ? '' : "-${variant}"
+            releaseAndroid(MavenPublication) {
+                def packageName = project.name
 
-                create("${variant}Android", MavenPublication) {
-                    def packageName = "${project.name}${packageNameSuffix}"
+                from components.release
 
-                    from components.getByName(variant)
+                artifactId = packageName
 
-                    artifactId = packageName
-
-                    pom {
-                        name = packageName
-                        description = "Secure peer-to-peer file syncing library (android components)"
-                        url = 'https://github.com/equalitie/ouisync'
-                        licenses {
-                            license {
-                                name = 'MPL-2.0'
-                                url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
-                            }
+                pom {
+                    name = packageName
+                    description = "Secure peer-to-peer file syncing library (android components)"
+                    url = 'https://github.com/equalitie/ouisync'
+                    licenses {
+                        license {
+                            name = 'MPL-2.0'
+                            url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
                         }
-                        developers {
-                            developer {
-                                name = 'Ouisync Developers'
-                                email = 'ouisync@equalit.ie'
-                            }
+                    }
+                    developers {
+                        developer {
+                            name = 'Ouisync Developers'
+                            email = 'ouisync@equalit.ie'
                         }
+                    }
 
-                        scm {
-                            connection = 'scm:git:github.com/equalitie/ouisync.git'
-                            developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
-                            url = 'https://github.com/equalitie/ouisync/tree/master/bindings/kotlin'
-                        }
+                    scm {
+                        connection = 'scm:git:github.com/equalitie/ouisync.git'
+                        developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
+                        url = 'https://github.com/equalitie/ouisync/tree/master/bindings/kotlin'
                     }
                 }
             }
@@ -104,11 +94,6 @@ afterEvaluate {
 }
 
 project.parent.signing {
-    // Only sign when publishing to sonatype, not local
-    required = libraryVariants.any { variant ->
-        gradle.taskGraph.hasTask("publish${variant}AndroidPublicationToSonatypeRepository")
-    }
-
     if (project.signingKey) {
         useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
     }

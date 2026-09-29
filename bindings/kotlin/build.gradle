@@ -12,12 +12,13 @@ plugins {
 
 dependencies {
     dokka project(':ouisync-android')
-    dokka project(':ouisync-service')
+    dokka project(':ouisync-service-common')
     dokka project(':ouisync-session')
 }
 
 subprojects {
-    layout.buildDirectory.set(rootProject.layout.buildDirectory.dir(name))
+    // Mirror the project hierarchy (e.g., `:example:android` -> `build/example/android`).
+    layout.buildDirectory.set(rootProject.layout.buildDirectory.dir(path.substring(1).replace(':', '/')))
 }
 
 
@@ -55,6 +56,15 @@ def cargoVersion = (cargoManifest =~ cargoVersionPattern)[0][1].trim()
 version = "$cargoVersion-$revision"
 group   = "ie.equalit.ouinet"
 
+// Warn about unknown `ouisync.*` properties (e.g., typos), which would otherwise be silently
+// ignored. Keep in sync with the properties used by the subprojects (see also README.md).
+def knownProperties = ['ouisync.targets', 'ouisync.cargo', 'ouisync.profile', 'ouisync.nativeLibsDir']
+providers.gradlePropertiesPrefixedBy('ouisync.').get().keySet().sort().each { name ->
+    if (!(name in knownProperties)) {
+        logger.warn("Warning: Unknown property '$name' (known properties: ${knownProperties.join(', ')})")
+    }
+}
+
 tasks.register('printVersion') {
     doLast {
         println version
@@ -82,5 +92,13 @@ nexusPublishing {
             snapshotRepositoryUrl.set(uri("https://central.sonatype.com/repository/maven-snapshots/"))
         }
     }
+}
+
+// The publications of all the subprojects are registered in this project, so signing is configured
+// here too.
+signing {
+    // Only require signing when publishing to sonatype, not local. Note this needs to be a closure
+    // so it's evaluated only after the task graph has been populated.
+    required = { gradle.taskGraph.allTasks.any { it.name.endsWith('ToSonatypeRepository') } }
 }
 

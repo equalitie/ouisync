@@ -27,12 +27,8 @@ include ":app"
 
 includeBuild('../../../kotlin') {
     dependencySubstitution {
-        substitute module('ie.equalit.ouinet:ouisync-android')       using project(':ouisync-android')
-        substitute module('ie.equalit.ouinet:ouisync-android-debug') using project(':ouisync-android')
-
-        substitute module('ie.equalit.ouinet:ouisync-session')       using project(':ouisync-session')
-
-        substitute module('ie.equalit.ouinet:ouisync-service')       using project(':ouisync-service')
-        substitute module('ie.equalit.ouinet:ouisync-service-debug') using project(':ouisync-service')
+        substitute module('ie.equalit.ouinet:ouisync-android')         using project(':ouisync-android')
+        substitute module('ie.equalit.ouinet:ouisync-session')         using project(':ouisync-session')
+        substitute module('ie.equalit.ouinet:ouisync-service-android') using project(':ouisync-service-android')
     }
 }

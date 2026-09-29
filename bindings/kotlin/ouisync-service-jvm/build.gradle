@@ -1,0 +1,247 @@
+import org.equalitie.ouisync.CargoBuild
+import org.equalitie.ouisync.RustTarget
+import org.gradle.api.file.RelativePath
+
+plugins {
+    id 'java-library'
+    id 'org.equalitie.ouisync.convention'
+}
+
+version = rootProject.version
+group   = rootProject.group
+
+// This package contains no code of its own. It bundles the `ouisync-service-common` package with
+// the native libraries for desktop platforms (linux, macos, windows) and the desktop flavor of JNA.
+
+dependencies {
+    api project(':ouisync-service-common')
+    api 'net.java.dev.jna:jna:5.17.0'
+}
+
+// Both this package and `ouisync-service-android` provide the `ouisync-service` capability, so that
+// gradle reports a conflict if both of them end up in the same dependency graph. Declaring a
+// capability explicitly removes the implicit one (`<group>:<name>`), so it needs to be declared too.
+['apiElements', 'runtimeElements'].each { name ->
+    configurations.named(name) {
+        outgoing.capability("${project.group}:${project.name}:${project.version}")
+        outgoing.capability("${project.group}:ouisync-service:${project.version}")
+    }
+}
+
+java {
+    // Build with any JDK >= 17 but target Java 17. There is no code here but this also determines
+    // the minimal JVM version consumers of this package need.
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+
+    // Include javadoc and sources jars - this is needed for publishing to Maven Central.
+    withJavadocJar()
+    withSourcesJar()
+}
+
+//--------------------------------------------------------------------------------------------------
+// Build and package the rust library
+//
+// The native libraries are packaged as resources under the paths where JNA looks for them (e.g.,
+// `linux-x86-64/libouisync_service.so`), so JNA can load them directly from the jar.
+//
+// Controlled by the following properties:
+//
+// - `ouisync.nativeLibsDir`: Package prebuilt libraries from this directory instead of building
+//   them. The directory must have the layout `<target triple>/<library file>` (e.g.,
+//   `x86_64-unknown-linux-gnu/libouisync_service.so`).
+// - `ouisync.targets`: Comma separated list of target triples to build for. Defaults to the host
+//   target. Android targets are ignored (they are used by `ouisync-service-android`).
+// - `ouisync.cargo`: Tool to use to build the targets from `ouisync.targets` (`cargo` or `cross`).
+//   Defaults to `cross`. The host target is always built with `cargo`.
+// - `ouisync.profile`: Cargo profile to use (`release` or `debug`). Defaults to `release`. The
+//   release libraries are stripped, which requires the `llvm-tools` rustup component
+//   (`rustup component add llvm-tools`).
+
+def nativeLibsDir = providers.gradleProperty('ouisync.nativeLibsDir')
+def targets = providers.gradleProperty('ouisync.targets')
+    .map { it.split(',').collect { it.trim() }.findAll { !it.isEmpty() && !RustTarget.isAndroid(it) } }
+def cargoTool = providers.gradleProperty('ouisync.cargo').orElse('cross')
+def cargoRelease = providers.gradleProperty('ouisync.profile').orElse('release')
+    .map { profile ->
+        if (!(profile in ['release', 'debug'])) {
+            throw new GradleException("Invalid ouisync.profile: '$profile'")
+        }
+        profile == 'release'
+    }
+
+def rustCratesDir = file("$rootDir/../..")
+
+def configureCargoTask = { task, outputDirName ->
+    task.workspaceDir = rustCratesDir
+    task.packageName = 'ouisync-service'
+    task.libraryName = 'ouisync_service'
+    task.release = cargoRelease
+    // Strip the release libraries to reduce the package size.
+    task.strip = cargoRelease
+    task.outputDir = layout.buildDirectory.dir("rustLibs/$outputDirName")
+}
+
+def cargoTasks = []
+
+if (!nativeLibsDir.isPresent()) {
+    if (targets.isPresent()) {
+        targets.get().each { target ->
+            def taskName = 'cargoBuild' + target.split('-').collect { it.capitalize() }.join()
+
+            cargoTasks += tasks.register(taskName, CargoBuild) { task ->
+                description = "Builds the rust crate for $target"
+                configureCargoTask(task, RustTarget.jnaResourcePrefix(target))
+                task.tool = cargoTool
+                task.target = target
+            }
+        }
+    } else {
+        cargoTasks += tasks.register('cargoBuildHost', CargoBuild) { task ->
+            description = 'Builds the rust crate for the host target'
+            configureCargoTask(task, 'host')
+        }
+    }
+}
+
+if (!nativeLibsDir.isPresent()) {
+    tasks.register('cargoBuild') {
+        group = 'rust'
+        description = 'Builds the rust crate for all requested targets'
+        dependsOn cargoTasks
+
+        if (cargoTasks.isEmpty()) {
+            // Fail only when the native libraries are actually needed so that this doesn't break
+            // builds of the other projects.
+            doFirst { throw new GradleException('No non-android targets to build the rust crate for') }
+        }
+    }
+}
+
+tasks.named('processResources') {
+    if (nativeLibsDir.isPresent()) {
+        from(nativeLibsDir) {
+            // Don't package the (now empty) `<target triple>` directories.
+            includeEmptyDirs = false
+
+            // Move each library from `<target triple>/` to `<jna prefix>/`.
+            eachFile { details ->
+                def segments = details.relativePath.segments
+
+                if (segments.length != 2) {
+                    throw new GradleException(
+                        "Unexpected file in ouisync.nativeLibsDir: '${details.relativePath}' " +
+                        "(expected '<target triple>/<library file>')"
+                    )
+                }
+
+                details.relativePath = new RelativePath(true, RustTarget.jnaResourcePrefix(segments[0]), segments[1])
+            }
+        }
+    } else {
+        dependsOn 'cargoBuild'
+
+        cargoTasks.each { cargoTask ->
+            from(cargoTask) {
+                into { RustTarget.jnaResourcePrefix(cargoTask.get().target.get()) }
+            }
+        }
+    }
+}
+
+// The package published to Maven Central must contain the (release) native libraries for all the
+// supported platforms. By default only the one for the host is built, so verify it before
+// publishing. The libraries for all the platforms are built on CI and passed in using
+// `ouisync.nativeLibsDir`.
+def supportedTargets = [
+    'x86_64-unknown-linux-gnu',
+    'aarch64-unknown-linux-gnu',
+    'x86_64-pc-windows-msvc',
+    'aarch64-pc-windows-msvc',
+    'x86_64-apple-darwin',
+    'aarch64-apple-darwin',
+]
+
+def verifyNativeLibs = tasks.register('verifyNativeLibs') {
+    group = 'verification'
+    description = 'Verifies that the package contains the release native libraries for all the supported platforms'
+
+    def resourcesDir = tasks.named('processResources').map { it.destinationDir }
+    def release = cargoRelease
+    dependsOn 'processResources'
+
+    doLast {
+        if (!release.get()) {
+            throw new GradleException('The native libraries must be built with the release profile (ouisync.profile=release)')
+        }
+
+        def missing = supportedTargets.findAll { target ->
+            def path = "${RustTarget.jnaResourcePrefix(target)}/${RustTarget.libraryFileName(target, 'ouisync_service')}"
+            !new File(resourcesDir.get(), path).isFile()
+        }
+
+        if (!missing.isEmpty()) {
+            throw new GradleException(
+                "Native libraries missing for: ${missing.join(', ')}. Build them for all the " +
+                "supported platforms (e.g., on CI) and pass them in using -Pouisync.nativeLibsDir=<dir>."
+            )
+        }
+    }
+}
+
+// Verify only when publishing to Maven Central, not when publishing locally.
+rootProject.tasks.matching { it.name == 'publishServiceJvmPublicationToSonatypeRepository' }.configureEach {
+    dependsOn verifyNativeLibs
+}
+
+//--------------------------------------------------------------------------------------------------
+// Publication and signing
+
+project.parent.publishing {
+    publications {
+        serviceJvm(MavenPublication) {
+            def packageName = project.name
+
+            from components.java
+
+            artifactId = packageName
+
+            // The capabilities declared above can't be represented in the pom. That's expected,
+            // they are in the gradle module metadata.
+            suppressPomMetadataWarningsFor('apiElements')
+            suppressPomMetadataWarningsFor('runtimeElements')
+
+            pom {
+                name = packageName
+                description = "Secure peer-to-peer file syncing library (service component for desktop JVM)"
+                url = 'https://github.com/equalitie/ouisync'
+                licenses {
+                    license {
+                        name = 'MPL-2.0'
+                        url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
+                    }
+                }
+                developers {
+                    developer {
+                        name = 'Ouisync Developers'
+                        email = 'ouisync@equalit.ie'
+                    }
+                }
+
+                scm {
+                    connection = 'scm:git:github.com/equalitie/ouisync.git'
+                    developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
+                    url = 'https://github.com/equalitie/ouisync/tree/master/bindings/kotlin'
+                }
+            }
+        }
+    }
+}
+
+project.parent.signing {
+    if (project.signingKey) {
+        useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
+    }
+
+    sign project.publishing.publications
+}

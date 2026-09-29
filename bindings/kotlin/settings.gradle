@@ -13,6 +13,10 @@ dependencyResolutionManagement {
 rootProject.name = 'ouisync'
 
 include 'ouisync-android'
-include 'ouisync-service'
+include 'ouisync-service-android'
+include 'ouisync-service-common'
+include 'ouisync-service-jvm'
 include 'ouisync-session'
-include 'example'
+include 'example:shared'
+include 'example:android'
+include 'example:desktop'

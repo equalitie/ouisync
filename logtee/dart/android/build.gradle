@@ -1,3 +1,6 @@
+import org.equalitie.ouisync.CargoBuild
+import org.equalitie.ouisync.RustTarget
+
 buildscript {
     repositories {
         google()
@@ -37,65 +40,78 @@ android {
             abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
         }
     }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
 }
 
 kotlin {
-    jvmToolchain(17)
+    compilerOptions {
+        // Needs to match `compileOptions.targetCompatibility` above.
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
 }
 
 // Build and package the rust library
-def rustCrateDir = file("$projectDir/../../rust")
-def rustOutputDir = file("$buildDir/rustJniLibs")
+
+def rustWorkspaceDir = file("$projectDir/../../..")
+// NOTE: Not `rustJniLibs` which had a different layout previously and whose content, if left over
+// from old builds, would otherwise get packaged as well.
+def rustOutputDir = file("$buildDir/rustLibs")
 
 // Flutter passes -Ptarget-platform for the device(s) being targeted.
-def flutterPlatformToAbi = [
-    'android-arm'  : 'armeabi-v7a',
-    'android-arm64': 'arm64-v8a',
-    'android-x64'  : 'x86_64',
+def flutterPlatformToTarget = [
+    'android-arm'  : 'armv7-linux-androideabi',
+    'android-arm64': 'aarch64-linux-android',
+    'android-x64'  : 'x86_64-linux-android',
 ]
-def allAbis = flutterPlatformToAbi.values().toList()
-def requestedAbis = project.hasProperty('target-platform')
+def allTargets = flutterPlatformToTarget.values().toList()
+def requestedTargets = project.hasProperty('target-platform')
     ? project.property('target-platform').split(',')
-             .collect { flutterPlatformToAbi[it.trim()] }
+             .collect { flutterPlatformToTarget[it.trim()] }
              .findAll { it != null }
-    : allAbis
+    : allTargets
 
-// For each build type define a task to build the rust library using the corresponding cargo profile
-// and hook it into the build.
+// For each build type and requested target define a task to build the rust library using the
+// corresponding cargo profile and hook it into the build.
 android.buildTypes.all { buildType ->
     def name = buildType.name
-    def outputDir = file("$rustOutputDir/$name")
-    def taskName = "cargoBuild${name.capitalize()}"
 
-    android.sourceSets.maybeCreate(name).jniLibs.srcDir(outputDir)
+    def cargoTasks = requestedTargets.collect { target ->
+        def abi = RustTarget.toAndroidAbi(target)
+        def taskName = "cargoBuild${name.capitalize()}" +
+            target.split('-').collect { it.capitalize() }.join()
 
-    tasks.register(taskName, Exec) {
+        // Each ABI gets its own jniLibs dir, so that libraries for ABIs which are not requested
+        // (e.g., left over from previous builds) don't get packaged.
+        def jniLibsDir = file("$rustOutputDir/$name/$abi")
+        android.sourceSets.maybeCreate(name).jniLibs.srcDir(jniLibsDir)
+
+        tasks.register(taskName, CargoBuild) { task ->
+            description = "Builds the rust crate for $name ($abi)"
+
+            task.tool = 'cargo-ndk'
+            task.target = target
+            task.ndkDir = androidComponents.sdkComponents.ndkDirectory
+
+            if (android.defaultConfig.minSdk != null) {
+                task.androidApiLevel = android.defaultConfig.minSdk
+            }
+
+            task.workspaceDir = rustWorkspaceDir
+            task.packageName = 'logtee'
+            task.libraryName = 'logtee'
+            task.release = name != 'debug'
+            task.outputDir = file("$jniLibsDir/$abi")
+        }
+    }
+
+    tasks.register("cargoBuild${name.capitalize()}") {
         group = 'rust'
-        description = "Builds the rust crate for $name"
-
-        doNotTrackState('state is tracked by cargo')
-
-        workingDir = rustCrateDir
-        executable = "cargo"
-        args = ["ndk", "--output-dir", outputDir.absolutePath]
-
-        requestedAbis.each { abi ->
-            args += ["--target", abi]
-        }
-
-        if (android.defaultConfig.minSdk != null) {
-            args += ['--platform', android.defaultConfig.minSdk as String]
-        }
-
-        args += "build"
-
-        if (name != 'debug') {
-            args += '--release'
-        }
-
-        environment 'ANDROID_NDK_HOME', android.ndkDirectory.absolutePath
-
-        doFirst { outputDir.mkdirs() }
+        description = "Builds the rust crate for $name (all requested ABIs)"
+        dependsOn cargoTasks
     }
 
     tasks.whenTaskAdded { task ->

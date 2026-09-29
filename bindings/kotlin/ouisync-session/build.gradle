@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id 'org.jetbrains.kotlin.jvm'
     id 'java-library'
@@ -19,10 +21,17 @@ dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly    'org.junit.platform:junit-platform-launcher'
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2'
-    testImplementation 'net.java.dev.jna:jna:5.17.0'
+    // The tests run against a real service, including the native library for the host platform
+    // (built by `ouisync-service-jvm`).
+    testImplementation project(':ouisync-service-jvm')
 }
 
 kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
+        freeCompilerArgs.add('-Xjdk-release=17')
+    }
+
     sourceSets {
         main {
             kotlin {
@@ -30,22 +39,15 @@ kotlin {
                 srcDir layout.buildDirectory.dir('gen')
             }
         }
-
-        test {
-            kotlin {
-                // HACK: The tests depend on the `:ouisync-service` project but we can't add it as a
-                // regular test dependency because it's an android library and `:ouisync-session`
-                // is a regular jvm library. There is probably a way to build `:ouisync-service` as
-                // both, but adding the `:ouisync-service`'s sources directly like this is simpler
-                // and good enough for now.
-                srcDir '../ouisync-service/src/main'
-            }
-        }
     }
 }
 
 // Include javadoc and sources jars - this is needed for publishing to Maven Central.
 java {
+    // Build with any JDK >= 17 but target Java 17.
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+
     withJavadocJar()
     withSourcesJar()
 }
@@ -96,9 +98,6 @@ project.parent.publishing {
 }
 
 project.parent.signing {
-    // Only sign when publishing to sonatype, not local
-    required = gradle.taskGraph.hasTask("publishSessionPublicationToSonatypeRepository")
-
     if (project.signingKey) {
         useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
     }
@@ -119,26 +118,12 @@ tasks.register('generateApi', Exec) {
     }
 }
 
-tasks.register('cargoBuildUnitTest', Exec) {
-    description = 'Build the native library for unit tests'
-    workingDir "$rootDir/../.."
-    commandLine 'cargo', 'build', '--package', 'ouisync-service', '--lib'
-}
-
 afterEvaluate {
     // Generate bindings before compiling the kotlin sources. This happens during both
     // 'assemble' and 'test'.
     tasks.named('compileKotlin') {
         dependsOn 'generateApi'
     }
-
-    // Build the native library for the host platform and set 'jna.library.path' to point to
-    // it. This happens only during 'test'.
-    tasks.named('test') {
-        dependsOn 'cargoBuildUnitTest'
-        systemProperty('jna.library.path', "$rootDir/../../target/debug")
-    }
-
 }
 
 dokka {

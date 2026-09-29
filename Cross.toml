@@ -1,3 +1,18 @@
+# The images of the targets used on CI are pinned to specific versions (digests), so that the builds
+# (in particular the glibc version the linux libraries depend on) don't change unexpectedly. They
+# correspond to the version of cross installed on CI (`CROSS_REV` in .github/workflows/ci.yml).
+# When updating cross, update them as well to the digests of the `main` tag of the images
+# (https://github.com/orgs/cross-rs/packages).
+
+[target.x86_64-unknown-linux-gnu]
+image = "@sha256:629f74b46c0b7b0e4dcbef65aede80a2e00cc822d03b6549595d2c85401c98ef"
+
+[target.aarch64-unknown-linux-gnu]
+image = "@sha256:adbd580b3f1c48a278e8352202bc4bc63f6f57f8e7975572cb7d2b7f033e4a0f"
+
+[target.aarch64-linux-android]
+image = "@sha256:542845b8efa0d6df2efb4f15c7803c609d28e64bc09e412a621c8d9d28e09fbd"
+
 [target.x86_64-pc-windows-gnu]
 # The build.rs script in dokan-sys fails because it can't find 'run-detectors'
 # at '/opt/wine-stable/bin' event though it exists at '/usr/bin'.

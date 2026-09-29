@@ -1,0 +1,222 @@
+import org.equalitie.ouisync.CargoBuild
+import org.equalitie.ouisync.RustTarget
+
+plugins {
+    id 'com.android.library'
+    id 'org.equalitie.ouisync.convention'
+}
+
+version = rootProject.version
+group   = rootProject.group
+
+// This package contains no code of its own. It bundles the `ouisync-service-common` package with
+// the native libraries for android and the android flavor of JNA.
+
+android {
+    namespace = 'org.equalitie.ouisync.service'
+
+    compileSdk = 37
+
+    defaultConfig {
+        minSdk = 23
+        targetSdk = 37
+        versionCode = 1
+        versionName = version
+
+        consumerProguardFiles 'proguard-rules.pro'
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    publishing {
+        // Only the release variant is published, the debug one is meant only for local use.
+        singleVariant 'release'
+    }
+}
+
+dependencies {
+    api project(':ouisync-service-common')
+    api 'net.java.dev.jna:jna:5.17.0@aar'
+}
+
+// Both this package and `ouisync-service-jvm` provide the `ouisync-service` capability, so that
+// gradle reports a conflict if both of them end up in the same dependency graph. Declaring a
+// capability explicitly removes the implicit one (`<group>:<name>`), so it needs to be declared too.
+//
+// This applies both to the configurations used by other projects in this build (e.g.,
+// `debugApiElements`) and to the ones used for publishing (e.g., `releaseVariantReleaseApiPublication`).
+configurations.configureEach { configuration ->
+    if (!(configuration.name ==~ /^\w+?(?:Variant\w+?)?(?:Api|Runtime)(?:Elements|Publication)$/)) {
+        return
+    }
+
+    configuration.outgoing.capability("${project.group}:${project.name}:${project.version}")
+    configuration.outgoing.capability("${project.group}:ouisync-service:${project.version}")
+}
+
+//--------------------------------------------------------------------------------------------------
+// Build and package the rust library
+
+def rustCratesDir = file("$rootDir/../..")
+def rustOutputDir = file("$buildDir/rustJniLibs")
+
+// The targets to build for are controlled by the following properties (at most one of them can be
+// provided):
+//
+// - `ouisync.targets`: Comma separated list of target triples to build for. Non-android targets are
+//   ignored (they are used by `ouisync-service-jvm`).
+// - `target-platform`: Comma separated list of flutter target platforms (e.g., `android-arm64`).
+//   Flutter passes this for the device(s) being targeted.
+//
+// If neither is provided, builds for all the supported targets.
+
+def flutterPlatformToTarget = [
+    'android-arm'  : 'armv7-linux-androideabi',
+    'android-arm64': 'aarch64-linux-android',
+    'android-x64'  : 'x86_64-linux-android',
+]
+def allTargets = flutterPlatformToTarget.values().toList()
+
+def splitList = { String value -> value.split(',').collect { it.trim() }.findAll { !it.isEmpty() } }
+def targetsProperty = providers.gradleProperty('ouisync.targets')
+def flutterPlatformProperty = providers.gradleProperty('target-platform')
+
+if (targetsProperty.isPresent() && flutterPlatformProperty.isPresent()) {
+    throw new GradleException("Only one of 'ouisync.targets' and 'target-platform' can be provided")
+}
+
+def requestedTargets = targetsProperty.isPresent()
+    ? splitList(targetsProperty.get()).findAll { RustTarget.isAndroid(it) }
+    : flutterPlatformProperty.isPresent()
+        ? splitList(flutterPlatformProperty.get())
+            .collect { flutterPlatformToTarget[it] }
+            .findAll { it != null }
+        : allTargets
+
+// For each build type and requested target define a task to build the rust library using the
+// corresponding cargo profile and hook it into the build.
+android.buildTypes.all { buildType ->
+    def name = buildType.name
+
+    def cargoTasks = requestedTargets.collect { target ->
+        def abi = RustTarget.toAndroidAbiOrNull(target)
+        def taskName = "cargoBuild${name.capitalize()}" +
+            target.split('-').collect { it.capitalize() }.join()
+
+        if (abi == null) {
+            // Fail only when the native libraries are actually needed so that this doesn't break
+            // builds of the other projects.
+            return tasks.register(taskName) {
+                group = 'rust'
+                description = "Builds the rust crate for $name ($target)"
+                doFirst { throw new GradleException("Unsupported android target: $target") }
+            }
+        }
+
+        // Each ABI gets its own jniLibs dir, so that libraries for ABIs which are not requested
+        // (e.g., left over from previous builds) don't get packaged.
+        def jniLibsDir = file("$rustOutputDir/$name/$abi")
+        android.sourceSets.maybeCreate(name).jniLibs.srcDir(jniLibsDir)
+
+        tasks.register(taskName, CargoBuild) { task ->
+            description = "Builds the rust crate for $name ($abi)"
+
+            task.tool = 'cargo-ndk'
+            task.target = target
+            task.ndkDir = androidComponents.sdkComponents.ndkDirectory
+
+            if (android.defaultConfig.minSdk != null) {
+                task.androidApiLevel = android.defaultConfig.minSdk
+            }
+
+            task.workspaceDir = rustCratesDir
+            task.packageName = 'ouisync-service'
+            task.libraryName = 'ouisync_service'
+            task.release = name != 'debug'
+            task.outputDir = file("$jniLibsDir/$abi")
+        }
+    }
+
+    tasks.register("cargoBuild${name.capitalize()}") {
+        group = 'rust'
+        description = "Builds the rust crate for $name (all requested ABIs)"
+        dependsOn cargoTasks
+
+        if (cargoTasks.isEmpty()) {
+            // Fail only when the native libraries are actually needed so that this doesn't break
+            // builds of the other projects.
+            doFirst { throw new GradleException('No android targets to build the rust crate for') }
+        }
+    }
+
+    tasks.whenTaskAdded { task ->
+        if (task.name == "merge${name.capitalize()}JniLibFolders") {
+            task.dependsOn "cargoBuild${name.capitalize()}"
+        }
+    }
+}
+
+tasks.named('clean') { delete rustOutputDir }
+
+//--------------------------------------------------------------------------------------------------
+// Publication and signing
+
+// Only the release variant is published (see `singleVariant` above).
+afterEvaluate {
+    project.parent.publishing {
+        publications {
+            releaseServiceAndroid(MavenPublication) {
+                def packageName = project.name
+
+                from components.release
+
+                artifactId = packageName
+
+                // The capabilities declared above can't be represented in the pom. That's
+                // expected, they are in the gradle module metadata.
+                ['Api', 'Runtime'].each { usage ->
+                    suppressPomMetadataWarningsFor("releaseVariantRelease${usage}Publication")
+                }
+
+                pom {
+                    name = packageName
+                    description = "Secure peer-to-peer file syncing library (service component for android)"
+                    url = 'https://github.com/equalitie/ouisync'
+                    licenses {
+                        license {
+                            name = 'MPL-2.0'
+                            url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
+                        }
+                    }
+                    developers {
+                        developer {
+                            name = 'Ouisync Developers'
+                            email = 'ouisync@equalit.ie'
+                        }
+                    }
+
+                    scm {
+                        connection = 'scm:git:github.com/equalitie/ouisync.git'
+                        developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
+                        url = 'https://github.com/equalitie/ouisync/tree/master/bindings/kotlin'
+                    }
+                }
+            }
+        }
+    }
+}
+
+project.parent.signing {
+    if (project.signingKey) {
+        useInMemoryPgpKeys(
+            project.signingKeyId,
+            project.signingKey,
+            project.signingPassword
+        )
+    }
+
+    sign project.publishing.publications
+}

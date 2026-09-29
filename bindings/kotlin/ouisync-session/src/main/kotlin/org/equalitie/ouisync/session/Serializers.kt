@@ -2,7 +2,6 @@
 
 package org.equalitie.ouisync.session
 
-import java.net.InetAddress
 import kotlinx.datetime.Instant
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.PrimitiveKind
@@ -17,6 +16,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.encoding.decodeStructure
 import kotlinx.serialization.serializer
+import java.net.InetAddress
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -80,7 +80,5 @@ internal object InetAddressSerializer : KSerializer<InetAddress> {
         encoder.encodeString(value.hostAddress)
     }
 
-    override fun deserialize(decoder: Decoder): InetAddress {
-        return InetAddress.getByName(decoder.decodeString())
-    }
+    override fun deserialize(decoder: Decoder): InetAddress = InetAddress.getByName(decoder.decodeString())
 }

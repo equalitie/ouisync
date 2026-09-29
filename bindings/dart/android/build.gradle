@@ -44,26 +44,21 @@ android {
         targetSdk = 37
     }
 
-    kotlin {
-        jvmToolchain(17)
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     buildTypes {
         debug {
             android.packagingOptions.doNotStrip '**.so'
         }
-        profile {
-        }
     }
 
     dependencies {
-        debugImplementation   'ie.equalit.ouinet:ouisync-android-debug:+'
-        releaseImplementation 'ie.equalit.ouinet:ouisync-android:+'
-
+        implementation        'ie.equalit.ouinet:ouisync-android:+'
         implementation        'ie.equalit.ouinet:ouisync-session:+'
-
-        debugImplementation   'ie.equalit.ouinet:ouisync-service-debug:+'
-        releaseImplementation 'ie.equalit.ouinet:ouisync-service:+'
+        implementation        'ie.equalit.ouinet:ouisync-service-android:+'
 
         implementation        'androidx.lifecycle:lifecycle-runtime-ktx:2.9.4'
 
@@ -81,6 +76,13 @@ android {
                showStandardStreams = true
             }
         }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        // Needs to match `compileOptions.targetCompatibility` above.
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
 }
 

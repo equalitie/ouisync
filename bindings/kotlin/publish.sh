@@ -12,7 +12,7 @@ usage() {
     echo "  $program --all"
     echo "  $program --help"
     echo ""
-    echo "Available packages: session, releaseService, debugService, releaseAndroid, debugAndroid"
+    echo "Available packages: session, serviceCommon, serviceJvm, releaseServiceAndroid, releaseAndroid"
 }
 
 publish() {
@@ -44,7 +44,7 @@ case "$1" in
     usage
     ;;
 "--all")
-    publish "session" "releaseService" "releaseAndroid" "debugService" "debugAndroid"
+    publish "session" "serviceCommon" "serviceJvm" "releaseServiceAndroid" "releaseAndroid"
     ;;
 *)
     publish ${@:1}
