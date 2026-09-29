@@ -130,6 +130,51 @@ tasks.named('processResources') {
     }
 }
 
+// The package published to Maven Central must contain the (release) native libraries for all the
+// supported platforms. By default only the one for the host is built, so verify it before
+// publishing. The libraries for all the platforms are built on CI and passed in using
+// `ouisync.nativeLibsDir`.
+def supportedTargets = [
+    'x86_64-unknown-linux-gnu',
+    'aarch64-unknown-linux-gnu',
+    'x86_64-pc-windows-msvc',
+    'aarch64-pc-windows-msvc',
+    'x86_64-apple-darwin',
+    'aarch64-apple-darwin',
+]
+
+def verifyNativeLibs = tasks.register('verifyNativeLibs') {
+    group = 'verification'
+    description = 'Verifies that the package contains the release native libraries for all the supported platforms'
+
+    def resourcesDir = tasks.named('processResources').map { it.destinationDir }
+    def release = cargoRelease
+    dependsOn 'processResources'
+
+    doLast {
+        if (!release.get()) {
+            throw new GradleException('The native libraries must be built with the release profile (ouisync.profile=release)')
+        }
+
+        def missing = supportedTargets.findAll { target ->
+            def path = "${RustTarget.jnaResourcePrefix(target)}/${RustTarget.libraryFileName(target, 'ouisync_service')}"
+            !new File(resourcesDir.get(), path).isFile()
+        }
+
+        if (!missing.isEmpty()) {
+            throw new GradleException(
+                "Native libraries missing for: ${missing.join(', ')}. Build them for all the " +
+                "supported platforms (e.g., on CI) and pass them in using -Pouisync.nativeLibsDir=<dir>."
+            )
+        }
+    }
+}
+
+// Verify only when publishing to Maven Central, not when publishing locally.
+rootProject.tasks.matching { it.name == 'publishServiceJvmPublicationToSonatypeRepository' }.configureEach {
+    dependsOn verifyNativeLibs
+}
+
 //--------------------------------------------------------------------------------------------------
 // Publication and signing
 
