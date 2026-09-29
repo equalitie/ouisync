@@ -28,8 +28,8 @@ android {
     }
 
     publishing {
+        // Only the release variant is published, the debug one is meant only for local use.
         singleVariant 'release'
-        singleVariant 'debug'
     }
 }
 
@@ -37,13 +37,7 @@ android {
 dependencies {
     def kotlinx_coroutines_version = '1.10.2'
 
-    // Depend on the service package by its published coordinates (substituted with the project
-    // below) so that each variant of this package is published with a dependency on the matching
-    // variant of the service package (`ouisync-android-debug` -> `ouisync-service-android-debug`,
-    // ...). With a plain project dependency, all the variants would depend on the same one.
-    releaseImplementation "${project.group}:ouisync-service-android:${project.version}"
-    debugImplementation   "${project.group}:ouisync-service-android-debug:${project.version}"
-
+    implementation project(':ouisync-service-android')
     implementation project(':ouisync-session')
 
     // HACK: Using `implementation` here fails compilation in the downstream packages for some
@@ -60,56 +54,38 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
 }
 
-configurations.configureEach {
-    resolutionStrategy.dependencySubstitution {
-        substitute module("${project.group}:ouisync-service-android") using project(':ouisync-service-android')
-        substitute module("${project.group}:ouisync-service-android-debug") using project(':ouisync-service-android')
-    }
-}
-
-def libraryVariants = []
-
-androidComponents {
-    onVariants(selector().all()) { variant ->
-        libraryVariants.add(variant.name);
-    }
-}
-
+// Only the release variant is published (see `singleVariant` above).
 afterEvaluate {
     project.parent.publishing {
         publications {
-            libraryVariants.each { variant ->
-                def packageNameSuffix = variant == 'release' ? '' : "-${variant}"
+            releaseAndroid(MavenPublication) {
+                def packageName = project.name
 
-                create("${variant}Android", MavenPublication) {
-                    def packageName = "${project.name}${packageNameSuffix}"
+                from components.release
 
-                    from components.getByName(variant)
+                artifactId = packageName
 
-                    artifactId = packageName
-
-                    pom {
-                        name = packageName
-                        description = "Secure peer-to-peer file syncing library (android components)"
-                        url = 'https://github.com/equalitie/ouisync'
-                        licenses {
-                            license {
-                                name = 'MPL-2.0'
-                                url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
-                            }
+                pom {
+                    name = packageName
+                    description = "Secure peer-to-peer file syncing library (android components)"
+                    url = 'https://github.com/equalitie/ouisync'
+                    licenses {
+                        license {
+                            name = 'MPL-2.0'
+                            url = 'https://github.com/equalitie/ouisync/blob/master/LICENSE'
                         }
-                        developers {
-                            developer {
-                                name = 'Ouisync Developers'
-                                email = 'ouisync@equalit.ie'
-                            }
+                    }
+                    developers {
+                        developer {
+                            name = 'Ouisync Developers'
+                            email = 'ouisync@equalit.ie'
                         }
+                    }
 
-                        scm {
-                            connection = 'scm:git:github.com/equalitie/ouisync.git'
-                            developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
-                            url = 'https://github.com/equalitie/ouisync/tree/master/bindings/kotlin'
-                        }
+                    scm {
+                        connection = 'scm:git:github.com/equalitie/ouisync.git'
+                        developerConnection = 'scm:git:ssh://github.com/equalitie/ouisync.git'
+                        url = 'https://github.com/equalitie/ouisync/tree/master/bindings/kotlin'
                     }
                 }
             }

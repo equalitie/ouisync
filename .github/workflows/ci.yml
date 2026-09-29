@@ -351,9 +351,7 @@ jobs:
                   package ouisync-service-common
                   package ouisync-service-jvm
                   package ouisync-service-android
-                  package ouisync-service-android-debug
                   package ouisync-android
-                  package ouisync-android-debug
 
             - name: Upload session package
               uses: actions/upload-artifact@v7
@@ -379,22 +377,10 @@ jobs:
                   path: ouisync-service-android-${{ steps.version.outputs.version }}.kotlin.tar.gz
                   archive: false
 
-            - name: Upload service android debug package
-              uses: actions/upload-artifact@v7
-              with:
-                  path: ouisync-service-android-debug-${{ steps.version.outputs.version }}.kotlin.tar.gz
-                  archive: false
-
             - name: Upload android package
               uses: actions/upload-artifact@v7
               with:
                   path: ouisync-android-${{ steps.version.outputs.version }}.kotlin.tar.gz
-                  archive: false
-
-            - name: Upload android debug package
-              uses: actions/upload-artifact@v7
-              with:
-                  path: ouisync-android-debug-${{ steps.version.outputs.version }}.kotlin.tar.gz
                   archive: false
 
     check_dart_bindings:
