@@ -1,5 +1,6 @@
 import org.equalitie.ouisync.CargoBuild
 import org.equalitie.ouisync.RustTarget
+import org.gradle.api.file.RelativePath
 
 plugins {
     id 'java-library'
@@ -47,7 +48,8 @@ java {
 // Controlled by the following properties:
 //
 // - `ouisync.nativeLibsDir`: Package prebuilt libraries from this directory instead of building
-//   them. The directory must already have the JNA layout (`<prefix>/<library file>`).
+//   them. The directory must have the layout `<target triple>/<library file>` (e.g.,
+//   `x86_64-unknown-linux-gnu/libouisync_service.so`).
 // - `ouisync.targets`: Comma separated list of target triples to build for. Defaults to the host
 //   target. Android targets are ignored (they are used by `ouisync-service-android`).
 // - `ouisync.cargo`: Tool to use to build the targets from `ouisync.targets` (`cargo` or `cross`).
@@ -118,7 +120,24 @@ if (!nativeLibsDir.isPresent()) {
 
 tasks.named('processResources') {
     if (nativeLibsDir.isPresent()) {
-        from(nativeLibsDir)
+        from(nativeLibsDir) {
+            // Don't package the (now empty) `<target triple>` directories.
+            includeEmptyDirs = false
+
+            // Move each library from `<target triple>/` to `<jna prefix>/`.
+            eachFile { details ->
+                def segments = details.relativePath.segments
+
+                if (segments.length != 2) {
+                    throw new GradleException(
+                        "Unexpected file in ouisync.nativeLibsDir: '${details.relativePath}' " +
+                        "(expected '<target triple>/<library file>')"
+                    )
+                }
+
+                details.relativePath = new RelativePath(true, RustTarget.jnaResourcePrefix(segments[0]), segments[1])
+            }
+        }
     } else {
         dependsOn 'cargoBuild'
 

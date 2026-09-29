@@ -218,7 +218,7 @@ them with `-P<name>=<value>`, e.g.
 | `ouisync.targets`       | Comma separated list of rust target triples to build the native library for. Android targets are used by `ouisync-service-android`, the others by `ouisync-service-jvm` (so a single list can contain targets for both). A package for which the list contains no targets fails to build. Default: all Android targets and the host (desktop) target. |
 | `ouisync.cargo`         | Tool to build the non-host `ouisync-service-jvm` targets with: `cross` (default) or `cargo`. |
 | `ouisync.profile`       | Cargo profile for `ouisync-service-jvm`: `release` (default) or `debug`. |
-| `ouisync.nativeLibsDir` | Build `ouisync-service-jvm` using the prebuilt native libraries from this directory instead of building them. It must have the layout `<platform>/<library>`, e.g. `linux-x86-64/libouisync_service.so`. |
+| `ouisync.nativeLibsDir` | Build `ouisync-service-jvm` using the prebuilt native libraries from this directory instead of building them. It must have the layout `<target triple>/<library>`, e.g. `x86_64-unknown-linux-gnu/libouisync_service.so`. |
 | `target-platform`       | Comma separated list of Flutter target platforms (e.g., `android-arm64`) to build `ouisync-service-android` for. Passed by Flutter; can't be combined with `ouisync.targets`. |
 
 By default, `ouisync-service-jvm` contains the native library for the host platform only. The

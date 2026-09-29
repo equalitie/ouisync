@@ -9,6 +9,12 @@ triples in _TARGETS below, and (if the host can't build that triple
 natively, e.g. linux aarch64 from an x86_64 host) OUISYNC_CARGO to
 "cross" instead of the default "cargo".
 
+To bundle an already built library instead of building it, set
+OUISYNC_PREBUILT_LIB to its path. It must have been built for the target
+the wheel is being built for (OUISYNC_TARGET, or the host if unset). This
+is used on CI, where the native libraries are built once and shared with
+the kotlin bindings.
+
 Each wheel is built for exactly one target -- one wheel per entry in
 _TARGETS, no fat/universal wheels. Linux wheels use plain `linux_*` tags
 rather than `manylinux_*`/`musllinux_*`, so they aren't guaranteed to work
@@ -80,6 +86,30 @@ class CargoBuildHook(BuildHookInterface):
             )
 
         lib_filename, wheel_tag = target
+
+        prebuilt_lib = os.environ.get("OUISYNC_PREBUILT_LIB")
+
+        if prebuilt_lib:
+            lib_path = Path(prebuilt_lib).resolve()
+
+            if not lib_path.is_file():
+                raise ValueError(f"OUISYNC_PREBUILT_LIB {prebuilt_lib!r} is not a file")
+
+            if lib_path.name != lib_filename:
+                raise ValueError(
+                    f"OUISYNC_PREBUILT_LIB {prebuilt_lib!r} doesn't look like a library for "
+                    f"{target_triple} (expected file name {lib_filename!r})"
+                )
+        else:
+            lib_path = self._build(target_triple, host_target_triple, lib_filename)
+
+        build_data["force_include"][str(lib_path)] = f"ouisync/service/_native/{lib_filename}"
+
+        # The wheel now contains a platform-specific native library.
+        build_data["pure_python"] = False
+        build_data["tag"] = f"py3-none-{wheel_tag}"
+
+    def _build(self, target_triple: str, host_target_triple: str | None, lib_filename: str) -> Path:
         cargo_bin = os.environ.get("OUISYNC_CARGO", "cargo")
 
         # self.root is bindings/python/service; the workspace root is three levels up.
@@ -93,7 +123,6 @@ class CargoBuildHook(BuildHookInterface):
             "ouisync-service",
             "--lib",
         ]
-        lib_path = ""
 
         if target_triple == host_target_triple and cargo_bin == "cargo":
             lib_path = workspace_root / "target" / "release" / lib_filename
@@ -104,8 +133,4 @@ class CargoBuildHook(BuildHookInterface):
 
         subprocess.run(args, cwd=workspace_root, check=True)
 
-        build_data["force_include"][str(lib_path)] = f"ouisync/service/_native/{lib_filename}"
-
-        # The wheel now contains a platform-specific native library.
-        build_data["pure_python"] = False
-        build_data["tag"] = f"py3-none-{wheel_tag}"
+        return lib_path

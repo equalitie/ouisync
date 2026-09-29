@@ -170,8 +170,10 @@ jobs:
               working-directory: bindings/kotlin
               run: ./gradlew --stacktrace example:assembleDebug
 
-    build_kotlin_native_libs:
-        name: build kotlin bindings native library (${{ matrix.name }})
+    # Native libraries for the desktop platforms, built once and shared by the kotlin
+    # (ouisync-service-jvm) and python (ouisync.service) packages.
+    build_native_libs:
+        name: build native library (${{ matrix.name }})
         runs-on: ${{ matrix.os }}
         # Build the packages only when pushing version tags (v1.2.3, ...)
         if: startsWith(github.ref, 'refs/tags/v')
@@ -187,41 +189,46 @@ jobs:
                     - macos-aarch64
                     - macos-x86_64
                 include:
-                    # Native libraries for the ouisync-service-jvm package, one matrix leg per
-                    # target triple. The linux targets are built with `cross` (also the native one)
-                    # because its images use an older glibc than the runner, so the library works on
-                    # more distros. The other targets are built with cargo on their native runner,
-                    # except windows-aarch64 which is cross-compiled on the x86_64 one (its image
-                    # includes the MSVC ARM64 build tools).
+                    # One matrix leg per target triple. The linux targets are built with `cross`
+                    # (also the native one) because its images use an older glibc than the runner,
+                    # so the library works on more distros. The other targets are built with cargo
+                    # on their native runner, except windows-aarch64 which is cross-compiled on the
+                    # x86_64 one (its image includes the MSVC ARM64 build tools).
                     - name: linux-x86_64
                       os: ubuntu-24.04
                       target: x86_64-unknown-linux-gnu
                       cargo-command: cross
+                      lib: libouisync_service.so
 
                     - name: linux-aarch64
                       os: ubuntu-24.04
                       target: aarch64-unknown-linux-gnu
                       cargo-command: cross
+                      lib: libouisync_service.so
 
                     - name: windows-x86_64
                       os: windows-latest
                       target: x86_64-pc-windows-msvc
                       cargo-command: cargo
+                      lib: ouisync_service.dll
 
                     - name: windows-aarch64
                       os: windows-latest
                       target: aarch64-pc-windows-msvc
                       cargo-command: cargo
+                      lib: ouisync_service.dll
 
                     - name: macos-aarch64
                       os: macos-latest
                       target: aarch64-apple-darwin
                       cargo-command: cargo
+                      lib: libouisync_service.dylib
 
                     - name: macos-x86_64
                       os: macos-latest
                       target: x86_64-apple-darwin
                       cargo-command: cargo
+                      lib: libouisync_service.dylib
 
         steps:
             - uses: actions/checkout@v7
@@ -229,42 +236,37 @@ jobs:
             - name: Add rust target
               run: rustup target add ${{ matrix.target }}
 
-            # Needed to strip the native library
-            - name: Add llvm-tools
-              run: rustup component add llvm-tools
-
             - uses: Swatinem/rust-cache@v2
               with:
-                  key: kotlin-${{ matrix.name }}
-
-            - name: Setup java
-              uses: actions/setup-java@v6
-              with:
-                  distribution: "temurin"
-                  java-version: "17"
-
-            - name: Setup gradle
-              uses: gradle/actions/setup-gradle@v6
+                  key: native-${{ matrix.name }}
 
             - name: Install cross
               if: matrix.cargo-command == 'cross'
               run: cargo install cross --force --git https://github.com/cross-rs/cross --rev $CROSS_REV
 
-            # Builds the library into `build/ouisync-service-jvm/rustLibs/<jna prefix>/`, which is
-            # the layout expected by the `ouisync.nativeLibsDir` property.
+            # Strip the symbols to reduce the package size (no effect on the MSVC targets, which
+            # keep the symbols in separate files).
             - name: Build native library
-              working-directory: bindings/kotlin
-              shell: bash
               run: >
-                  ./gradlew --stacktrace :ouisync-service-jvm:cargoBuild
-                  -Pouisync.targets=${{ matrix.target }}
-                  -Pouisync.cargo=${{ matrix.cargo-command }}
+                  ${{ matrix.cargo-command }} build
+                  --package ouisync-service
+                  --lib
+                  --release
+                  --target ${{ matrix.target }}
+                  --config profile.release.strip=true
+
+            # The artifacts have the layout `<target triple>/<library file>`, so they can be merged.
+            - name: Collect native library
+              shell: bash
+              run: |
+                  mkdir -p native-libs/${{ matrix.target }}
+                  cp target/${{ matrix.target }}/release/${{ matrix.lib }} native-libs/${{ matrix.target }}/
 
             - name: Upload native library
               uses: actions/upload-artifact@v7
               with:
-                  name: kotlin-native-libs-${{ matrix.name }}
-                  path: bindings/kotlin/build/ouisync-service-jvm/rustLibs/
+                  name: native-libs-${{ matrix.name }}
+                  path: native-libs/
                   if-no-files-found: error
 
     build_kotlin_bindings:
@@ -272,7 +274,7 @@ jobs:
         runs-on: ubuntu-24.04
         # Build the packages only when pushing version tags (v1.2.3, ...)
         if: startsWith(github.ref, 'refs/tags/v')
-        needs: build_kotlin_native_libs
+        needs: build_native_libs
 
         steps:
             - uses: actions/checkout@v7
@@ -281,7 +283,7 @@ jobs:
               uses: actions/download-artifact@v8
               with:
                   path: native-libs
-                  pattern: kotlin-native-libs-*
+                  pattern: native-libs-*
                   merge-multiple: true
 
             - name: Add rust targets
@@ -315,8 +317,7 @@ jobs:
             # the Sonatype credentials / signing key needed to publish to Maven Central.
             #
             # The android native libraries are built here (using cargo-ndk), the ones for the
-            # ouisync-service-jvm package are the prebuilt ones from the `build_kotlin_native_libs`
-            # job.
+            # ouisync-service-jvm package are the prebuilt ones from the `build_native_libs` job.
             - name: Build packages
               working-directory: bindings/kotlin
               run: >
@@ -486,45 +487,39 @@ jobs:
 
     build_service_python_bindings:
         name: build service python bindings package (${{ matrix.name }})
-        runs-on: ${{ matrix.os }}
+        runs-on: ubuntu-24.04
         # Build the packages only when pushing version tags (v1.2.3, ...)
         if: startsWith(github.ref, 'refs/tags/v')
+        needs: build_native_libs
 
         strategy:
             fail-fast: false
             matrix:
+                # One matrix leg per target triple -- the resulting wheel is tagged accordingly in
+                # bindings/python/service/hatch_build.py. The native library is the prebuilt one
+                # from the `build_native_libs` job, so all the wheels can be built on linux.
                 name: [linux-x86_64, linux-aarch64, windows-x86_64, macos-aarch64]
                 include:
-                    # One matrix leg per target triple -- the resulting wheel is tagged
-                    # accordingly in bindings/python/service/hatch_build.py. Only
-                    # linux-aarch64 needs cross-compilation (via `cross`); the other
-                    # targets are native to their runner.
                     - name: linux-x86_64
-                      os: ubuntu-24.04
                       target: x86_64-unknown-linux-gnu
-                      cargo-command: cargo
 
                     - name: linux-aarch64
-                      os: ubuntu-24.04
                       target: aarch64-unknown-linux-gnu
-                      cargo-command: cross
 
                     - name: windows-x86_64
-                      os: windows-latest
                       target: x86_64-pc-windows-msvc
-                      cargo-command: cargo
 
                     - name: macos-aarch64
-                      os: macos-latest
                       target: aarch64-apple-darwin
-                      cargo-command: cargo
 
         steps:
             - uses: actions/checkout@v7
 
-            - uses: Swatinem/rust-cache@v2
+            - name: Download native library
+              uses: actions/download-artifact@v8
               with:
-                  key: ${{ matrix.name }}
+                  name: native-libs-${{ matrix.name }}
+                  path: native-libs
 
             - name: Setup python
               uses: actions/setup-python@v7
@@ -534,26 +529,21 @@ jobs:
             - name: Install build dependencies
               run: pip install build
 
-            - name: Install cross
-              if: matrix.cargo-command == 'cross'
-              run: cargo install cross --force --git https://github.com/cross-rs/cross --rev $CROSS_REV
-
             - name: Build package
               working-directory: bindings/python/service
-              # --wheel only: the build hook needs the workspace's Rust sources to build
-              # the bundled native library, which aren't available when building from an
-              # extracted sdist.
-              run: python -m build --wheel
+              run: |
+                  # The artifact contains just the one library (`<target triple>/<library file>`).
+                  export OUISYNC_PREBUILT_LIB=$(echo $GITHUB_WORKSPACE/native-libs/*/*)
+                  python -m build --wheel
               env:
                   OUISYNC_TARGET: ${{ matrix.target }}
-                  OUISYNC_CARGO: ${{ matrix.cargo-command }}
 
             - name: Repair wheel (manylinux)
               # The build hook only tags linux wheels as plain linux_*; auditwheel inspects
               # the glibc symbol versions actually used and re-tags with the real (and
               # pip-compatibility-checked) manylinux_* tag. Not needed/applicable on
               # Windows or macOS.
-              if: runner.os == 'Linux'
+              if: contains(matrix.target, '-linux-')
               working-directory: bindings/python/service
               run: |
                   pip install auditwheel patchelf
