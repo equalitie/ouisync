@@ -1,0 +1,43 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+plugins {
+    id 'org.jetbrains.kotlin.jvm'
+    id 'org.jetbrains.compose' version '1.12.1'
+    id 'org.jetbrains.kotlin.plugin.compose' version '2.4.10'
+}
+
+// Name the output `example-desktop...` instead of just `desktop...`.
+base {
+    archivesName = 'example-desktop'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
+    }
+}
+
+dependencies {
+    implementation compose.desktop.currentOs
+    implementation 'org.jetbrains.compose.material3:material3:1.9.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2'
+
+    implementation project(':example:shared')
+    implementation project(':ouisync-service-jvm')
+}
+
+compose.desktop {
+    application {
+        mainClass = 'org.equalitie.ouisync.kotlin.example.MainKt'
+
+        nativeDistributions {
+            packageName = 'ouisync-kotlin-example'
+            packageVersion = '1.0.0'
+        }
+    }
+}

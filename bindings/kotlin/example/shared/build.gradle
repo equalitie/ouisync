@@ -1,0 +1,51 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+plugins {
+    id 'org.jetbrains.kotlin.multiplatform'
+    id 'com.android.kotlin.multiplatform.library'
+    id 'org.jetbrains.compose' version '1.12.1'
+    id 'org.jetbrains.kotlin.plugin.compose' version '2.4.10'
+    id 'org.jetbrains.kotlin.plugin.serialization' version '2.4.10'
+}
+
+// The UI and the logic of the example app, shared by the `android` and the `desktop` apps.
+
+kotlin {
+    android {
+        namespace = 'org.equalitie.ouisync.kotlin.example.shared'
+        compileSdk = 37
+        minSdk = 26
+
+        compilerOptions {
+            jvmTarget = JvmTarget.JVM_17
+        }
+    }
+
+    jvm {
+        compilerOptions {
+            jvmTarget = JvmTarget.JVM_17
+        }
+    }
+
+    sourceSets {
+        commonMain {
+            dependencies {
+                implementation 'org.jetbrains.compose.runtime:runtime:1.12.1'
+                implementation 'org.jetbrains.compose.foundation:foundation:1.12.1'
+                implementation 'org.jetbrains.compose.ui:ui:1.12.1'
+                implementation 'org.jetbrains.compose.material3:material3:1.9.0'
+                implementation 'org.jetbrains.compose.material:material-icons-extended:1.7.3'
+                // `api` because these are used in the public API of this module (`ExampleViewModel`).
+                api 'org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0'
+                api project(':ouisync-session')
+
+                implementation 'org.jetbrains.androidx.navigation:navigation-compose:2.9.2'
+                implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0'
+
+                // Only the platform independent part of the service. The apps depend on the
+                // platform specific one (`ouisync-service-android` or `ouisync-service-jvm`).
+                implementation project(':ouisync-service-common')
+            }
+        }
+    }
+}

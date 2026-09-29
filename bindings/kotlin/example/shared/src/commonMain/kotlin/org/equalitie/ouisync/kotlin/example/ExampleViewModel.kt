@@ -1,6 +1,5 @@
 package org.equalitie.ouisync.kotlin.example
 
-import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -39,9 +38,9 @@ class ExampleViewModel(
             try {
                 service = Service.start(configDir)
             } catch (e: OuisyncException.ServiceAlreadyRunning) {
-                Log.d(TAG, "Service already running")
+                logDebug(TAG, "Service already running")
             } catch (e: Exception) {
-                Log.e(TAG, "Service.start failed", e)
+                logError(TAG, "Service.start failed", e)
                 sessionError = e.toString()
             }
 
@@ -50,10 +49,10 @@ class ExampleViewModel(
                     session = Session.create(configDir)
                     session?.setStoreDirs(listOf(storeDir))
                 } catch (e: Exception) {
-                    Log.e(TAG, "Session.create failed", e)
+                    logError(TAG, "Session.create failed", e)
                     sessionError = e.toString()
                 } catch (e: java.lang.Error) {
-                    Log.e(TAG, "Session.create failed", e)
+                    logError(TAG, "Session.create failed", e)
                     sessionError = e.toString()
                 }
             }
@@ -78,7 +77,7 @@ class ExampleViewModel(
         val session = this.session ?: return
 
         if (repositories.containsKey(name)) {
-            Log.e(TAG, "repository named \"$name\" already exists")
+            logError(TAG, "repository named \"$name\" already exists")
             return
         }
 

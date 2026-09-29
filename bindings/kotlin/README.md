@@ -168,10 +168,12 @@ Documentation is available at [docs.ouisync.net](https://docs.ouisync.net/kotlin
 
 ## Examples
 
-A simple Android example app is in the
+A simple example app for Android and desktop (using Compose Multiplatform) is in the
 [bindings/kotlin/example](https://github.com/equalitie/ouisync/tree/master/bindings/kotlin/example)
-folder. To build it run `./gradlew example:assembleDebug`. Find the apk in
-`build/example/outputs/apk/debug/example-debug.apk`, install and run it on a device or an emulator.
+folder. To build the Android app run `./gradlew example:android:assembleDebug`. Find the apk in
+`build/example/android/outputs/apk/debug/example-android-debug.apk`, install and run it on a
+device or an emulator. To run the desktop app run `./gradlew example:desktop:run`. See the
+[example README](example/README.md) for more details.
 
 ## Build from source
 

@@ -1,7 +1,5 @@
 package org.equalitie.ouisync.kotlin.example
 
-import android.content.Context
-import android.content.Intent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,7 +39,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -64,7 +61,6 @@ import org.equalitie.ouisync.session.Repository
 import org.equalitie.ouisync.session.subscribe
 import java.security.MessageDigest
 
-private const val TAG = "ouisync.example"
 private val PADDING = 8.dp
 
 @Serializable object RepositoryListRoute
@@ -114,6 +110,7 @@ fun RepositoryListScreen(
 ) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    val shareText = rememberShareText()
     var adding by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -135,6 +132,17 @@ fun RepositoryListScreen(
             RepositoryList(
                 repositories = viewModel.repositories,
                 onRepositoryClicked = { name -> navController.navigate(route = FolderRoute(name)) },
+                onRepositoryShareClicked = { name ->
+                    viewModel.repositories.get(name)?.let { repo ->
+                        scope.launch {
+                            val token = repo.share(AccessMode.WRITE).value
+
+                            shareText(token)?.let { message ->
+                                snackbar.showSnackbar(message, withDismissAction = true)
+                            }
+                        }
+                    }
+                },
                 onRepositoryDeleteConfirmed = { name ->
                     scope.launch {
                         viewModel.deleteRepository(name)
@@ -184,10 +192,9 @@ fun RepositoryList(
     repositories: Map<String, Repository>,
     modifier: Modifier = Modifier,
     onRepositoryClicked: (String) -> Unit = {},
+    onRepositoryShareClicked: (String) -> Unit = {},
     onRepositoryDeleteConfirmed: (String) -> Unit = {},
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var deleting by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(
@@ -207,11 +214,7 @@ fun RepositoryList(
                     )
 
                     IconButton(
-                        onClick = {
-                            repositories.get(entry.key)?.let { repo ->
-                                scope.launch { shareRepository(context, repo) }
-                            }
-                        },
+                        onClick = { onRepositoryShareClicked(entry.key) },
                     ) {
                         Icon(Icons.Default.Share, "Share")
                     }
@@ -613,20 +616,6 @@ fun DeleteRepositoryDialog(onSubmit: () -> Unit = {}, onCancel: () -> Unit = {})
         confirmButton = { TextButton(onClick = onSubmit) { Text("Delete") } },
         dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
     )
-}
-
-suspend fun shareRepository(context: Context, repo: Repository) {
-    val token = repo.share(AccessMode.WRITE).toString()
-
-    val sendIntent =
-        Intent().apply {
-            action = Intent.ACTION_SEND
-            putExtra(Intent.EXTRA_TEXT, token)
-            type = "text/plain"
-        }
-    val shareIntent = Intent.createChooser(sendIntent, null)
-
-    context.startActivity(shareIntent)
 }
 
 fun formatSize(bytes: Long): String {

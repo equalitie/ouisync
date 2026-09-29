@@ -1,0 +1,39 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.plugin.compose' version '2.4.10'
+}
+
+// Name the output `example-android...` instead of just `android...`.
+base {
+    archivesName = 'example-android'
+}
+
+android {
+    compileSdk = 37
+    namespace = 'org.equalitie.ouisync.kotlin.example'
+
+    defaultConfig {
+        applicationId 'org.equalitie.ouisync.kotlin.example'
+        minSdk 26
+        targetSdk 37
+        versionCode 1
+        versionName '0.0.1'
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        compose = true
+    }
+}
+
+dependencies {
+    implementation 'org.jetbrains.compose.material3:material3:1.9.0'
+    implementation 'androidx.activity:activity-compose:1.10.1'
+
+    implementation project(':example:shared')
+    implementation project(':ouisync-service-android')
+}

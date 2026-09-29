@@ -168,7 +168,7 @@ jobs:
 
             - name: Build the example app
               working-directory: bindings/kotlin
-              run: ./gradlew --stacktrace example:assembleDebug
+              run: ./gradlew --stacktrace example:android:assembleDebug example:desktop:jar
 
     # Native libraries for the desktop platforms, built once and shared by the kotlin
     # (ouisync-service-jvm) and python (ouisync.service) packages.
