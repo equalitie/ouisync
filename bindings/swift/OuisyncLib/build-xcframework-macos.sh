@@ -22,6 +22,9 @@ INCLUDE="$BUILD_DIR/swift-include"
 XCF="$PACKAGE_DIR/output/OuisyncLibFFI.xcframework"
 
 cd "$PROJECT_ROOT"
+# Match the Xcode project's MACOSX_DEPLOYMENT_TARGET (13.0), otherwise rustc/clang
+# embed the host SDK's version and Xcode warns about linking newer object files.
+export MACOSX_DEPLOYMENT_TARGET=13.0
 for TARGET in "${TARGETS[@]}"; do
     echo "==> Building ouisync-service for $TARGET..."
     "$CARGO" build --package ouisync-service --release --target "$TARGET"

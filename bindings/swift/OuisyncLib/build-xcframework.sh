@@ -39,6 +39,10 @@ XCF="$PACKAGE_DIR/output/OuisyncLibFFI.xcframework"
 
 # ── 1. Build each enabled target ──────────────────────────────────────────────
 cd "$PROJECT_ROOT"
+# Match the Xcode project's MACOSX_DEPLOYMENT_TARGET (13.0) for macOS targets,
+# otherwise rustc/clang embed the host SDK's version and Xcode warns about
+# linking newer object files into an app targeting 13.0.
+export MACOSX_DEPLOYMENT_TARGET=13.0
 for TARGET in "${TARGETS[@]}"; do
     echo "==> Building ouisync-service for $TARGET..."
     "$CARGO" build --package ouisync-service $RELEASE_FLAG --target "$TARGET"

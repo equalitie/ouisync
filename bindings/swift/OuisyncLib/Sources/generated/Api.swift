@@ -177,7 +177,7 @@ public enum AccessChange {
         switch v {
         case .string(let name):
             switch name {
-            case "Disable": return .disable
+            case "Disable": return .some(.disable)
             default: return nil
             }
         case .map(let m) where m.count == 1:
@@ -285,9 +285,9 @@ public enum PeerState {
         switch v {
         case .string(let name):
             switch name {
-            case "Known": return .known
-            case "Connecting": return .connecting
-            case "Handshaking": return .handshaking
+            case "Known": return .some(.known)
+            case "Connecting": return .some(.connecting)
+            case "Handshaking": return .some(.handshaking)
             default: return nil
             }
         case .map(let m) where m.count == 1:
@@ -1215,8 +1215,8 @@ internal enum Response {
         switch v {
         case .string(let name):
             switch name {
-            case "None": return .none
-            case "Unit": return .unit
+            case "None": return .some(.none)
+            case "Unit": return .some(.unit)
             default: return nil
             }
         case .map(let m) where m.count == 1:
