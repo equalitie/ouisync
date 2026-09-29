@@ -2,30 +2,68 @@
 
 This project provides kotlin bindings for the Ouisync library. It consist of these packages:
 
-- **ouisync-service** provides the Ouisync *service* which maintains the repositories and runs the
-    sync protocol. It can be interacted with using *sessions*.
 - **ouisync-session** is the entry point to Ouisync. It's used to manage the repositories, access
     their content and configure the sync protocol, among other things. Multiple *sessions* can
     connect to the same *service*, even across process boundaries.
+- **ouisync-service-android** provides the Ouisync *service* which maintains the repositories and
+    runs the sync protocol, for Android. It can be interacted with using *sessions*.
+- **ouisync-service-jvm** provides the same *service* for desktop JVM (Linux, macOS and Windows,
+    each on x86_64 and arm64).
 - **ouisync-android** provides high-level components for developing Android apps:
     [foreground service](https://developer.android.com/develop/background-work/services/fgs) and
     [documents provider](https://developer.android.com/guide/topics/providers/document-provider#overview).
 
+The two service packages contain the same API (from the **ouisync-service-common** package, which
+they depend on and which is not meant to be used directly) and bundle the Ouisync native library
+for their platform. Use only one of them in a given app - Gradle reports a capability conflict if
+both end up in the same dependency graph.
+
 ## Installation
 
 The packages are published on [Maven Central](https://central.sonatype.com/). Add them as
-dependencies to your project:
+dependencies to your project.
+
+Android:
 
 ```groovy
 dependencies {
-    implementation "ie.equalit.ouinet:ie.equalit.ouinet:ouisync-session:$ouisync_version"
-    implementation "ie.equalit.ouinet:ie.equalit.ouinet:ouisync-service:$ouisync_version"
-    implementation "ie.equalit.ouinet:ie.equalit.ouinet:ouisync-android:$ouisync_version"
+    implementation "ie.equalit.ouinet:ouisync-session:$ouisync_version"
+    implementation "ie.equalit.ouinet:ouisync-service-android:$ouisync_version"
+
+    // Optional
+    implementation "ie.equalit.ouinet:ouisync-android:$ouisync_version"
 }
 ```
 
-Replace `$ouisync_version` with the version of Ouisync you want to use (all three packages always
-use the same version).
+Desktop JVM (requires Java 17 or newer):
+
+```groovy
+dependencies {
+    implementation "ie.equalit.ouinet:ouisync-session:$ouisync_version"
+    implementation "ie.equalit.ouinet:ouisync-service-jvm:$ouisync_version"
+}
+```
+
+Kotlin Multiplatform (Android and desktop JVM targets):
+
+```kotlin
+kotlin {
+    sourceSets {
+        androidMain.dependencies {
+            implementation("ie.equalit.ouinet:ouisync-session:$ouisyncVersion")
+            implementation("ie.equalit.ouinet:ouisync-service-android:$ouisyncVersion")
+        }
+
+        jvmMain.dependencies {
+            implementation("ie.equalit.ouinet:ouisync-session:$ouisyncVersion")
+            implementation("ie.equalit.ouinet:ouisync-service-jvm:$ouisyncVersion")
+        }
+    }
+}
+```
+
+Replace `$ouisync_version` with the version of Ouisync you want to use (all the packages always use
+the same version).
 
 ## Getting started
 
@@ -40,6 +78,8 @@ store its configuration files:
 val configDir = context.getDir("ouisync-config").getPath()
 val service = Service.start(configDir)
 ```
+
+(This example is for Android. On desktop JVM, use any directory the app can write to.)
 
 On app shutdown, stop the service to allow it to close all repositories and peer connections:
 
@@ -128,19 +168,59 @@ Documentation is available at [docs.ouisync.net](https://docs.ouisync.net/kotlin
 
 ## Examples
 
-A simple example app is in the
+A simple Android example app is in the
 [bindings/kotlin/example](https://github.com/equalitie/ouisync/tree/master/bindings/kotlin/example)
-folder. To build it run `gradle example:assembleDebug`. Find the apk in
+folder. To build it run `./gradlew example:assembleDebug`. Find the apk in
 `build/example/outputs/apk/debug/example-debug.apk`, install and run it on a device or an emulator.
 
 ## Build from source
 
-### Prerequisities
+### Prerequisites
 
-The Ousiync native library is built automatically but it requires a rust toolchain. The easiest way
-to get it is using [rustup](https://rustup.rs/).
+- [Rust toolchain](https://www.rust-lang.org/learn/get-started). The easiest way to get it is using
+  [rustup](https://rustup.rs/).
+- JDK 17 or newer.
+- Android SDK.
+- For the Android packages: the Android NDK in the version specified in
+  [ndk-version.txt](../../ndk-version.txt), [cargo-ndk](https://github.com/bbqsrc/cargo-ndk)
+  (`cargo install cargo-ndk`) and the rust targets for the Android ABIs
+  (`rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`).
+- For the release build of `ouisync-service-jvm`: `llvm-strip`, used to strip the native library
+  (`rustup component add llvm-tools`).
+- For cross-compiling `ouisync-service-jvm` for other platforms than the host:
+  [cross](https://github.com/cross-rs/cross) (or `cargo` with the corresponding rust target and
+  toolchain).
 
 ### Build packages
 
-To build all packages in all variants (release, debug), run `gradle assembleRelease` from inside the
-`bindings/kotlin` folder. To see other available tasks, run `gradle tasks`.
+Run from inside the `bindings/kotlin` folder, e.g.:
+
+- `./gradlew assemble` to build all packages.
+- `./gradlew :ouisync-service-android:assembleDebug` to build a single package (here the debug
+  variant of `ouisync-service-android`).
+- `./gradlew publishToMavenLocal` to publish the packages to the local Maven repository.
+- `./gradlew test` to run the tests.
+
+To see other available tasks, run `./gradlew tasks`.
+
+Only the release builds of the packages are published to Maven Central. Debug builds (with the
+native library built using the debug cargo profile) can be built and used locally: the debug
+variants of the Android packages, and `ouisync-service-jvm` with `-Pouisync.profile=debug`.
+
+### Build properties
+
+The build of the native libraries can be configured using the following Gradle properties (pass
+them with `-P<name>=<value>`, e.g.
+`./gradlew :ouisync-service-android:assembleRelease -Pouisync.targets=aarch64-linux-android`):
+
+| Property                | Description |
+| ----------------------- | ----------- |
+| `ouisync.targets`       | Comma separated list of rust target triples to build the native library for. Android targets are used by `ouisync-service-android`, the others by `ouisync-service-jvm` (so a single list can contain targets for both). A package for which the list contains no targets fails to build. Default: all Android targets and the host (desktop) target. |
+| `ouisync.cargo`         | Tool to build the non-host `ouisync-service-jvm` targets with: `cross` (default) or `cargo`. |
+| `ouisync.profile`       | Cargo profile for `ouisync-service-jvm`: `release` (default) or `debug`. |
+| `ouisync.nativeLibsDir` | Build `ouisync-service-jvm` using the prebuilt native libraries from this directory instead of building them. It must have the layout `<platform>/<library>`, e.g. `linux-x86-64/libouisync_service.so`. |
+| `target-platform`       | Comma separated list of Flutter target platforms (e.g., `android-arm64`) to build `ouisync-service-android` for. Passed by Flutter; can't be combined with `ouisync.targets`. |
+
+By default, `ouisync-service-jvm` contains the native library for the host platform only. The
+published package contains the libraries for all the supported platforms, which are built on CI
+and packaged using `ouisync.nativeLibsDir`.
