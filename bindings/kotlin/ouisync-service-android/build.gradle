@@ -102,9 +102,19 @@ android.buildTypes.all { buildType ->
     def name = buildType.name
 
     def cargoTasks = requestedTargets.collect { target ->
-        def abi = RustTarget.toAndroidAbi(target)
+        def abi = RustTarget.toAndroidAbiOrNull(target)
         def taskName = "cargoBuild${name.capitalize()}" +
             target.split('-').collect { it.capitalize() }.join()
+
+        if (abi == null) {
+            // Fail only when the native libraries are actually needed so that this doesn't break
+            // builds of the other projects.
+            return tasks.register(taskName) {
+                group = 'rust'
+                description = "Builds the rust crate for $name ($target)"
+                doFirst { throw new GradleException("Unsupported android target: $target") }
+            }
+        }
 
         // Each ABI gets its own jniLibs dir, so that libraries for ABIs which are not requested
         // (e.g., left over from previous builds) don't get packaged.

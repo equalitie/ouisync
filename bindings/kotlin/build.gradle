@@ -55,6 +55,15 @@ def cargoVersion = (cargoManifest =~ cargoVersionPattern)[0][1].trim()
 version = "$cargoVersion-$revision"
 group   = "ie.equalit.ouinet"
 
+// Warn about unknown `ouisync.*` properties (e.g., typos), which would otherwise be silently
+// ignored. Keep in sync with the properties used by the subprojects (see also README.md).
+def knownProperties = ['ouisync.targets', 'ouisync.cargo', 'ouisync.profile', 'ouisync.nativeLibsDir']
+providers.gradlePropertiesPrefixedBy('ouisync.').get().keySet().sort().each { name ->
+    if (!(name in knownProperties)) {
+        logger.warn("Warning: Unknown property '$name' (known properties: ${knownProperties.join(', ')})")
+    }
+}
+
 tasks.register('printVersion') {
     doLast {
         println version

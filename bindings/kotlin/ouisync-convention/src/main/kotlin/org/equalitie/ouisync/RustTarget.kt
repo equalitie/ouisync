@@ -42,7 +42,10 @@ object RustTarget {
 
     /** Android ABI (e.g., `arm64-v8a`) corresponding to the given target triple. */
     @JvmStatic
-    fun toAndroidAbi(target: String): String = androidAbis[target] ?: error("Unsupported android target: $target")
+    fun toAndroidAbi(target: String): String = toAndroidAbiOrNull(target) ?: error("Unsupported android target: $target")
+
+    /** Like [toAndroidAbi] but returns `null` if the target is not a supported android target. */
+    @JvmStatic fun toAndroidAbiOrNull(target: String): String? = androidAbis[target]
 
     /**
      * Resource path prefix under which JNA looks for native libraries for the given target when
