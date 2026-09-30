@@ -1,6 +1,8 @@
 mod auth;
+mod client;
 
 pub use auth::AuthKey;
+pub use client::LocalClient;
 
 use super::{ClientError, ReadError, WriteError};
 use crate::protocol::{Message, Request, ResponseResult};
