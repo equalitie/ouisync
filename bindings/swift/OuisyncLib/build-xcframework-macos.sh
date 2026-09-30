@@ -12,21 +12,30 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../" && pwd)"
 PACKAGE_DIR="$SCRIPT_DIR"
 
-ARCH="$(uname -m)"
-case "$ARCH" in
-  arm64)  TARGET="aarch64-apple-darwin" ;;
-  x86_64) TARGET="x86_64-apple-darwin" ;;
-  *)      echo "Unsupported arch: $ARCH"; exit 1 ;;
-esac
+# Build a universal (arm64 + x86_64) macOS static lib, not just the host arch —
+# Xcode links a universal binary by default, so a single-arch xcframework here
+# causes "Undefined symbols for architecture x86_64/arm64" at link time.
+TARGETS=(aarch64-apple-darwin x86_64-apple-darwin)
 
 BUILD_DIR="$PROJECT_ROOT/target"
-LIB="$BUILD_DIR/$TARGET/release/libouisync_service.a"
 INCLUDE="$BUILD_DIR/swift-include"
 XCF="$PACKAGE_DIR/output/OuisyncLibFFI.xcframework"
 
-echo "==> Building ouisync-service for $TARGET..."
 cd "$PROJECT_ROOT"
-"$CARGO" build --package ouisync-service --release --target "$TARGET"
+# Match the Xcode project's MACOSX_DEPLOYMENT_TARGET (13.0), otherwise rustc/clang
+# embed the host SDK's version and Xcode warns about linking newer object files.
+export MACOSX_DEPLOYMENT_TARGET=13.0
+for TARGET in "${TARGETS[@]}"; do
+    echo "==> Building ouisync-service for $TARGET..."
+    "$CARGO" build --package ouisync-service --release --target "$TARGET"
+done
+
+ARM64_LIB="$BUILD_DIR/aarch64-apple-darwin/release/libouisync_service.a"
+X86_64_LIB="$BUILD_DIR/x86_64-apple-darwin/release/libouisync_service.a"
+LIB="$BUILD_DIR/lipo-macos/libouisync_service.a"
+mkdir -p "$(dirname "$LIB")"
+echo "==> lipo macos: $ARM64_LIB $X86_64_LIB"
+lipo -create "$ARM64_LIB" "$X86_64_LIB" -output "$LIB"
 
 echo "==> Generating bindings header..."
 mkdir -p "$INCLUDE"

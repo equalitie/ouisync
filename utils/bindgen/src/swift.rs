@@ -237,7 +237,7 @@ fn write_complex_enum_decode(out: &mut dyn Write, item: &ComplexEnum) -> Result<
             if matches!(variant.fields, Fields::Unit) {
                 let case_name = format!("{}", AsLowerCamelCase(variant_name));
                 let msgpack_name = format!("{}", AsUpperCamelCase(variant_name));
-                writeln!(out, "{I}{I}{I}case \"{msgpack_name}\": return .{case_name}")?;
+                writeln!(out, "{I}{I}{I}case \"{msgpack_name}\": return .some(.{case_name})")?;
             }
         }
         writeln!(out, "{I}{I}{I}default: return nil")?;
@@ -878,7 +878,7 @@ fn write_response_enum(out: &mut dyn Write, item: &ComplexEnum) -> Result<()> {
             if matches!(variant.fields, Fields::Unit) {
                 let case_name = format!("{}", AsLowerCamelCase(variant_name));
                 let msgpack_name = variant_name.clone();
-                writeln!(out, "{I}{I}{I}case \"{msgpack_name}\": return .{case_name}")?;
+                writeln!(out, "{I}{I}{I}case \"{msgpack_name}\": return .some(.{case_name})")?;
             }
         }
         writeln!(out, "{I}{I}{I}default: return nil")?;

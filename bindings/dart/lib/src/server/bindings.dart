@@ -71,13 +71,14 @@ DynamicLibrary _defaultLib() {
     path = env['OUISYNC_LIB']!;
   } else if (env.containsKey('FLUTTER_TEST')) {
     // guess the location of flutter's build output
-    final String build;
     if (Platform.isMacOS) {
-      build = join(dirname(Platform.script.toFilePath()), 'ouisync');
+      // On macOS, native library is packaged as a framework in the Dart package directory
+      path = join('ouisync', 'bindings', 'dart', 'darwin', 'OuisyncService.framework', 'OuisyncService');
     } else {
+      final String build;
       build = join('..', '..');
+      path = join(build, 'target', kReleaseMode ? 'release' : 'debug', name);
     }
-    path = join(build, 'target', kReleaseMode ? 'release' : 'debug', name);
   } else if (Platform.isIOS || Platform.isMacOS) {
     // In the packaged app the native core is embedded as OuisyncService.framework
     // (a loose .dylib is rejected by App Store validation). dyld resolves this

@@ -39,6 +39,10 @@ XCF="$PACKAGE_DIR/output/OuisyncLibFFI.xcframework"
 
 # ── 1. Build each enabled target ──────────────────────────────────────────────
 cd "$PROJECT_ROOT"
+# Match the Xcode project's MACOSX_DEPLOYMENT_TARGET (13.0) for macOS targets,
+# otherwise rustc/clang embed the host SDK's version and Xcode warns about
+# linking newer object files into an app targeting 13.0.
+export MACOSX_DEPLOYMENT_TARGET=13.0
 for TARGET in "${TARGETS[@]}"; do
     echo "==> Building ouisync-service for $TARGET..."
     "$CARGO" build --package ouisync-service $RELEASE_FLAG --target "$TARGET"
@@ -98,14 +102,14 @@ for TARGET in aarch64-apple-darwin x86_64-apple-darwin; do
         macos_libs+=("$BUILD_DIR/$TARGET/$CONFIGURATION/libouisync_service.a")
     fi
 done
-add_slice macos "${macos_libs[@]}"
+add_slice macos "${macos_libs[@]+"${macos_libs[@]}"}"
 
 # iOS device: arm64 only (no lipo needed)
 ios_libs=()
 if target_enabled aarch64-apple-ios; then
     ios_libs+=("$BUILD_DIR/aarch64-apple-ios/$CONFIGURATION/libouisync_service.a")
 fi
-add_slice ios "${ios_libs[@]}"
+add_slice ios "${ios_libs[@]+"${ios_libs[@]}"}"
 
 # iOS simulator: universal binary from arm64-sim + x86_64
 sim_libs=()
@@ -114,7 +118,7 @@ for TARGET in aarch64-apple-ios-sim x86_64-apple-ios; do
         sim_libs+=("$BUILD_DIR/$TARGET/$CONFIGURATION/libouisync_service.a")
     fi
 done
-add_slice ios-simulator "${sim_libs[@]}"
+add_slice ios-simulator "${sim_libs[@]+"${sim_libs[@]}"}"
 
 xcodebuild -create-xcframework "${XCF_PARAMS[@]}" -output "$XCF"
 echo "==> Done: $XCF"
