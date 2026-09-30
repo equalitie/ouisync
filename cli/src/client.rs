@@ -2,21 +2,13 @@ use crate::{
     format::{OptionSecondsDisplay, PeerAddrDisplay, PeerInfoDisplay, QuotaInfoDisplay},
     options::{ClientCommand, MirrorCommand, StoreDirsCommand},
 };
-use futures_util::SinkExt;
 use ouisync::{LocalSecret, PeerAddr, PeerInfo, SetLocalSecret, ShareToken, crypto::Password};
 use ouisync_service::{
-    protocol::{
-        ErrorCode, Message, MessageId, ProtocolError, QuotaInfo, RepositoryHandle, Request,
-        Response, ResponseResult, UnexpectedResponse,
-    },
-    transport::{
-        ClientError,
-        local::{self, LocalClientReader, LocalClientWriter, LocalEndpoint},
-    },
+    protocol::{ErrorCode, ProtocolError, QuotaInfo, RepositoryHandle, Request},
+    transport::{ClientError, local::LocalClient},
 };
 use std::{collections::BTreeMap, env, io, net::SocketAddr, path::PathBuf, time::Duration};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, stdin, stdout};
-use tokio_stream::StreamExt;
 
 pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<(), ClientError> {
     let endpoint = ouisync_service::local_endpoint(&config_path).await?;
@@ -97,11 +89,11 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
                 .await?;
         }
         ClientCommand::Delete { name } => {
-            let repo = client.find_repository(name).await?;
+            let repo = find_repository(&mut client, name).await?;
             let () = client.invoke(Request::RepositoryDelete { repo }).await?;
         }
         ClientCommand::Dht { name, enabled } => {
-            let repo = client.find_repository(name).await?;
+            let repo = find_repository(&mut client, name).await?;
 
             if let Some(enabled) = enabled {
                 let () = client
@@ -122,7 +114,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
             repository,
         } => {
             if let Some(name) = name {
-                let repo = client.find_repository(name).await?;
+                let repo = find_repository(&mut client, name).await?;
 
                 if remove {
                     let () = client
@@ -206,7 +198,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
             }
         }
         ClientCommand::Export { name, output } => {
-            let repo = client.find_repository(name).await?;
+            let repo = find_repository(&mut client, name).await?;
             let path: PathBuf = client
                 .invoke(Request::RepositoryExport {
                     repo,
@@ -283,7 +275,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
             name,
             host,
         } => {
-            let repo = client.find_repository(name).await?;
+            let repo = find_repository(&mut client, name).await?;
 
             match command {
                 MirrorCommand::Create => {
@@ -308,12 +300,12 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
         #[cfg(feature = "vfs")]
         ClientCommand::Mount { name } => {
             if let Some(name) = name {
-                let repo = client.find_repository(name).await?;
+                let repo = find_repository(&mut client, name).await?;
                 let path: PathBuf = client.invoke(Request::RepositoryMount { repo }).await?;
 
                 println!("{}", path.display());
             } else {
-                let repos = client.list_repositories().await?;
+                let repos = list_repositories(&mut client).await?;
                 for repo in repos {
                     let _: PathBuf = client.invoke(Request::RepositoryMount { repo }).await?;
                 }
@@ -348,7 +340,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
             recv,
         } => {
             if let Some(name) = name {
-                let repo = client.find_repository(name).await?;
+                let repo = find_repository(&mut client, name).await?;
 
                 if let Some(enabled) = enabled {
                     let () = client
@@ -399,7 +391,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
             value,
         } => {
             if let Some(name) = name {
-                let repo = client.find_repository(name).await?;
+                let repo = find_repository(&mut client, name).await?;
 
                 if remove {
                     let () = client
@@ -455,7 +447,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
                 .await?;
         }
         ClientCommand::ResetAccess { name, token } => {
-            let repo = client.find_repository(name).await?;
+            let repo = find_repository(&mut client, name).await?;
             let token = token.parse().map_err(|_| ClientError::InvalidArgument)?;
 
             let () = client
@@ -467,7 +459,7 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
             mode,
             password,
         } => {
-            let repo = client.find_repository(name).await?;
+            let repo = find_repository(&mut client, name).await?;
             let password = get_or_read(password, "input password").await?;
             let local_secret = password.map(Password::from).map(LocalSecret::Password);
 
@@ -508,10 +500,10 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
         #[cfg(feature = "vfs")]
         ClientCommand::Unmount { name } => {
             if let Some(name) = name {
-                let repo = client.find_repository(name).await?;
+                let repo = find_repository(&mut client, name).await?;
                 let () = client.invoke(Request::RepositoryUnmount { repo }).await?;
             } else {
-                let repos = client.list_repositories().await?;
+                let repos = list_repositories(&mut client).await?;
                 for repo in repos {
                     let () = client.invoke(Request::RepositoryUnmount { repo }).await?;
                 }
@@ -524,56 +516,18 @@ pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<
     Ok(())
 }
 
-struct LocalClient {
-    reader: LocalClientReader,
-    writer: LocalClientWriter,
+async fn find_repository(
+    client: &mut LocalClient,
+    name: String,
+) -> Result<RepositoryHandle, ClientError> {
+    client.invoke(Request::SessionFindRepository { name }).await
 }
 
-impl LocalClient {
-    async fn connect(endpoint: LocalEndpoint) -> Result<Self, ClientError> {
-        let (reader, writer) = local::connect(endpoint).await?;
-        Ok(Self { reader, writer })
-    }
-
-    async fn invoke<T>(&mut self, request: Request) -> Result<T, ClientError>
-    where
-        T: TryFrom<Response, Error = UnexpectedResponse>,
-    {
-        self.writer
-            .send(Message {
-                id: MessageId::next(),
-                payload: request,
-            })
-            .await?;
-
-        let message = match self.reader.next().await {
-            Some(Ok(message)) => message,
-            Some(Err(error)) => return Err(error.into()),
-            None => return Err(ClientError::Disconnected),
-        };
-
-        match message.payload {
-            ResponseResult::Success(response) => Ok(response.try_into()?),
-            ResponseResult::Failure(error) => Err(error.into()),
-        }
-    }
-
-    async fn find_repository(&mut self, name: String) -> Result<RepositoryHandle, ClientError> {
-        self.invoke(Request::SessionFindRepository { name }).await
-    }
-
-    #[cfg(feature = "vfs")]
-    async fn list_repositories(&mut self) -> Result<Vec<RepositoryHandle>, ClientError> {
-        let repos: BTreeMap<PathBuf, RepositoryHandle> =
-            self.invoke(Request::SessionListRepositories).await?;
-        Ok(repos.into_values().collect())
-    }
-
-    async fn close(&mut self) -> Result<(), ClientError> {
-        self.writer.close().await?;
-
-        Ok(())
-    }
+#[cfg(feature = "vfs")]
+async fn list_repositories(client: &mut LocalClient) -> Result<Vec<RepositoryHandle>, ClientError> {
+    let repos: BTreeMap<PathBuf, RepositoryHandle> =
+        client.invoke(Request::SessionListRepositories).await?;
+    Ok(repos.into_values().collect())
 }
 
 /// If value is `Some("-")`, reads the value from stdin, otherwise returns it unchanged.
