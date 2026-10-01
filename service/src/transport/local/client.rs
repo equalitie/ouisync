@@ -18,19 +18,30 @@ impl LocalClient {
         Ok(Self { reader, writer })
     }
 
+    /// # Cancel safety
+    ///
+    /// This method is currently *not cancel safe*. If it's cancelled, the request might have
+    /// already been sent and so next time this method is invoked, it might receive the response
+    /// from the previous invocation which would cause it to return
+    /// `ClientError::UnexpectedResponse` and the response would be lost.
+    ///
+    /// TODO: make it cancel safe.
     pub async fn invoke<T>(&mut self, request: Request) -> Result<T, ClientError>
     where
         T: TryFrom<Response, Error = UnexpectedResponse>,
     {
+        let id = MessageId::next();
+
         self.writer
             .send(Message {
-                id: MessageId::next(),
+                id,
                 payload: request,
             })
             .await?;
 
         let message = match self.reader.next().await {
-            Some(Ok(message)) => message,
+            Some(Ok(message)) if message.id == id => message,
+            Some(Ok(_)) => return Err(ClientError::UnexpectedResponse),
             Some(Err(error)) => return Err(error.into()),
             None => return Err(ClientError::Disconnected),
         };
