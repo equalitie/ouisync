@@ -133,6 +133,7 @@ mod tests {
     use crate::{
         Service,
         test_utils::{self, ServiceRunner},
+        transport::local::LocalTransport,
     };
 
     #[tokio::test]
@@ -290,7 +291,9 @@ mod tests {
                 .with_no_client_auth(),
         );
 
-        let mut service = Service::init(config_dir).await.unwrap();
+        let mut service = Service::init(config_dir, LocalTransport::Tcp)
+            .await
+            .unwrap();
 
         service
             .set_store_dirs(vec![temp_dir.path().join("store")])

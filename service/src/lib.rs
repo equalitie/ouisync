@@ -44,7 +44,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    select,
+    fs, select,
     sync::watch,
     time::{self, MissedTickBehavior},
 };
@@ -52,6 +52,8 @@ use transport::{
     AcceptedConnection, ClientError,
     local::{AuthKey, LocalEndpoint, LocalServer},
 };
+
+use crate::transport::local::{LocalAddr, LocalTransport};
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
@@ -66,7 +68,7 @@ pub struct Service {
 }
 
 impl Service {
-    pub async fn init(config_dir: PathBuf) -> Result<Self, Error> {
+    pub async fn init(config_dir: PathBuf, local_transport: LocalTransport) -> Result<Self, Error> {
         let config = ConfigStore::new(config_dir);
 
         config_migration::run(&config).await;
@@ -74,11 +76,20 @@ impl Service {
         let local_endpoint_entry = config.entry(LOCAL_ENDPOINT_KEY);
         let local_endpoint = match local_endpoint_entry.get().await {
             Ok(value) => value,
-            Err(ConfigError::NotFound) => LocalEndpoint {
-                addr: Ipv4Addr::LOCALHOST,
-                port: 0,
-                auth_key: AuthKey::random(),
-            },
+            Err(ConfigError::NotFound) => {
+                let addr = match local_transport {
+                    LocalTransport::Tcp => LocalAddr::Tcp((Ipv4Addr::LOCALHOST, 0).into()),
+                    LocalTransport::Unix => {
+                        fs::create_dir_all(config.dir()).await?;
+                        LocalAddr::Unix(config.dir().join("local.sock"))
+                    }
+                };
+
+                LocalEndpoint {
+                    addr,
+                    auth_key: AuthKey::random(),
+                }
+            }
             Err(error) => return Err(error.into()),
         };
 
@@ -92,7 +103,7 @@ impl Service {
         local_endpoint_entry.set(local_server.endpoint()).await?;
 
         tracing::debug!(
-            port = local_server.endpoint().port,
+            addr = ?local_server.endpoint().addr,
             "local server listening"
         );
 
@@ -242,10 +253,12 @@ mod tests {
     async fn already_running() {
         let temp_dir = TempDir::new().unwrap();
 
-        let mut service0 = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let mut service0 = Service::init(temp_dir.path().join("config"), LocalTransport::Tcp)
+            .await
+            .unwrap();
 
         assert_matches!(
-            Service::init(temp_dir.path().join("config"))
+            Service::init(temp_dir.path().join("config"), LocalTransport::Tcp)
                 .await
                 .map(|_| ()),
             Err(Error::ServiceAlreadyRunning)
@@ -294,7 +307,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config_dir = temp_dir.path().join("config");
 
-        let service = Service::init(config_dir.clone()).await.unwrap();
+        let service = Service::init(config_dir.clone(), LocalTransport::Tcp)
+            .await
+            .unwrap();
 
         let (cert_old, signing_key_old) = gen_cert(Duration::from_hours(24)).await;
         let (cert_new, signing_key_new) = gen_cert(Duration::from_hours(48)).await;

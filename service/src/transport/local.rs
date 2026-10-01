@@ -1,52 +1,67 @@
 mod auth;
 mod client;
+mod net;
 
 pub use auth::AuthKey;
 pub use client::LocalClient;
 
-use super::{ClientError, ReadError, WriteError};
-use crate::protocol::{Message, Request, ResponseResult};
-use bytes::BytesMut;
-use futures_util::{Sink, SinkExt, Stream, StreamExt};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
-    io,
+    fmt, io,
     marker::PhantomData,
-    net::Ipv4Addr,
+    net::SocketAddr,
+    path::PathBuf,
     pin::Pin,
     task::{Context, Poll, ready},
 };
-use tokio::net::{
-    TcpListener, TcpStream,
-    tcp::{OwnedReadHalf, OwnedWriteHalf},
-};
+
+use bytes::BytesMut;
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+use super::{ClientError, ReadError, WriteError};
+use crate::protocol::{Message, Request, ResponseResult};
+use net::{LocalListener, LocalOwnedReadHalf, LocalOwnedWriteHalf, LocalStream};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LocalEndpoint {
-    #[serde(default = "default_addr")]
-    pub addr: Ipv4Addr,
-    pub port: u16,
+    pub addr: LocalAddr,
     pub auth_key: AuthKey,
 }
 
-fn default_addr() -> Ipv4Addr {
-    Ipv4Addr::LOCALHOST
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum LocalAddr {
+    Tcp(SocketAddr),
+    Unix(PathBuf),
+}
+
+impl fmt::Display for LocalAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Tcp(addr) => write!(f, "tcp://{addr}"),
+            Self::Unix(path) => write!(f, "unix://{}", path.display()),
+        }
+    }
+}
+
+pub enum LocalTransport {
+    Tcp,
+    Unix,
 }
 
 pub(crate) struct LocalServer {
-    listener: TcpListener,
+    listener: LocalListener,
     endpoint: LocalEndpoint,
 }
 
 impl LocalServer {
     pub async fn bind(endpoint: LocalEndpoint) -> io::Result<Self> {
-        let listener = TcpListener::bind((endpoint.addr, endpoint.port)).await?;
-        let port = listener.local_addr()?.port();
+        let listener = LocalListener::bind(&endpoint.addr).await?;
+        let addr = listener.local_addr()?;
 
         Ok(Self {
             listener,
-            endpoint: LocalEndpoint { port, ..endpoint },
+            endpoint: LocalEndpoint { addr, ..endpoint },
         })
     }
 
@@ -67,7 +82,7 @@ impl LocalServer {
 }
 
 pub(crate) struct AcceptedLocalConnection {
-    socket: TcpStream,
+    socket: LocalStream,
     auth_key: AuthKey,
 }
 
@@ -92,9 +107,9 @@ impl AcceptedLocalConnection {
 }
 
 pub async fn connect(
-    endpoint: LocalEndpoint,
+    endpoint: &LocalEndpoint,
 ) -> Result<(LocalClientReader, LocalClientWriter), ClientError> {
-    let mut socket = TcpStream::connect((Ipv4Addr::LOCALHOST, endpoint.port))
+    let mut socket = LocalStream::connect(&endpoint.addr)
         .await
         .map_err(ClientError::Connect)?;
 
@@ -114,12 +129,12 @@ pub type LocalClientReader = LocalReader<ResponseResult>;
 pub type LocalClientWriter = LocalWriter<Request>;
 
 pub struct LocalReader<T> {
-    reader: FramedRead<OwnedReadHalf, LengthDelimitedCodec>,
+    reader: FramedRead<LocalOwnedReadHalf, LengthDelimitedCodec>,
     _type: PhantomData<fn() -> T>,
 }
 
 impl<T> LocalReader<T> {
-    pub(super) fn new(inner: OwnedReadHalf) -> Self {
+    pub(self) fn new(inner: LocalOwnedReadHalf) -> Self {
         Self {
             reader: FramedRead::new(inner, LengthDelimitedCodec::new()),
             _type: PhantomData,
@@ -145,13 +160,13 @@ where
 }
 
 pub struct LocalWriter<T> {
-    writer: FramedWrite<OwnedWriteHalf, LengthDelimitedCodec>,
+    writer: FramedWrite<LocalOwnedWriteHalf, LengthDelimitedCodec>,
     buffer: BytesMut,
     _type: PhantomData<fn(T)>,
 }
 
 impl<T> LocalWriter<T> {
-    pub(super) fn new(inner: OwnedWriteHalf) -> Self {
+    pub(self) fn new(inner: LocalOwnedWriteHalf) -> Self {
         Self {
             writer: FramedWrite::new(inner, LengthDelimitedCodec::new()),
             buffer: BytesMut::new(),
@@ -213,20 +228,43 @@ mod tests {
             ToErrorCode,
         },
         test_utils::{self, ServiceRunner},
-        transport::{self, ClientError, local::AuthKey},
+        transport::{self, ClientError},
     };
 
-    use super::{LocalClientReader, LocalClientWriter, LocalEndpoint};
+    use super::{AuthKey, LocalClientReader, LocalClientWriter, LocalEndpoint, LocalTransport};
+
+    //     #[test]
+    //     fn local_endpoint_serialize_deserialize() {
+    //         let mut rng = StdRng::seed_from_u64(0);
+    //         let auth_key = AuthKey::generate(&mut rng);
+    //         let auth_key_hex = hex::encode(auth_key.as_bytes());
+    //
+    //         let data = [
+    //             (format!("\{\"port\": 12345, \"auth_key\": \"{auth_key_hex}\"\}"),
+    //                 LocalAddr::Tcp((Ipv4Addr::LOCALHOST, 12345).into())),
+    //         ];
+    //     }
 
     #[tokio::test]
-    async fn sanity_check() {
+    async fn sanity_check_tcp() {
+        sanity_check(LocalTransport::Tcp).await;
+    }
+
+    #[tokio::test]
+    async fn sanity_check_unix() {
+        sanity_check(LocalTransport::Unix).await;
+    }
+
+    async fn sanity_check(local_transport: LocalTransport) {
         test_utils::init_log();
 
         let temp_dir = TempDir::new().unwrap();
         let store_dir = temp_dir.path().join("store");
 
-        let service = Service::init(temp_dir.path().join("config")).await.unwrap();
-        let endpoint = *service.local_endpoint();
+        let service = Service::init(temp_dir.path().join("config"), local_transport)
+            .await
+            .unwrap();
+        let endpoint = service.local_endpoint().clone();
         service
             .state()
             .session_insert_store_dirs(vec![store_dir.clone()])
@@ -235,7 +273,7 @@ mod tests {
 
         let runner = ServiceRunner::start(service);
 
-        let mut client = TestClient::connect(endpoint).await;
+        let mut client = TestClient::connect(&endpoint).await;
 
         let message_id = MessageId::next();
         let value: Vec<PathBuf> = client
@@ -254,17 +292,18 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
 
-        let service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let service = Service::init(temp_dir.path().join("config"), LocalTransport::Tcp)
+            .await
+            .unwrap();
 
         let invalid_endpoint = LocalEndpoint {
-            addr: Ipv4Addr::LOCALHOST,
-            port: service.local_endpoint().port,
+            addr: service.local_endpoint().addr.clone(),
             auth_key: AuthKey::random(),
         };
 
         let runner = ServiceRunner::start(service);
 
-        match transport::local::connect(invalid_endpoint).await {
+        match transport::local::connect(&invalid_endpoint).await {
             Err(ClientError::Authentication) => (),
             Err(error) => panic!("unexpected error: {error:?}"),
             Ok(_) => panic!("unexpected success"),
@@ -280,8 +319,10 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let store_dir = temp_dir.path().join("store");
 
-        let service = Service::init(temp_dir.path().join("config")).await.unwrap();
-        let endpoint = *service.local_endpoint();
+        let service = Service::init(temp_dir.path().join("config"), LocalTransport::Tcp)
+            .await
+            .unwrap();
+        let endpoint = service.local_endpoint().clone();
         service
             .state()
             .session_insert_store_dirs(vec![store_dir])
@@ -290,7 +331,7 @@ mod tests {
 
         let runner = ServiceRunner::start(service);
 
-        let mut client = TestClient::connect(endpoint).await;
+        let mut client = TestClient::connect(&endpoint).await;
 
         let repo_handle: RepositoryHandle = client
             .invoke(
@@ -385,10 +426,10 @@ mod tests {
 
         // Create two separate services (A and B), each with its own client.
         let (endpoint_a, runner_a) = async {
-            let service = Service::init(temp_dir.path().join("config_a"))
+            let service = Service::init(temp_dir.path().join("config_a"), LocalTransport::Tcp)
                 .await
                 .unwrap();
-            let endpoint = *service.local_endpoint();
+            let endpoint = service.local_endpoint().clone();
             service
                 .state()
                 .session_insert_store_dirs(vec![temp_dir.path().join("store_a")])
@@ -402,10 +443,10 @@ mod tests {
         .await;
 
         let (endpoint_b, runner_b) = async {
-            let service = Service::init(temp_dir.path().join("config_b"))
+            let service = Service::init(temp_dir.path().join("config_b"), LocalTransport::Tcp)
                 .await
                 .unwrap();
-            let endpoint = *service.local_endpoint();
+            let endpoint = service.local_endpoint().clone();
             service
                 .state()
                 .session_insert_store_dirs(vec![temp_dir.path().join("store_b")])
@@ -418,8 +459,8 @@ mod tests {
         .instrument(tracing::info_span!("b"))
         .await;
 
-        let mut client_a = TestClient::connect(endpoint_a).await;
-        let mut client_b = TestClient::connect(endpoint_b).await;
+        let mut client_a = TestClient::connect(&endpoint_a).await;
+        let mut client_b = TestClient::connect(&endpoint_b).await;
 
         let bind_addr = PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into());
 
@@ -531,7 +572,7 @@ mod tests {
     }
 
     impl TestClient {
-        async fn connect(endpoint: LocalEndpoint) -> Self {
+        async fn connect(endpoint: &LocalEndpoint) -> Self {
             let (reader, writer) = transport::local::connect(endpoint).await.unwrap();
 
             Self {

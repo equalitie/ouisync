@@ -1,4 +1,4 @@
-use std::{collections::HashSet, future, io, mem, net::SocketAddr, time::Duration};
+use std::{collections::HashSet, io, mem, net::SocketAddr, time::Duration};
 
 use clap::Parser;
 use ouisync_service::Service;
@@ -122,56 +122,39 @@ async fn case<Client: Socket, Server: Socket>(rng: StdRng, packet_count: usize) 
         let mut send_buf = vec![0; 1024];
         let mut recv_buf = vec![0; 1024];
 
-        async fn send(
-            writer: &mut impl Writer,
-            packets: &[Vec<u8>],
-            index: usize,
-            peer_addr: SocketAddr,
-            buf: &mut Vec<u8>,
-            pending: usize,
-        ) {
-            if index >= packets.len() || pending >= MAX_PENDING_PACKETS {
-                return future::pending().await;
-            }
+        loop {
+            if sent < packets.len() && pending.len() < MAX_PENDING_PACKETS {
+                let data = &packets[sent];
 
-            let data = &packets[index];
+                send_buf.resize(HEADER_LEN + data.len(), 0);
+                send_buf[..HEADER_LEN].copy_from_slice(&sent.to_ne_bytes());
+                send_buf[HEADER_LEN..].copy_from_slice(&data[..]);
 
-            buf.resize(HEADER_LEN + data.len(), 0);
-            buf[..HEADER_LEN].copy_from_slice(&index.to_ne_bytes());
-            buf[HEADER_LEN..].copy_from_slice(&data[..]);
+                writer.send_to(&send_buf, peer_addr).await.unwrap();
 
-            writer.send_to(buf, peer_addr).await.unwrap();
-        }
+                pending.insert(sent);
+                sent += 1;
+            } else if !pending.is_empty() {
+                let (size, addr) = match time::timeout(
+                    Duration::from_millis(500),
+                    reader.recv_from(&mut recv_buf),
+                )
+                .await
+                {
+                    Ok(Ok(resp)) => resp,
+                    Ok(Err(error)) => panic!("unexpected recv error: {error:?}"),
+                    Err(_) => panic!("timeout"),
+                };
 
-        async fn recv(
-            reader: &mut impl Reader,
-            peer_addr: SocketAddr,
-            buf: &mut [u8],
-            pending: usize,
-        ) -> usize {
-            if pending == 0 {
-                return future::pending().await;
-            }
+                assert!(size >= HEADER_LEN);
+                assert_eq!(addr, peer_addr);
 
-            let (size, addr) = reader.recv_from(buf).await.unwrap();
-            assert!(size >= HEADER_LEN);
-            assert_eq!(addr, peer_addr);
-
-            usize::from_ne_bytes(buf[..HEADER_LEN].try_into().unwrap())
-        }
-
-        while sent < packets.len() || !pending.is_empty() {
-            select! {
-                _ = send(writer, &packets, sent, peer_addr, &mut send_buf, pending.len()) => {
-                    pending.insert(sent);
-                    sent += 1;
+                let id = usize::from_ne_bytes(recv_buf[..HEADER_LEN].try_into().unwrap());
+                if pending.remove(&id) {
+                    ackd += 1;
                 }
-                id = recv(reader, peer_addr, &mut recv_buf, pending.len()) => {
-                    if pending.remove(&id) {
-                        ackd += 1;
-                    }
-                }
-                _ = time::sleep(Duration::from_secs(1)) => panic!("timeout"),
+            } else {
+                break;
             }
 
             tracing::debug!("sent: {}, ackd: {}", sent, ackd);
@@ -233,7 +216,7 @@ mod oui {
     use ouisync_service::{
         Service, local_endpoint,
         protocol::{Datagram, NetworkSocketHandle, Request},
-        transport::local::LocalClient,
+        transport::local::{LocalClient, LocalTransport},
     };
     use tempfile::TempDir;
 
@@ -306,11 +289,13 @@ mod oui {
 
         async fn create() -> (Reader, Writer, SocketAddr) {
             let temp_dir = TempDir::new().unwrap();
-            let service = Service::init(temp_dir.path().to_owned()).await.unwrap();
+            let service = Service::init(temp_dir.path().to_owned(), LocalTransport::Unix)
+                .await
+                .unwrap();
             let service_runner = ServiceRunner::start(service);
 
             let endpoint = local_endpoint(temp_dir.path()).await.unwrap();
-            let mut client = LocalClient::connect(endpoint).await.unwrap();
+            let mut client = LocalClient::connect(&endpoint).await.unwrap();
 
             let _: () = client
                 .invoke(Request::SessionBindNetwork {
@@ -347,7 +332,7 @@ mod oui {
                 },
                 Writer {
                     shared,
-                    client: LocalClient::connect(endpoint).await.unwrap(),
+                    client: LocalClient::connect(&endpoint).await.unwrap(),
                     socket_handle,
                 },
                 addr,
