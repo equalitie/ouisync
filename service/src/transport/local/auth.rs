@@ -8,11 +8,9 @@ use hmac::{
 use rand::{CryptoRng, Rng, rngs::OsRng};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 use sha2::Sha256;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use super::net::LocalStream;
 use crate::transport::ClientError;
 
 // # Authentication protocol
@@ -97,7 +95,7 @@ impl<'de> Deserialize<'de> for AuthKey {
 }
 
 /// Server-side part of the authentication protocol.
-pub(super) async fn server(socket: &mut TcpStream, auth_key: &AuthKey) -> io::Result<()> {
+pub(super) async fn server(socket: &mut LocalStream, auth_key: &AuthKey) -> io::Result<()> {
     let mut client_challenge = [0; AUTH_CHALLENGE_SIZE];
     socket.read_exact(&mut client_challenge).await?;
 
@@ -120,7 +118,10 @@ pub(super) async fn server(socket: &mut TcpStream, auth_key: &AuthKey) -> io::Re
 }
 
 /// Client-side part of the authentication protocol.
-pub(super) async fn client(socket: &mut TcpStream, auth_key: &AuthKey) -> Result<(), ClientError> {
+pub(super) async fn client(
+    socket: &mut LocalStream,
+    auth_key: &AuthKey,
+) -> Result<(), ClientError> {
     let mut client_challenge = [0; AUTH_CHALLENGE_SIZE];
     OsRng.fill(&mut client_challenge);
     socket.write_all(&client_challenge).await?;

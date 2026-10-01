@@ -13,7 +13,7 @@ pub struct LocalClient {
 }
 
 impl LocalClient {
-    pub async fn connect(endpoint: LocalEndpoint) -> Result<Self, ClientError> {
+    pub async fn connect(endpoint: &LocalEndpoint) -> Result<Self, ClientError> {
         let (reader, writer) = super::connect(endpoint).await?;
         Ok(Self { reader, writer })
     }
