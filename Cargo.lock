@@ -3099,6 +3099,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "camino",
+ "clap",
  "fs_util",
  "futures-util",
  "heck",
