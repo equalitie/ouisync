@@ -12,7 +12,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, stdin, stdout};
 
 pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<(), ClientError> {
     let endpoint = ouisync_service::local_endpoint(&config_path).await?;
-    let mut client = LocalClient::connect(endpoint).await?;
+    let mut client = LocalClient::connect(&endpoint).await?;
 
     match command {
         ClientCommand::AddPeers { addrs } => {
