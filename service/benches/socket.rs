@@ -214,8 +214,9 @@ mod oui {
 
     use ouisync::PeerAddr;
     use ouisync_service::{
-        Service, local_endpoint,
+        Service,
         protocol::{Datagram, NetworkSocketHandle, Request},
+        service_addr,
         transport::local::{LocalClient, LocalTransport},
     };
     use tempfile::TempDir;
@@ -294,8 +295,8 @@ mod oui {
                 .unwrap();
             let service_runner = ServiceRunner::start(service);
 
-            let endpoint = local_endpoint(temp_dir.path()).await.unwrap();
-            let mut client = LocalClient::connect(&endpoint).await.unwrap();
+            let service_addr = service_addr(temp_dir.path()).await.unwrap();
+            let mut client = LocalClient::connect(&service_addr).await.unwrap();
 
             let _: () = client
                 .invoke(Request::SessionBindNetwork {
@@ -332,7 +333,7 @@ mod oui {
                 },
                 Writer {
                     shared,
-                    client: LocalClient::connect(&endpoint).await.unwrap(),
+                    client: LocalClient::connect(&service_addr).await.unwrap(),
                     socket_handle,
                 },
                 addr,

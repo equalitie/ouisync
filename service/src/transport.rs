@@ -129,8 +129,6 @@ pub enum ValidateError {
 
 #[derive(Error, Debug)]
 pub enum ClientError {
-    #[error("failed to authenticate")]
-    Authentication,
     #[error("failed to connect")]
     Connect(#[source] io::Error),
     #[error("connection closed by server")]

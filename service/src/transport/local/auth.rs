@@ -1,17 +1,17 @@
 use core::str;
-use std::{fmt, io};
+use std::{fmt, io, str::FromStr};
 
+use hex::FromHexError;
 use hmac::{
     Hmac, Mac,
     digest::{OutputSizeUser, typenum::Unsigned},
 };
 use rand::{CryptoRng, Rng, rngs::OsRng};
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 use sha2::Sha256;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-use super::net::LocalStream;
-use crate::transport::ClientError;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
 
 // # Authentication protocol
 //
@@ -25,14 +25,14 @@ use crate::transport::ClientError;
 // 1. Client sends `client_challenge` to the server
 // 2. Server sends `server_proof` and `server_challenge` to the client
 // 3. Client verifies `server_proof`. If it's valid, it send `client_proof` to the server. Otherwise
-// it closes the connection and returns "authentication failed" error.
+// it closes the connection and returns "permission denied" error.
 // 4. Server verifies `client_proof`. If it's valid, the client is authenticated. Otherwise it
 // closes the connection.
 //
 const AUTH_CHALLENGE_SIZE: usize = 256;
 const AUTH_PROOF_SIZE: usize = <<Sha256 as OutputSizeUser>::OutputSize as Unsigned>::USIZE; // 32
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub struct AuthKey([u8; Self::SIZE]);
 
 impl AuthKey {
@@ -57,45 +57,38 @@ impl fmt::Debug for AuthKey {
     }
 }
 
-impl Serialize for AuthKey {
-    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        if s.is_human_readable() {
-            let mut buffer = [0; Self::SIZE * 2];
-            // unwrap is OK because the buffer has sufficient length.
-            hex::encode_to_slice(self.0, &mut buffer).unwrap();
-
-            // unwrap is OK because the buffer contains only hex digits which are valid utf-8.
-            str::from_utf8(&buffer).unwrap().serialize(s)
-        } else {
-            serde_bytes::serialize(&self.0, s)
+impl fmt::LowerHex for AuthKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for b in self.0 {
+            write!(f, "{:02x}", b)?;
         }
+
+        Ok(())
     }
 }
 
-impl<'de> Deserialize<'de> for AuthKey {
-    fn deserialize<D>(d: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        if d.is_human_readable() {
-            let hex = <&str>::deserialize(d)?;
-            let mut bytes = [0; Self::SIZE];
-            hex::decode_to_slice(hex, &mut bytes).map_err(|_| {
-                D::Error::invalid_length(hex.len(), &format!("{}", Self::SIZE * 2).as_str())
-            })?;
+impl FromStr for AuthKey {
+    type Err = AuthKeyParseError;
 
-            Ok(Self(bytes))
-        } else {
-            serde_bytes::deserialize(d).map(Self)
-        }
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut bytes = [0; Self::SIZE];
+        hex::decode_to_slice(s, &mut bytes)?;
+
+        Ok(Self(bytes))
+    }
+}
+
+#[derive(Debug)]
+pub struct AuthKeyParseError(pub hex::FromHexError);
+
+impl From<FromHexError> for AuthKeyParseError {
+    fn from(e: FromHexError) -> Self {
+        Self(e)
     }
 }
 
 /// Server-side part of the authentication protocol.
-pub(super) async fn server(socket: &mut LocalStream, auth_key: &AuthKey) -> io::Result<()> {
+pub(super) async fn server(socket: &mut TcpStream, auth_key: &AuthKey) -> io::Result<()> {
     let mut client_challenge = [0; AUTH_CHALLENGE_SIZE];
     socket.read_exact(&mut client_challenge).await?;
 
@@ -118,10 +111,7 @@ pub(super) async fn server(socket: &mut LocalStream, auth_key: &AuthKey) -> io::
 }
 
 /// Client-side part of the authentication protocol.
-pub(super) async fn client(
-    socket: &mut LocalStream,
-    auth_key: &AuthKey,
-) -> Result<(), ClientError> {
+pub(super) async fn client(socket: &mut TcpStream, auth_key: &AuthKey) -> io::Result<()> {
     let mut client_challenge = [0; AUTH_CHALLENGE_SIZE];
     OsRng.fill(&mut client_challenge);
     socket.write_all(&client_challenge).await?;
@@ -131,7 +121,7 @@ pub(super) async fn client(
 
     hmac(auth_key, &client_challenge)
         .verify_slice(&server_proof)
-        .map_err(|_| ClientError::Authentication)?;
+        .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
 
     let mut server_challenge = [0; AUTH_CHALLENGE_SIZE];
     socket.read_exact(&mut server_challenge).await?;

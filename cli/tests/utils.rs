@@ -15,6 +15,7 @@ use std::{
     time::Duration,
 };
 use tempfile::TempDir;
+use tokio::runtime;
 
 /// Wrapper for the ouisync binary.
 pub struct Bin {
@@ -71,7 +72,7 @@ impl Bin {
         let stderr = BufReader::new(process.stderr.take().unwrap());
         copy_lines_prefixed(stderr, OutputStream::Stderr, &id);
 
-        wait_for_file_exists(&config_dir.join("local_endpoint.conf"));
+        wait_for_service_startup(&config_dir);
 
         let bin = Self {
             id,
@@ -317,19 +318,18 @@ impl fmt::Display for Id {
     }
 }
 
-fn wait_for_file_exists(path: &Path) {
-    // poor man's inotify :)
+fn wait_for_service_startup(config_dir: &Path) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .build()
+        .unwrap();
+
     loop {
-        match path.try_exists() {
-            Ok(true) => break,
-            Ok(false) => {
+        match runtime.block_on(ouisync_service::service_addr(config_dir)) {
+            Ok(_) => break,
+            Err(_) => {
                 thread::sleep(Duration::from_millis(50));
             }
-            Err(error) => panic!(
-                "Failed to check existence of file '{}': {:?}",
-                path.display(),
-                error
-            ),
         }
     }
 }
