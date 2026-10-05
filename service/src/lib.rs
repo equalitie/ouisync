@@ -50,15 +50,14 @@ use tokio::{
 };
 use transport::{
     AcceptedConnection, ClientError,
-    local::{AuthKey, LocalEndpoint, LocalServer},
+    local::{AuthKey, LocalAddr, LocalServer, LocalTransport},
 };
-
-use crate::transport::local::{LocalAddr, LocalTransport};
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
+const LOCAL_ENDPOINT_NAME: &str = "local_endpoint";
 // Don't use comments here so the file can be parsed as json.
-const LOCAL_ENDPOINT_KEY: ConfigKey<LocalEndpoint> = ConfigKey::new("local_endpoint", "").private();
+const LOCAL_ENDPOINT_KEY: ConfigKey<LocalAddr> = ConfigKey::new(LOCAL_ENDPOINT_NAME, "").private();
 
 pub struct Service {
     state: Arc<State>,
@@ -76,20 +75,21 @@ impl Service {
         let local_endpoint_entry = config.entry(LOCAL_ENDPOINT_KEY);
         let local_endpoint = match local_endpoint_entry.get().await {
             Ok(value) => value,
-            Err(ConfigError::NotFound) => {
-                let addr = match local_transport {
-                    LocalTransport::Tcp => LocalAddr::Tcp((Ipv4Addr::LOCALHOST, 0).into()),
-                    LocalTransport::Unix => {
-                        fs::create_dir_all(config.dir()).await?;
-                        LocalAddr::Unix(config.dir().join("local.sock"))
-                    }
-                };
-
-                LocalEndpoint {
-                    addr,
+            Err(ConfigError::NotFound) => match local_transport {
+                LocalTransport::Tcp => LocalAddr::Tcp {
+                    addr: (Ipv4Addr::LOCALHOST, 0).into(),
                     auth_key: AuthKey::random(),
+                },
+                LocalTransport::Unix => {
+                    fs::create_dir_all(config.dir()).await?;
+                    LocalAddr::Unix(
+                        config
+                            .dir()
+                            .join(LOCAL_ENDPOINT_NAME)
+                            .with_added_extension("sock"),
+                    )
                 }
-            }
+            },
             Err(error) => return Err(error.into()),
         };
 
@@ -100,10 +100,17 @@ impl Service {
                 _ => Error::Bind(error),
             })?;
 
-        local_endpoint_entry.set(local_server.endpoint()).await?;
+        // Only TCP endpoint is saved to config because the UNIX one is hardcoded to
+        // $config_dir/local_endpoint.sock
+        match local_server.addr() {
+            addr @ LocalAddr::Tcp { .. } => {
+                local_endpoint_entry.set(addr).await?;
+            }
+            LocalAddr::Unix(_) => (),
+        }
 
         tracing::debug!(
-            addr = ?local_server.endpoint().addr,
+            addr = %local_server.addr(),
             "local server listening"
         );
 
@@ -158,8 +165,8 @@ impl Service {
         .await;
     }
 
-    pub fn local_endpoint(&self) -> &LocalEndpoint {
-        self.local_server.endpoint()
+    pub fn local_addr(&self) -> &LocalAddr {
+        self.local_server.addr()
     }
 
     pub fn store_dirs(&self) -> Vec<PathBuf> {
@@ -220,14 +227,21 @@ impl Service {
     }
 }
 
-/// Returns the loopback TCP port and authentication key for establishing local connection to the
-/// service.
-pub async fn local_endpoint(config_path: &Path) -> Result<LocalEndpoint, ClientError> {
-    ConfigStore::new(config_path)
-        .entry(LOCAL_ENDPOINT_KEY)
-        .get()
-        .await
-        .map_err(ClientError::InvalidEndpoint)
+/// Returns the address for establishing local connection to the service.
+pub async fn service_addr(config_path: &Path) -> Result<LocalAddr, ClientError> {
+    let unix_path = config_path
+        .join(LOCAL_ENDPOINT_NAME)
+        .with_added_extension("sock");
+
+    if fs::try_exists(&unix_path).await? {
+        Ok(LocalAddr::Unix(unix_path))
+    } else {
+        ConfigStore::new(config_path)
+            .entry(LOCAL_ENDPOINT_KEY)
+            .get()
+            .await
+            .map_err(ClientError::InvalidEndpoint)
+    }
 }
 
 #[cfg(test)]

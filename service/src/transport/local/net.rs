@@ -10,44 +10,81 @@ use tokio::{
     net::{TcpListener, TcpStream, UnixListener, UnixStream, tcp, unix},
 };
 
-use super::LocalAddr;
+use super::{
+    LocalAddr,
+    auth::{self, AuthKey},
+};
 
 pub(super) enum LocalListener {
-    Tcp(TcpListener),
+    Tcp {
+        inner: TcpListener,
+        auth_key: AuthKey,
+    },
     Unix(UnixListener),
 }
 
 impl LocalListener {
-    pub async fn bind(addr: &LocalAddr) -> Result<Self, io::Error> {
+    pub async fn bind(addr: LocalAddr) -> Result<Self, io::Error> {
         match addr {
-            LocalAddr::Tcp(addr) => Ok(Self::Tcp(TcpListener::bind(addr).await?)),
+            LocalAddr::Tcp { addr, auth_key } => Ok(Self::Tcp {
+                inner: TcpListener::bind(addr).await?,
+                auth_key,
+            }),
             LocalAddr::Unix(path) => Ok(Self::Unix(UnixListener::bind(path)?)),
         }
     }
 
-    pub async fn accept(&self) -> Result<(LocalStream, LocalAddr), io::Error> {
+    pub async fn accept(&self) -> Result<LocalAccept, io::Error> {
         match self {
-            Self::Tcp(inner) => {
-                let (stream, addr) = inner.accept().await?;
-                Ok((LocalStream::Tcp(stream), LocalAddr::Tcp(addr)))
+            Self::Tcp { inner, auth_key } => {
+                let (stream, _addr) = inner.accept().await?;
+                Ok(LocalAccept::Tcp {
+                    stream,
+                    auth_key: *auth_key,
+                })
             }
             Self::Unix(inner) => {
-                let (stream, addr) = inner.accept().await?;
-                let path = addr.as_pathname().map(Path::to_owned).unwrap_or_default();
-                Ok((LocalStream::Unix(stream), LocalAddr::Unix(path)))
+                let (stream, _addr) = inner.accept().await?;
+                Ok(LocalAccept::Unix(stream))
             }
         }
     }
 
     pub fn local_addr(&self) -> Result<LocalAddr, io::Error> {
         match self {
-            Self::Tcp(inner) => Ok(LocalAddr::Tcp(inner.local_addr()?)),
+            Self::Tcp { inner, auth_key } => Ok(LocalAddr::Tcp {
+                addr: inner.local_addr()?,
+                auth_key: *auth_key,
+            }),
             Self::Unix(inner) => {
                 let addr = inner.local_addr()?;
                 let path = addr.as_pathname().map(Path::to_owned).unwrap_or_default();
 
                 Ok(LocalAddr::Unix(path))
             }
+        }
+    }
+}
+
+pub(super) enum LocalAccept {
+    Tcp {
+        stream: TcpStream,
+        auth_key: AuthKey,
+    },
+    Unix(UnixStream),
+}
+
+impl LocalAccept {
+    pub async fn finalize(self) -> Result<LocalStream, io::Error> {
+        match self {
+            Self::Tcp {
+                mut stream,
+                auth_key,
+            } => {
+                auth::server(&mut stream, &auth_key).await?;
+                Ok(LocalStream::Tcp(stream))
+            }
+            Self::Unix(stream) => Ok(LocalStream::Unix(stream)),
         }
     }
 }
@@ -64,7 +101,12 @@ pub(super) type LocalOwnedWriteHalf = LocalIo<tcp::OwnedWriteHalf, unix::OwnedWr
 impl LocalStream {
     pub async fn connect(addr: &LocalAddr) -> Result<Self, io::Error> {
         match addr {
-            LocalAddr::Tcp(addr) => Ok(Self::Tcp(TcpStream::connect(addr).await?)),
+            LocalAddr::Tcp { addr, auth_key } => {
+                let mut stream = TcpStream::connect(addr).await?;
+                auth::client(&mut stream, auth_key).await?;
+
+                Ok(Self::Tcp(stream))
+            }
             LocalAddr::Unix(path) => Ok(Self::Unix(UnixStream::connect(path).await?)),
         }
     }

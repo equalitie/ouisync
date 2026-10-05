@@ -1,5 +1,5 @@
 use crate::{defaults, migration, options::ServerCommand};
-use ouisync_service::{Error, Service, logger};
+use ouisync_service::{Error, Service, logger, transport::local::LocalTransport};
 use std::{io, path::PathBuf};
 use tokio::select;
 
@@ -15,7 +15,7 @@ pub(crate) async fn run(config_dir: PathBuf, command: ServerCommand) -> Result<(
         migration::migrate_config_dir().await;
     }
 
-    let mut service = Service::init(config_dir).await?;
+    let mut service = Service::init(config_dir, LocalTransport::default()).await?;
 
     let store_dirs = service.store_dirs();
     let store_dirs = if store_dirs.is_empty() {
