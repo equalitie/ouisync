@@ -23,22 +23,6 @@ use super::{ClientError, ReadError, WriteError};
 use crate::protocol::{Message, Request, ResponseResult};
 use net::{LocalAccept, LocalListener, LocalOwnedReadHalf, LocalOwnedWriteHalf, LocalStream};
 
-pub enum LocalTransport {
-    Tcp,
-    Unix,
-}
-
-#[expect(clippy::derivable_impls)] // false positive
-impl Default for LocalTransport {
-    fn default() -> Self {
-        // TODO: use unix sockets on more platforms
-        cfg_select! {
-            target_os = "linux" => Self::Unix,
-            _ => Self::Tcp,
-        }
-    }
-}
-
 pub(crate) struct LocalServer {
     listener: LocalListener,
     addr: LocalAddr,
@@ -192,7 +176,12 @@ fn into_send_error(src: io::Error) -> WriteError {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, io, net::Ipv4Addr, path::PathBuf};
+    use std::{
+        collections::VecDeque,
+        io,
+        net::Ipv4Addr,
+        path::{Path, PathBuf},
+    };
 
     use assert_matches::assert_matches;
     use futures_util::SinkExt;
@@ -202,7 +191,8 @@ mod tests {
     use tracing::Instrument;
 
     use crate::{
-        Service,
+        LOCAL_ENDPOINT_KEY, LOCAL_ENDPOINT_NAME, Service,
+        config_store::ConfigStore,
         file::FileHandle,
         protocol::{
             Message, MessageId, ProtocolError, RepositoryHandle, Request, Response, ResponseResult,
@@ -212,7 +202,12 @@ mod tests {
         transport::{self, ClientError},
     };
 
-    use super::{AuthKey, LocalAddr, LocalClientReader, LocalClientWriter, LocalTransport};
+    use super::{AuthKey, LocalAddr, LocalClientReader, LocalClientWriter};
+
+    enum LocalTransport {
+        Tcp,
+        Unix,
+    }
 
     #[tokio::test]
     async fn sanity_check_tcp() {
@@ -229,10 +224,26 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
         let store_dir = temp_dir.path().join("store");
+        let config_dir = temp_dir.path().join("config");
 
-        let service = Service::init(temp_dir.path().join("config"), local_transport)
+        // Write the local_endpoint.conf file before initializing the service to force the requested
+        // transport for the API protocol.
+        let local_addr = match local_transport {
+            LocalTransport::Tcp => LocalAddr::Tcp {
+                addr: (Ipv4Addr::LOCALHOST, 0).into(),
+                auth_key: AuthKey::random(),
+            },
+            LocalTransport::Unix => {
+                LocalAddr::Unix(Path::new(LOCAL_ENDPOINT_NAME).with_added_extension("sock"))
+            }
+        };
+        ConfigStore::new(config_dir)
+            .entry(LOCAL_ENDPOINT_KEY)
+            .set(&local_addr)
             .await
             .unwrap();
+
+        let service = Service::init(temp_dir.path().join("config")).await.unwrap();
         let service_addr = service.local_addr().clone();
         service
             .state()
@@ -255,15 +266,27 @@ mod tests {
         runner.stop().await.close().await;
     }
 
+    // Note: we only test the TCP transport authentication for now. UNIX transport is authenticated
+    // using file permissions which is tricky to test. TODO: figure out how to test it (maybe with
+    // docker?).
     #[tokio::test]
-    async fn authentication() {
+    async fn authentication_tcp() {
         test_utils::init_log();
 
         let temp_dir = TempDir::new().unwrap();
 
-        let service = Service::init(temp_dir.path().join("config"), LocalTransport::Tcp)
+        // Force TCP transport
+        let config_dir = temp_dir.path().join("config");
+        ConfigStore::new(&config_dir)
+            .entry(LOCAL_ENDPOINT_KEY)
+            .set(&LocalAddr::Tcp {
+                addr: (Ipv4Addr::LOCALHOST, 0).into(),
+                auth_key: AuthKey::random(),
+            })
             .await
             .unwrap();
+
+        let service = Service::init(config_dir).await.unwrap();
 
         let invalid_addr = LocalAddr::Tcp {
             addr: match service.local_addr() {
@@ -292,9 +315,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let store_dir = temp_dir.path().join("store");
 
-        let service = Service::init(temp_dir.path().join("config"), LocalTransport::Tcp)
-            .await
-            .unwrap();
+        let service = Service::init(temp_dir.path().join("config")).await.unwrap();
         let service_addr = service.local_addr().clone();
         service
             .state()
@@ -399,7 +420,7 @@ mod tests {
 
         // Create two separate services (A and B), each with its own client.
         let (addr_a, runner_a) = async {
-            let service = Service::init(temp_dir.path().join("config_a"), LocalTransport::Tcp)
+            let service = Service::init(temp_dir.path().join("config_a"))
                 .await
                 .unwrap();
             let addr = service.local_addr().clone();
@@ -416,7 +437,7 @@ mod tests {
         .await;
 
         let (addr_b, runner_b) = async {
-            let service = Service::init(temp_dir.path().join("config_b"), LocalTransport::Tcp)
+            let service = Service::init(temp_dir.path().join("config_b"))
                 .await
                 .unwrap();
             let addr = service.local_addr().clone();

@@ -217,7 +217,7 @@ mod oui {
         Service,
         protocol::{Datagram, NetworkSocketHandle, Request},
         service_addr,
-        transport::local::{LocalClient, LocalTransport},
+        transport::local::LocalClient,
     };
     use tempfile::TempDir;
 
@@ -290,9 +290,7 @@ mod oui {
 
         async fn create() -> (Reader, Writer, SocketAddr) {
             let temp_dir = TempDir::new().unwrap();
-            let service = Service::init(temp_dir.path().to_owned(), LocalTransport::Unix)
-                .await
-                .unwrap();
+            let service = Service::init(temp_dir.path().to_owned()).await.unwrap();
             let service_runner = ServiceRunner::start(service);
 
             let service_addr = service_addr(temp_dir.path()).await.unwrap();

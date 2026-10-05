@@ -50,7 +50,7 @@ use tokio::{
 };
 use transport::{
     AcceptedConnection, ClientError,
-    local::{AuthKey, LocalAddr, LocalServer, LocalTransport},
+    local::{AuthKey, LocalAddr, LocalServer},
 };
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
@@ -67,7 +67,7 @@ pub struct Service {
 }
 
 impl Service {
-    pub async fn init(config_dir: PathBuf, local_transport: LocalTransport) -> Result<Self, Error> {
+    pub async fn init(config_dir: PathBuf) -> Result<Self, Error> {
         let config = ConfigStore::new(config_dir);
 
         config_migration::run(&config).await;
@@ -75,22 +75,14 @@ impl Service {
         let local_endpoint_entry = config.entry(LOCAL_ENDPOINT_KEY);
         let local_endpoint = match local_endpoint_entry.get().await {
             Ok(value) => value,
-            Err(ConfigError::NotFound) => match local_transport {
-                LocalTransport::Tcp => LocalAddr::Tcp {
-                    addr: (Ipv4Addr::LOCALHOST, 0).into(),
-                    auth_key: AuthKey::random(),
-                },
-                LocalTransport::Unix => {
-                    fs::create_dir_all(config.dir()).await?;
-                    LocalAddr::Unix(
-                        config
-                            .dir()
-                            .join(LOCAL_ENDPOINT_NAME)
-                            .with_added_extension("sock"),
-                    )
-                }
-            },
+            Err(ConfigError::NotFound) => default_service_addr(),
             Err(error) => return Err(error.into()),
+        };
+
+        // Absolutize the unix socket path
+        let local_endpoint = match local_endpoint {
+            LocalAddr::Unix(path) if path.is_relative() => LocalAddr::Unix(config.dir().join(path)),
+            LocalAddr::Unix(_) | LocalAddr::Tcp { .. } => local_endpoint,
         };
 
         let local_server = LocalServer::bind(local_endpoint)
@@ -100,8 +92,8 @@ impl Service {
                 _ => Error::Bind(error),
             })?;
 
-        // Only TCP endpoint is saved to config because the UNIX one is hardcoded to
-        // $config_dir/local_endpoint.sock
+        // The TCP address might change (e.g, when the port was 0 or it was taken) so we need to
+        // write it back to the config so the clients can get the correct one.
         match local_server.addr() {
             addr @ LocalAddr::Tcp { .. } => {
                 local_endpoint_entry.set(addr).await?;
@@ -228,20 +220,34 @@ impl Service {
 }
 
 /// Returns the address for establishing local connection to the service.
-pub async fn service_addr(config_path: &Path) -> Result<LocalAddr, ClientError> {
-    let unix_path = config_path
-        .join(LOCAL_ENDPOINT_NAME)
-        .with_added_extension("sock");
+pub async fn service_addr(config_dir: &Path) -> Result<LocalAddr, ClientError> {
+    let unix_path = config_dir.join(unix_socket_name());
 
     if fs::try_exists(&unix_path).await? {
         Ok(LocalAddr::Unix(unix_path))
     } else {
-        ConfigStore::new(config_path)
+        ConfigStore::new(config_dir)
             .entry(LOCAL_ENDPOINT_KEY)
             .get()
             .await
             .map_err(ClientError::InvalidEndpoint)
     }
+}
+
+fn default_service_addr() -> LocalAddr {
+    // TODO: use unix sockets on more platforms
+    if cfg!(target_os = "linux") {
+        LocalAddr::Unix(unix_socket_name())
+    } else {
+        LocalAddr::Tcp {
+            addr: (Ipv4Addr::LOCALHOST, 0).into(),
+            auth_key: AuthKey::random(),
+        }
+    }
+}
+
+fn unix_socket_name() -> PathBuf {
+    Path::new(LOCAL_ENDPOINT_NAME).with_added_extension("sock")
 }
 
 #[cfg(test)]
@@ -267,12 +273,10 @@ mod tests {
     async fn already_running() {
         let temp_dir = TempDir::new().unwrap();
 
-        let mut service0 = Service::init(temp_dir.path().join("config"), LocalTransport::Tcp)
-            .await
-            .unwrap();
+        let mut service0 = Service::init(temp_dir.path().join("config")).await.unwrap();
 
         assert_matches!(
-            Service::init(temp_dir.path().join("config"), LocalTransport::Tcp)
+            Service::init(temp_dir.path().join("config"))
                 .await
                 .map(|_| ()),
             Err(Error::ServiceAlreadyRunning)
@@ -321,9 +325,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config_dir = temp_dir.path().join("config");
 
-        let service = Service::init(config_dir.clone(), LocalTransport::Tcp)
-            .await
-            .unwrap();
+        let service = Service::init(config_dir.clone()).await.unwrap();
 
         let (cert_old, signing_key_old) = gen_cert(Duration::from_hours(24)).await;
         let (cert_new, signing_key_new) = gen_cert(Duration::from_hours(48)).await;
