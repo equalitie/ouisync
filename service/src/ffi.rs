@@ -12,7 +12,6 @@ use crate::{
     Error, Service,
     logger::{self, LogColor, LogFormat},
     protocol::{ErrorCode, ToErrorCode},
-    transport::local::LocalTransport,
 };
 
 /// Start Ouisync service in a new thread and bind it to the specified local socket.
@@ -154,7 +153,7 @@ fn run(
     let service = runtime.block_on(
         async {
             select! {
-                result = Service::init(config_dir.into(), LocalTransport::Tcp) => result,
+                result = Service::init(config_dir.into()) => result,
                 result = &mut on_stop_rx => {
                     if let Ok(on_stop) = result {
                         on_stop.call(ErrorCode::Ok);
