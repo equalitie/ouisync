@@ -6,6 +6,7 @@ use std::{
 };
 
 use tokio::{
+    fs,
     io::{AsyncRead, AsyncWrite, ReadBuf},
     net::{TcpListener, TcpStream, UnixListener, UnixStream, tcp, unix},
 };
@@ -30,7 +31,13 @@ impl LocalListener {
                 inner: TcpListener::bind(addr).await?,
                 auth_key,
             }),
-            LocalAddr::Unix(path) => Ok(Self::Unix(UnixListener::bind(path)?)),
+            LocalAddr::Unix(path) => {
+                if let Some(dir) = path.parent() {
+                    fs::create_dir_all(dir).await?;
+                }
+
+                Ok(Self::Unix(UnixListener::bind(path)?))
+            }
         }
     }
 
