@@ -11,8 +11,8 @@ use std::{collections::BTreeMap, env, io, net::SocketAddr, path::PathBuf, time::
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, stdin, stdout};
 
 pub(crate) async fn run(config_path: PathBuf, command: ClientCommand) -> Result<(), ClientError> {
-    let endpoint = ouisync_service::local_endpoint(&config_path).await?;
-    let mut client = LocalClient::connect(&endpoint).await?;
+    let service_addr = ouisync_service::service_addr(&config_path).await?;
+    let mut client = LocalClient::connect(&service_addr).await?;
 
     match command {
         ClientCommand::AddPeers { addrs } => {
