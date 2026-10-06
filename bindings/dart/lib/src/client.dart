@@ -35,12 +35,9 @@ class Client {
     Duration minReconnectDelay = const Duration(milliseconds: 50),
     Duration maxReconnectDelay = const Duration(seconds: 1),
   }) async {
-    final (port, authKey) =
-        await _readLocalEndpoint('$configPath/local_endpoint.conf');
-
+    final addr = await _readServiceAddress(configPath);
     final connector = _Connector(
-      port: port,
-      authKey: authKey,
+      addr: addr,
       minDelay: minReconnectDelay,
       maxDelay: maxReconnectDelay,
     );
@@ -57,8 +54,8 @@ class Client {
     final controller = StreamController<Response>();
     final id = _nextMessageId++;
 
-    controller.onListen =
-        () => unawaited(_onSubscriptionListen(id, request, controller.sink));
+    controller.onListen = () =>
+        unawaited(_onSubscriptionListen(id, request, controller.sink));
 
     controller.onCancel = () => unawaited(_onSubscriptionCancel(id));
 
@@ -122,11 +119,9 @@ class Client {
           _state = _Transitioning(completer.future);
 
           final (socket, stream) = await _connector.connect();
-          final subscription = stream.transform(LengthDelimitedCodec()).listen(
-                _receive,
-                onError: _receiveError,
-                onDone: _receiveDone,
-              );
+          final subscription = stream
+              .transform(LengthDelimitedCodec())
+              .listen(_receive, onError: _receiveError, onDone: _receiveDone);
 
           _state = _Connected(socket, subscription);
           completer.complete();
@@ -274,26 +269,60 @@ class Client {
 
 _minDuration(Duration a, Duration b) => (a < b) ? a : b;
 
-Future<(int, List<int>)> _readLocalEndpoint(String path) async {
-  final file = File(path);
-  final content = await file.readAsString();
-  final raw = json.decode(content) as Map<String, Object?>;
+final class _ServiceAddress {
+  final InternetAddress address;
+  final int port;
+  final List<int>? authKey;
 
-  final port = raw['port'] as int;
-  final authKey = HEX.decode(raw['auth_key'] as String);
+  _ServiceAddress(this.address, [this.port = 0, this.authKey]);
+}
 
-  return (port, authKey);
+Future<_ServiceAddress> _readServiceAddress(String dir) async {
+  final unixSocket = File('$dir/local_endpoint.sock');
+  if (await unixSocket.exists()) {
+    return _ServiceAddress(
+      InternetAddress(unixSocket.path, type: InternetAddressType.unix),
+    );
+  }
+
+  final tcpConf = File('$dir/local_endpoint.conf');
+  final content = await tcpConf.readAsString();
+
+  final raw = json.decode(content);
+  if (raw is! String) {
+    throw FormatException('invalid service address: $raw');
+  }
+
+  final uri = Uri.tryParse(raw);
+
+  if (uri == null) {
+    throw FormatException('invalid service address: $raw');
+  }
+
+  if (uri.scheme != 'tcp') {
+    throw FormatException('invalid service address: $raw - unsupported scheme');
+  }
+
+  if (!uri.queryParameters.containsKey('auth_key')) {
+    throw FormatException(
+      'invalid service address: $raw - missing auth_key query parameter',
+    );
+  }
+
+  final addr = uri.host;
+  final port = uri.port;
+  final authKey = HEX.decode(uri.queryParameters['auth_key']!);
+
+  return _ServiceAddress(InternetAddress(addr), port, authKey);
 }
 
 class _Connector {
-  final int port;
-  final List<int> authKey;
+  final _ServiceAddress addr;
   final Duration minDelay;
   final Duration maxDelay;
 
   const _Connector({
-    required this.port,
-    required this.authKey,
+    required this.addr,
     this.minDelay = const Duration(milliseconds: 50),
     this.maxDelay = const Duration(seconds: 1),
   });
@@ -303,7 +332,7 @@ class _Connector {
 
     while (true) {
       try {
-        final socket = await Socket.connect(InternetAddress.loopbackIPv4, port);
+        final socket = await Socket.connect(addr.address, addr.port);
         final stream = socket.asBroadcastStream();
 
         await _authenticate(stream, socket);
@@ -316,10 +345,12 @@ class _Connector {
     }
   }
 
-  Future<void> _authenticate(
-    Stream<Uint8List> stream,
-    IOSink sink,
-  ) async {
+  Future<void> _authenticate(Stream<Uint8List> stream, IOSink sink) async {
+    final authKey = addr.authKey;
+    if (authKey == null) {
+      return;
+    }
+
     const challengeSize = 256;
     const proofSize = 32;
 
