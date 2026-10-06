@@ -1,6 +1,6 @@
 use std::{
     fmt,
-    net::{Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
 };
 
@@ -80,17 +80,24 @@ impl<'de> Deserialize<'de> for LocalAddr {
                 E: de::Error,
             {
                 if let Some(v) = v.strip_prefix("tcp://") {
-                    let (addr, auth_key) = v.split_once("?auth_key=").ok_or(E::invalid_value(
-                        de::Unexpected::Str(v),
-                        &"'auth_key' query param",
-                    ))?;
+                    let (raw_addr, raw_auth_key) = v.split_once("?auth_key=").ok_or(
+                        E::invalid_value(de::Unexpected::Str(v), &"'auth_key' query param"),
+                    )?;
 
-                    let addr: SocketAddr = addr.parse().map_err(|_| {
-                        E::invalid_value(de::Unexpected::Str(addr), &"valid socket address")
-                    })?;
-                    let auth_key: AuthKey = auth_key
+                    let addr = if let Ok(addr) = raw_addr.parse::<SocketAddr>() {
+                        addr
+                    } else if let Ok(addr) = raw_addr.parse::<IpAddr>() {
+                        SocketAddr::from((addr, 0))
+                    } else {
+                        return Err(E::invalid_value(
+                            de::Unexpected::Str(raw_addr),
+                            &"valid socket address",
+                        ));
+                    };
+
+                    let auth_key: AuthKey = raw_auth_key
                         .parse()
-                        .map_err(|_| auth_key_parse_error(auth_key))?;
+                        .map_err(|_| auth_key_parse_error(raw_auth_key))?;
 
                     return Ok(Self::Value::Tcp { addr, auth_key });
                 }
@@ -190,12 +197,25 @@ mod tests {
                 auth_key,
             },
         );
+        let tcp_new_without_port = (
+            format!("\"tcp://127.0.0.1?auth_key={auth_key_hex}\""),
+            LocalAddr::Tcp {
+                addr: (Ipv4Addr::LOCALHOST, 0).into(),
+                auth_key,
+            },
+        );
         let unix = (
             "\"unix:///var/run/ouisync.sock\"".to_owned(),
             LocalAddr::Unix(PathBuf::from("/var/run/ouisync.sock")),
         );
 
-        for (serialized, expected) in [&tcp_old_without_addr, &tcp_old_with_addr, &tcp_new, &unix] {
+        for (serialized, expected) in [
+            &tcp_old_without_addr,
+            &tcp_old_with_addr,
+            &tcp_new,
+            &tcp_new_without_port,
+            &unix,
+        ] {
             let actual: LocalAddr = match serde_json::from_str(serialized) {
                 Ok(value) => value,
                 Err(error) => {
