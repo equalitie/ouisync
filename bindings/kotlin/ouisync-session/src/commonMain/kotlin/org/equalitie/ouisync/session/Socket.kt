@@ -28,6 +28,10 @@ internal abstract class Socket : Closeable {
 
 // Used for TCP on both jvm and android and for UNIX on jvm.
 internal class CommonSocket(private val channel: SocketChannel) : Socket() {
+    suspend fun connect(addr: java.net.SocketAddress) {
+        withContext(Dispatchers.IO) { channel.connect(addr) }
+    }
+
     override suspend fun read(buffer: ByteBuffer) = withContext(Dispatchers.IO) { channel.read(buffer) }
 
     override suspend fun write(buffer: ByteBuffer) = withContext(Dispatchers.IO) { channel.write(buffer) }

@@ -37,11 +37,5 @@ internal class AndroidUnixSocket(private val socket: LocalSocket) : Socket() {
 
 internal actual suspend fun connectSocket(addr: SocketAddress): Socket = when (addr) {
     is SocketAddress.Unix -> AndroidUnixSocket.connect(addr.path)
-    is SocketAddress.Tcp -> {
-        val channel = SocketChannel.open()
-
-        withContext(Dispatchers.IO) { channel.connect(addr.addr) }
-
-        CommonSocket(channel)
-    }
+    is SocketAddress.Tcp -> CommonSocket(SocketChannel.open()).apply { connect(addr.addr) }
 }
