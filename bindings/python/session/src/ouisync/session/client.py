@@ -9,6 +9,7 @@ import secrets
 import struct
 import types
 import typing
+import urllib.parse
 from pathlib import Path
 
 import msgpack
@@ -42,20 +43,23 @@ class Client:
         self._receive_task: asyncio.Task | None = None
 
     @classmethod
-    async def connect(cls, config_dir, host: str = "127.0.0.1") -> "Client":
-        # host is explicit since the control socket can be bound non-loopback.
-        conf_path = Path(config_dir) / "local_endpoint.conf"
-        data = json.loads(conf_path.read_text())
-        auth_key = bytes.fromhex(data["auth_key"])
+    async def connect(cls, config_dir) -> "Client":
+        addr = _read_service_address(Path(config_dir))
 
-        reader, writer = await asyncio.open_connection(host, data["port"])
+        if isinstance(addr, _UnixAddress):
+            reader, writer = await asyncio.open_unix_connection(addr.path)
+        else:
+            reader, writer = await asyncio.open_connection(addr.host, addr.port)
+
         client = cls(reader, writer)
 
-        try:
-            await client._auth(auth_key)
-        except Exception:
-            writer.close()
-            raise
+        # Unix sockets are authenticated via file permissions, TCP sockets need explicit handshake.
+        if isinstance(addr, _TcpAddress):
+            try:
+                await client._auth(addr.auth_key)
+            except Exception:
+                writer.close()
+                raise
 
         client._receive_task = asyncio.create_task(client._receive_loop())
         return client
@@ -195,6 +199,47 @@ class Client:
         for queue in self._subscriptions.values():
             queue.put_nowait(error)
         self._subscriptions.clear()
+
+
+@dataclasses.dataclass(frozen=True)
+class _UnixAddress:
+    path: Path
+
+
+@dataclasses.dataclass(frozen=True)
+class _TcpAddress:
+    host: str
+    port: int
+    auth_key: bytes
+
+
+def _read_service_address(config_dir: Path) -> _UnixAddress | _TcpAddress:
+    unix_socket = config_dir / "local_endpoint.sock"
+    if unix_socket.exists():
+        return _UnixAddress(unix_socket)
+
+    tcp_conf = config_dir / "local_endpoint.conf"
+    raw = json.loads(tcp_conf.read_text())
+    if not isinstance(raw, str):
+        raise ValueError(f"invalid service address: {raw!r}")
+
+    url = urllib.parse.urlsplit(raw)
+    if url.scheme != "tcp":
+        raise ValueError(f"invalid service address: {raw} - unsupported scheme")
+
+    if url.hostname is None:
+        raise ValueError(f"invalid service address: {raw} - missing host")
+
+    raw_auth_key = urllib.parse.parse_qs(url.query).get("auth_key")
+    if not raw_auth_key:
+        raise ValueError(f"invalid service address: {raw} - missing auth_key query parameter")
+
+    try:
+        auth_key = bytes.fromhex(raw_auth_key[0])
+    except ValueError as error:
+        raise ValueError(f"invalid service address: {raw} - invalid auth_key") from error
+
+    return _TcpAddress(url.hostname, url.port or 0, auth_key)
 
 
 def _decode_response_result(raw):

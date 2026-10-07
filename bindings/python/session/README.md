@@ -13,6 +13,10 @@ service (started either by `bindings/python/service`, or by an external
 `ouisync` process) over the local control socket. It's plain `asyncio`,
 matching every other binding's async concurrency model.
 
+The socket is a unix domain socket (`<config_dir>/local_endpoint.sock`, authenticated via file
+permissions) when the service exposes one, otherwise TCP on loopback whose address and auth key are
+read from `<config_dir>/local_endpoint.conf`.
+
 ## Regenerating the API surface
 
 ```
