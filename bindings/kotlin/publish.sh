@@ -19,7 +19,15 @@ publish() {
     local tasks=""
 
     for package in $@; do
-        tasks="$tasks publish${package^}PublicationToSonatypeRepository"
+        case "$package" in
+        # Kotlin Multiplatform project with one publication per target, registered in the subproject.
+        session)
+            tasks="$tasks :ouisync-session:publishAllPublicationsToSonatypeRepository"
+            ;;
+        *)
+            tasks="$tasks publish${package^}PublicationToSonatypeRepository"
+            ;;
+        esac
     done
 
     tasks="$tasks closeSonatypeStagingRepository"
