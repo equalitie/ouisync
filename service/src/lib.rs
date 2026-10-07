@@ -79,11 +79,7 @@ impl Service {
             Err(error) => return Err(error.into()),
         };
 
-        // Absolutize the unix socket path
-        let local_endpoint = match local_endpoint {
-            LocalAddr::Unix(path) if path.is_relative() => LocalAddr::Unix(config.dir().join(path)),
-            LocalAddr::Unix(_) | LocalAddr::Tcp { .. } => local_endpoint,
-        };
+        let local_endpoint = absolutize(local_endpoint, config.dir());
 
         let local_server = LocalServer::bind(local_endpoint)
             .await
@@ -230,7 +226,16 @@ pub async fn service_addr(config_dir: &Path) -> Result<LocalAddr, ClientError> {
             .entry(LOCAL_ENDPOINT_KEY)
             .get()
             .await
+            .map(|addr| absolutize(addr, config_dir))
             .map_err(ClientError::InvalidEndpoint)
+    }
+}
+
+/// Resolves relative unix socket path against the config dir.
+fn absolutize(addr: LocalAddr, config_dir: &Path) -> LocalAddr {
+    match addr {
+        LocalAddr::Unix(path) if path.is_relative() => LocalAddr::Unix(config_dir.join(path)),
+        LocalAddr::Unix(_) | LocalAddr::Tcp { .. } => addr,
     }
 }
 
@@ -283,6 +288,44 @@ mod tests {
         );
 
         service0.close().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn custom_unix_socket_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().join("config");
+        let socket_dir = temp_dir.path().join("sockets");
+
+        fs::create_dir_all(&config_dir).await.unwrap();
+        fs::create_dir_all(&socket_dir).await.unwrap();
+
+        for (configured, expected) in [
+            // absolute path
+            (
+                format!("unix://{}", socket_dir.join("a.sock").display()),
+                socket_dir.join("a.sock"),
+            ),
+            // relative path is resolved against the config dir
+            ("unix://b.sock".to_owned(), config_dir.join("b.sock")),
+        ] {
+            fs::write(
+                config_dir.join("local_endpoint.conf"),
+                serde_json::to_string(&configured).unwrap(),
+            )
+            .await
+            .unwrap();
+
+            let mut service = Service::init(config_dir.clone()).await.unwrap();
+            assert_eq!(service.local_addr(), &LocalAddr::Unix(expected.clone()));
+
+            let addr = service_addr(&config_dir).await.unwrap();
+            assert_eq!(addr, LocalAddr::Unix(expected));
+
+            transport::local::LocalClient::connect(&addr).await.unwrap();
+
+            service.close().await;
+        }
     }
 
     #[tokio::test]
