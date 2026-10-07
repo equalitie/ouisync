@@ -73,7 +73,7 @@ public:
      *   * ouisync::error::service_error_category():
      *      if error originated in the service
      *   * boost::system::system_category():
-     *      if error was thrown from the underlying TCP socket
+     *      if error was thrown from the underlying socket
      */
     template<
         class Variant,

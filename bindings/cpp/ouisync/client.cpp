@@ -17,14 +17,20 @@
 #include <ouisync/utils.hpp>
 #include <ouisync/semaphore.hpp>
 
+#include <boost/algorithm/hex.hpp>
 #include <boost/json.hpp>
 #include <boost/hash2/sha2.hpp>
 #include <boost/asio/experimental/channel.hpp>
+#include <boost/asio/generic/stream_protocol.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/local/stream_protocol.hpp>
 #include <boost/asio/write.hpp>
+#include <boost/filesystem/operations.hpp>
 #include <boost/asio/read.hpp>
 #include <boost/json/src.hpp>
 
+#include <charconv>
+#include <optional>
 #include <ranges>
 #include <fstream>
 #include <random>
@@ -38,7 +44,8 @@ namespace asio = boost::asio;
 namespace system = boost::system;
 namespace endian = boost::endian;
 
-using Socket = asio::ip::tcp::socket;
+// Protocol-agnostic stream socket. Can be connected either over TCP or over a unix domain socket.
+using Socket = asio::generic::stream_protocol::socket;
 using ResponseHandler = asio::any_completion_handler<HandlerSig>;
 using RawMessageId = decltype(MessageId::value);
 
@@ -418,43 +425,125 @@ MessageId Client::next_message_id() {
 }
 
 /**
- * Client connects to the Ouisync server over a TCP endpoint on the below
- * `port` and the connection is authenticated using `auth_key`.
+ * Address of the local Ouisync service. It's either a unix domain socket (authenticated via file
+ * permissions) or a TCP endpoint (authenticated by explicit handshake using `auth_key`).
  */
-struct LocalEndpoint {
-    uint16_t port;
-    std::vector<uint8_t> auth_key;
+struct ServiceAddress {
+    asio::generic::stream_protocol::endpoint endpoint;
+    std::optional<std::vector<uint8_t>> auth_key;
 };
 
-static
-LocalEndpoint read_local_endpoint(const boost::filesystem::path& config_dir_path) {
-    boost::filesystem::path config_path = config_dir_path / "local_endpoint.conf";
-    std::ifstream config_file;
-    config_file.open(config_path);
+[[noreturn]] static
+void throw_invalid_address(std::string_view raw, std::string_view reason) {
+    throw system::system_error(
+        make_error_code(error::connect),
+        "invalid service address: " + std::string(raw) + " - " + std::string(reason)
+    );
+}
 
-    if (!config_file.is_open()) {
-        throw_error(error::connect, "Could not open file " + config_path.string());
+// Parses TCP endpoint in the form `ADDR:PORT` (`[ADDR]:PORT` for IPv6) or just `ADDR` (port is 0
+// then).
+static
+asio::ip::tcp::endpoint parse_tcp_endpoint(std::string_view raw) {
+    system::error_code ec;
+
+    auto addr = asio::ip::make_address(std::string(raw), ec);
+    if (!ec) {
+        return asio::ip::tcp::endpoint(addr, 0);
+    }
+
+    auto colon = raw.rfind(':');
+    if (colon == std::string_view::npos) {
+        throw_invalid_address(raw, "invalid socket address");
+    }
+
+    auto raw_host = raw.substr(0, colon);
+    auto raw_port = raw.substr(colon + 1);
+
+    if (raw_host.starts_with('[') && raw_host.ends_with(']')) {
+        raw_host = raw_host.substr(1, raw_host.size() - 2);
+    }
+
+    addr = asio::ip::make_address(std::string(raw_host), ec);
+    if (ec) {
+        throw_invalid_address(raw, "invalid ip address");
+    }
+
+    uint16_t port = 0;
+    auto [ptr, port_ec] = std::from_chars(raw_port.data(), raw_port.data() + raw_port.size(), port);
+    if (port_ec != std::errc() || ptr != raw_port.data() + raw_port.size()) {
+        throw_invalid_address(raw, "invalid port");
+    }
+
+    return asio::ip::tcp::endpoint(addr, port);
+}
+
+// Parses TCP service address in the form `tcp://ADDR:PORT?auth_key=HEX`.
+static
+ServiceAddress parse_tcp_service_address(std::string_view raw) {
+    constexpr std::string_view scheme = "tcp://";
+    constexpr std::string_view auth_key_param = "?auth_key=";
+
+    if (!raw.starts_with(scheme)) {
+        throw_invalid_address(raw, "unsupported scheme");
+    }
+
+    auto rest = raw.substr(scheme.size());
+
+    auto param_pos = rest.find(auth_key_param);
+    if (param_pos == std::string_view::npos) {
+        throw_invalid_address(raw, "missing auth_key query parameter");
+    }
+
+    auto endpoint = parse_tcp_endpoint(rest.substr(0, param_pos));
+
+    std::vector<uint8_t> auth_key;
+
+    try {
+        boost::algorithm::unhex(
+            rest.substr(param_pos + auth_key_param.size()),
+            std::back_inserter(auth_key)
+        );
+    } catch (const boost::algorithm::hex_decode_error&) {
+        throw_invalid_address(raw, "invalid auth_key");
+    }
+
+    return ServiceAddress { endpoint, std::move(auth_key) };
+}
+
+static
+ServiceAddress read_service_address(const boost::filesystem::path& config_dir_path) {
+#if defined(BOOST_ASIO_HAS_LOCAL_SOCKETS)
+    boost::filesystem::path unix_socket_path = config_dir_path / "local_endpoint.sock";
+    if (boost::filesystem::exists(unix_socket_path)) {
+        return ServiceAddress {
+            asio::local::stream_protocol::endpoint(unix_socket_path.string()),
+            std::nullopt,
+        };
+    }
+#endif
+
+    boost::filesystem::path tcp_conf_path = config_dir_path / "local_endpoint.conf";
+    std::ifstream tcp_conf_file;
+    tcp_conf_file.open(tcp_conf_path);
+
+    if (!tcp_conf_file.is_open()) {
+        throw_error(error::connect, "Could not open file " + tcp_conf_path.string());
     }
 
     std::stringstream buffer;
-    buffer << config_file.rdbuf();
+    buffer << tcp_conf_file.rdbuf();
 
     namespace js = boost::json;
 
-    js::object obj = js::parse(buffer.str()).as_object();
+    js::value value = js::parse(buffer.str());
+    auto raw = value.if_string();
 
-    int64_t port = obj["port"].as_int64();
-
-    if (port <= 0 || port > std::numeric_limits<uint16_t>::max()) {
-        throw_error(error::connect, "invalid port");
+    if (raw == nullptr) {
+        throw_invalid_address(buffer.str(), "not a string");
     }
 
-    js::string auth_key_hex = obj["auth_key"].as_string();
-
-    std::vector<uint8_t> auth_key;
-    boost::algorithm::unhex(auth_key_hex, std::back_inserter(auth_key));
-
-    return LocalEndpoint{uint16_t(port), std::move(auth_key)};
+    return parse_tcp_service_address(*raw);
 }
 
 static
@@ -500,18 +589,14 @@ void authenticate(Socket& socket, const std::vector<uint8_t>& auth_key, asio::yi
     asio::async_write(socket, asio::buffer(client_proof), yield);
 }
 
-static std::shared_ptr<Client> connect_coro(LocalEndpoint ep, asio::yield_context yield) {
+static std::shared_ptr<Client> connect_coro(ServiceAddress addr, asio::yield_context yield) {
     Socket socket(yield.get_executor());
 
-    socket.async_connect(
-        asio::ip::tcp::endpoint(
-            asio::ip::address_v4::loopback(),
-            ep.port
-        ),
-        yield
-    );
+    socket.async_connect(addr.endpoint, yield);
 
-    authenticate(socket, ep.auth_key, yield);
+    if (addr.auth_key) {
+        authenticate(socket, *addr.auth_key, yield);
+    }
 
     return std::make_shared<Client>(
         std::make_shared<Client::State>(std::move(socket))
@@ -524,13 +609,13 @@ void Client::connect_impl(
     const boost::filesystem::path& config_dir_path,
     asio::any_completion_handler<void(system::error_code, std::shared_ptr<Client>)> handler
 ) {
-    auto ep = read_local_endpoint(config_dir_path);
+    auto addr = read_service_address(config_dir_path);
     asio::spawn(
         exec,
-        [ep = std::move(ep), handler = std::move(handler)]
+        [addr = std::move(addr), handler = std::move(handler)]
         (asio::yield_context yield) mutable {
             system::error_code ec;
-            auto client = connect_coro(ep, yield[ec]);
+            auto client = connect_coro(std::move(addr), yield[ec]);
             handler(ec, std::move(client));
         },
         asio::detached
