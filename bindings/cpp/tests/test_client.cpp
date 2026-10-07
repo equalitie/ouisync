@@ -61,3 +61,19 @@ BOOST_AUTO_TEST_CASE(sanity_check_tcp) {
 
     sanity_check(config_dir);
 }
+
+#if defined(BOOST_ASIO_HAS_LOCAL_SOCKETS)
+// Run sanity check with unix domain socket at custom location as the API protocol transport.
+BOOST_AUTO_TEST_CASE(sanity_check_unix_custom_path) {
+    auto tempdir = TempDir();
+    auto config_dir = mkdir(tempdir.path() / "config");
+    auto socket_dir = mkdir(tempdir.path() / "sockets");
+
+    fs::ofstream(config_dir / "local_endpoint.conf")
+        << "\"unix://" << (socket_dir / "ouisync.sock").string() << "\"";
+
+    sanity_check(config_dir);
+
+    BOOST_REQUIRE(!fs::exists(config_dir / "local_endpoint.sock"));
+}
+#endif

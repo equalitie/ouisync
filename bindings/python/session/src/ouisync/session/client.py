@@ -218,10 +218,14 @@ def _read_service_address(config_dir: Path) -> _UnixAddress | _TcpAddress:
     if unix_socket.exists():
         return _UnixAddress(unix_socket)
 
-    tcp_conf = config_dir / "local_endpoint.conf"
-    raw = json.loads(tcp_conf.read_text())
+    conf = config_dir / "local_endpoint.conf"
+    raw = json.loads(conf.read_text())
     if not isinstance(raw, str):
         raise ValueError(f"invalid service address: {raw!r}")
+
+    if raw.startswith("unix://"):
+        # Relative path is resolved against the config dir (joining an absolute path replaces it).
+        return _UnixAddress(config_dir / raw.removeprefix("unix://"))
 
     url = urllib.parse.urlsplit(raw)
     if url.scheme != "tcp":

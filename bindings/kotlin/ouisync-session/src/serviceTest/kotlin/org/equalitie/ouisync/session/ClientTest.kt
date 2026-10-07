@@ -15,6 +15,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.fail
 
 class ClientTest {
@@ -46,6 +47,36 @@ class ClientTest {
             client.invoke(Request.SessionGetStoreDirs)
             fail("unexpected success")
         } catch (e: IOException) {}
+    }
+
+    @Test
+    fun customUnixSocketPath() = runTest {
+        // Unix domain sockets are not supported by the service on Windows.
+        if (System.getProperty("os.name").startsWith("Windows")) {
+            return@runTest
+        }
+
+        val configDir = File(tempDir, "config").apply { mkdirs() }
+        val socketDir = File(tempDir, "sockets").apply { mkdirs() }
+
+        File(configDir, "local_endpoint.conf")
+            .writeText("\"unix://${File(socketDir, "ouisync.sock").path}\"")
+
+        val service = Service.start(configDir.path)
+
+        try {
+            val client = Client.connect(configDir.path)
+
+            try {
+                assertEquals(Response.Paths(emptyList()), client.invoke(Request.SessionGetStoreDirs))
+            } finally {
+                client.close()
+            }
+        } finally {
+            service.stop()
+        }
+
+        assertFalse(File(configDir, "local_endpoint.sock").exists())
     }
 
     @Test

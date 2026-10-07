@@ -41,6 +41,31 @@ void main() {
     await _sanityCheck(configPath);
   });
 
+  // Run sanity check with unix domain socket at custom location as the API protocol transport.
+  test(
+    'sanity check unix custom path',
+    () async {
+      final configPath = '${temp.path}/config';
+      final socketDir = await io.Directory('${temp.path}/sockets').create();
+
+      final conf = io.File('$configPath/local_endpoint.conf');
+      await conf.create(recursive: true);
+      await conf.writeAsString(
+        json.encode('unix://${socketDir.path}/ouisync.sock'),
+      );
+
+      await _sanityCheck(configPath);
+
+      expect(
+        await io.File('$configPath/local_endpoint.sock').exists(),
+        isFalse,
+      );
+    },
+    skip: io.Platform.isWindows
+        ? 'unix domain sockets not supported on windows'
+        : false,
+  );
+
   test('server already running', () async {
     final configPath = '${temp.path}/config';
 
