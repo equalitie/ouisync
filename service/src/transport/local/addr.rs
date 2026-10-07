@@ -11,7 +11,8 @@ use super::auth::AuthKey;
 /// Address of a service running on the same machine as the client.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LocalAddr {
-    /// TCP on loopback. Authentication is done with explicit handshake using the provided key.
+    /// TCP socket, usually on loopback (but not required to be). Authentication is done with
+    /// explicit handshake using the provided key.
     Tcp { addr: SocketAddr, auth_key: AuthKey },
     /// UNIX domain socket. Authentication is done via file permissions.
     Unix(PathBuf),
