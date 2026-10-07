@@ -14,8 +14,8 @@ from .client import Client as _Client
 from .state_monitor import MonitorId
 
 
-async def connect(config_dir, host: str = "127.0.0.1") -> Session:
-    client = await _Client.connect(config_dir, host)
+async def connect(config_dir) -> Session:
+    client = await _Client.connect(config_dir)
     return Session(client)
 
 
