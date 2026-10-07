@@ -7,10 +7,10 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
 import org.equalitie.ouisync.service.Service
 import org.equalitie.ouisync.service.initLog
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
 import kotlin.io.path.createTempDirectory
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
+import kotlin.test.Test
 import java.io.File as JFile
 
 class SyncTest {
@@ -22,7 +22,7 @@ class SyncTest {
     lateinit var serviceB: Service
     lateinit var sessionB: Session
 
-    @BeforeEach
+    @BeforeTest
     fun setup() = runTest {
         initLog()
 
@@ -37,7 +37,7 @@ class SyncTest {
         sessionB = Session.create(configDirB)
     }
 
-    @AfterEach
+    @AfterTest
     fun teardown() = runTest {
         sessionA.close()
         serviceA.stop()

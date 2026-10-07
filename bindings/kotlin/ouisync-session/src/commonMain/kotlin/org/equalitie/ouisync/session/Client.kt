@@ -2,7 +2,6 @@
 
 package org.equalitie.ouisync.session
 
-import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -13,46 +12,39 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.UseSerializers
 import kotlinx.serialization.json.Json
 import java.io.EOFException
 import java.io.File
 import java.io.IOException
-import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.net.SocketAddress
+import java.net.URI
+import java.net.URLDecoder
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.channels.AsynchronousCloseException
-import java.nio.channels.AsynchronousSocketChannel
-import java.nio.channels.CompletionHandler
+import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.TimeoutException
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlin.math.max
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
-internal class Client private constructor(private val socket: AsynchronousSocket) {
+internal class Client private constructor(private val socket: Socket) {
     companion object {
         @OptIn(
             kotlin.ExperimentalStdlibApi::class,
@@ -64,11 +56,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
             minWait: Duration = 50.milliseconds,
             maxWait: Duration = 1.seconds,
         ): Client {
-            val endpointRaw = File("$configPath/local_endpoint.conf").readText()
-            val endpoint = Json.decodeFromString<LocalEndpoint>(endpointRaw)
-            val authKey = endpoint.authKey.hexToByteArray()
-
-            val addr = InetSocketAddress(endpoint.addr, endpoint.port)
+            val serviceAddress = readServiceAddress(configPath)
 
             var start = Clock.System.now()
             var wait = minWait
@@ -82,10 +70,9 @@ internal class Client private constructor(private val socket: AsynchronousSocket
                 }
 
                 try {
-                    val socket =
-                        withContext(Dispatchers.IO) {
-                            AsynchronousSocket.connect(addr).also { socket -> authenticate(socket, authKey) }
-                        }
+                    val socket = Socket.connect(serviceAddress.socketAddress)
+
+                    serviceAddress.authKey?.let { authKey -> authenticate(socket, authKey) }
 
                     return Client(socket)
                 } catch (e: IOException) {
@@ -101,10 +88,11 @@ internal class Client private constructor(private val socket: AsynchronousSocket
     }
 
     private val messageMatcher = MessageMatcher()
-    private val coroutineScope = CoroutineScope(Dispatchers.IO)
+    private val receiveScope = CoroutineScope(Dispatchers.Default)
+    private val writeMutex = Mutex()
 
     init {
-        coroutineScope.launch { receive() }
+        receiveScope.launch { receive() }
     }
 
     suspend fun invoke(request: Request): Any {
@@ -153,7 +141,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
         }
 
     suspend fun close() {
-        coroutineScope.cancel()
+        receiveScope.cancel()
         socket.close()
         messageMatcher.close()
     }
@@ -174,7 +162,7 @@ internal class Client private constructor(private val socket: AsynchronousSocket
         buffer.put(payload)
         buffer.flip()
 
-        withContext(Dispatchers.IO) { socket.writeAll(buffer) }
+        writeMutex.withLock { socket.writeAll(buffer) }
     }
 
     private suspend fun receive() {
@@ -234,13 +222,6 @@ internal class Client private constructor(private val socket: AsynchronousSocket
         }
     }
 }
-
-@Serializable
-private data class LocalEndpoint(
-    val port: Int,
-    val addr: InetAddress = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1)),
-    @SerialName("auth_key") val authKey: String,
-)
 
 @Serializable
 private sealed interface ResponseResult {
@@ -339,12 +320,70 @@ private sealed class Completer {
     abstract suspend fun complete(value: ResponseResult)
 }
 
+private suspend fun Socket.readExact(buffer: ByteBuffer): Int {
+    var total = 0
+
+    while (buffer.hasRemaining()) {
+        val n = read(buffer)
+
+        if (n <= 0) {
+            break
+        } else {
+            total += n
+        }
+    }
+
+    return total
+}
+
+private suspend fun Socket.writeAll(buffer: ByteBuffer) {
+    while (buffer.hasRemaining()) {
+        write(buffer)
+    }
+}
+
+private data class ServiceAddress(val socketAddress: SocketAddress, val authKey: ByteArray?)
+
+private fun readServiceAddress(configDir: String): ServiceAddress {
+    val unixSocket = File(configDir, "local_endpoint.sock")
+    if (unixSocket.exists()) {
+        return ServiceAddress(SocketAddress.Unix(unixSocket.path), null)
+    }
+
+    val tcpConf = File(configDir, "local_endpoint.conf")
+    val uri = URI(Json.decodeFromString<String>(tcpConf.readText()))
+
+    if (uri.scheme != "tcp") {
+        throw IllegalArgumentException("invalid service address: $uri - unuported scheme")
+    }
+
+    val authKey =
+        uri.rawQuery
+            ?.split("&")
+            ?.map { it.split("=", limit = 2) }
+            ?.firstOrNull { URLDecoder.decode(it[0], StandardCharsets.UTF_8) == "auth_key" }
+            ?.let {
+                if (it.size > 1) {
+                    URLDecoder.decode(it[1], StandardCharsets.UTF_8)
+                } else {
+                    null
+                }
+            }
+            ?.let { it.hexToByteArray() }
+
+    if (authKey == null) {
+        throw IllegalArgumentException("invalid service address: $uri - missing or invalid auth_key")
+    }
+
+    return ServiceAddress(SocketAddress.Tcp(InetSocketAddress(uri.host, uri.port)), authKey)
+}
+
 private const val HEADER_SIZE = Int.SIZE_BYTES + Long.SIZE_BYTES
 
 private const val CHALLENGE_SIZE = 256
 private const val PROOF_SIZE = 32
 
-private suspend fun authenticate(socket: AsynchronousSocket, authKey: ByteArray) {
+private suspend fun authenticate(socket: Socket, authKey: ByteArray) {
     val random = SecureRandom()
 
     val hmacAlgo = "HmacSHA256"
@@ -384,76 +423,4 @@ private suspend fun authenticate(socket: AsynchronousSocket, authKey: ByteArray)
     buffer.flip()
 
     socket.writeAll(buffer)
-}
-
-// Wrapper around AsynchronousSocketChannel which provides a convenient, coroutine based API.
-private class AsynchronousSocket(private val channel: AsynchronousSocketChannel) {
-    companion object {
-        suspend fun connect(addr: SocketAddress): AsynchronousSocket {
-            val channel = AsynchronousSocketChannel.open()
-
-            suspendCancellableCoroutine<Unit> { cont -> channel.connect(addr, cont, ConnectHandler) }
-
-            return AsynchronousSocket(channel)
-        }
-    }
-
-    // Prevents `WritePendingException` on concurrent writes
-    // TODO: Do we also need readMutex?
-    private val writeMutex = Mutex()
-
-    suspend fun read(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont -> channel.read(buffer, cont, IOHandler()) }
-
-    suspend fun readExact(buffer: ByteBuffer): Int {
-        var total = 0
-
-        while (buffer.hasRemaining()) {
-            val n = read(buffer)
-
-            if (n <= 0) {
-                break
-            } else {
-                total += n
-            }
-        }
-
-        return total
-    }
-
-    suspend fun write(buffer: ByteBuffer) = writeMutex.withLock { writeUnlocked(buffer) }
-
-    suspend fun writeAll(buffer: ByteBuffer) = writeMutex.withLock {
-        while (buffer.hasRemaining()) {
-            writeUnlocked(buffer)
-        }
-    }
-
-    private suspend fun writeUnlocked(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont -> channel.write(buffer, cont, IOHandler()) }
-
-    fun close() {
-        channel.close()
-    }
-}
-
-object ConnectHandler : CompletionHandler<Void?, CancellableContinuation<Unit>> {
-    override fun completed(result: Void?, cont: CancellableContinuation<Unit>) {
-        cont.resume(Unit)
-    }
-
-    override fun failed(ex: Throwable, cont: CancellableContinuation<Unit>) {
-        if (ex is AsynchronousCloseException && cont.isCancelled) return
-        cont.resumeWithException(ex)
-    }
-}
-
-class IOHandler<T> : CompletionHandler<T, CancellableContinuation<T>> {
-    override fun completed(result: T, cont: CancellableContinuation<T>) {
-        cont.resume(result)
-    }
-
-    override fun failed(ex: Throwable, cont: CancellableContinuation<T>) {
-        // just return if already cancelled and got an expected exception for that case
-        if (ex is AsynchronousCloseException && cont.isCancelled) return
-        cont.resumeWithException(ex)
-    }
 }

@@ -3,15 +3,15 @@ package org.equalitie.ouisync.session
 import kotlinx.coroutines.test.runTest
 import org.equalitie.ouisync.service.Service
 import org.equalitie.ouisync.service.initLog
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Assertions.fail
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
 import kotlin.io.path.createTempDirectory
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.fail
 import java.io.File as JFile
 
 class RepositoryTest {
@@ -19,7 +19,7 @@ class RepositoryTest {
     lateinit var session: Session
     lateinit var service: Service
 
-    @BeforeEach
+    @BeforeTest
     fun setup() = runTest {
         initLog()
 
@@ -32,7 +32,7 @@ class RepositoryTest {
         session.setStoreDirs(listOf("$tempDir/store"))
     }
 
-    @AfterEach
+    @AfterTest
     fun teardown() = runTest {
         session.close()
         service.stop()

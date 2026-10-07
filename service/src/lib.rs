@@ -236,7 +236,7 @@ pub async fn service_addr(config_dir: &Path) -> Result<LocalAddr, ClientError> {
 
 fn default_service_addr() -> LocalAddr {
     // TODO: use unix sockets on more platforms
-    if cfg!(target_os = "linux") {
+    if cfg!(any(target_os = "linux", target_os = "android")) {
         LocalAddr::Unix(unix_socket_name())
     } else {
         LocalAddr::Tcp {
