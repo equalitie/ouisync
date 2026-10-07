@@ -129,7 +129,14 @@ internal class Client private constructor(private val socket: Socket) {
             awaitClose()
         } finally {
             messageMatcher.deregister(id)
-            invoke(Request.Cancel(MessageId(id)))
+
+            // Use `NonCancellable` because this is typically reached when the flow collection is
+            // cancelled and the request would otherwise not be sent at all. The cancel is best
+            // effort, so ignore any errors (e.g., the connection being already closed) to not
+            // override the original outcome of the flow.
+            try {
+                withContext(NonCancellable) { invoke(Request.Cancel(MessageId(id))) }
+            } catch (_: Exception) {}
         }
     }
         .buffer(onBufferOverflow = BufferOverflow.DROP_OLDEST)
