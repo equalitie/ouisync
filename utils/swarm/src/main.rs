@@ -1,5 +1,5 @@
-use anyhow::{format_err, Result};
-use clap::{value_parser, Parser};
+use anyhow::{Result, format_err};
+use clap::{Parser, value_parser};
 use std::{
     ffi::OsStr,
     fs,

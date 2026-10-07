@@ -5,7 +5,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{actor, Env, Proto, DEFAULT_REPO};
+use common::{DEFAULT_REPO, Env, Proto, actor};
 use ouisync::{AccessMode, Error, Repository, StoreError};
 use tokio::sync::mpsc;
 
@@ -104,7 +104,7 @@ fn block_nonce_tamper() {
 
         // Tamper with the nonces (need raw db access to do this).
         {
-            use sqlx::{sqlite::SqliteConnection, Connection};
+            use sqlx::{Connection, sqlite::SqliteConnection};
 
             info!("tampering with nonces");
 
