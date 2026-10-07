@@ -71,15 +71,9 @@ kotlin {
             }
         }
 
-        androidMain {
-            // dependencies {
-            // }
-        }
-
         jvmTest {
             dependencies {
-                implementation 'org.junit.jupiter:junit-jupiter:5.12.2'
-                runtimeOnly    'org.junit.platform:junit-platform-launcher:1.12.2'
+                runtimeOnly 'org.junit.platform:junit-platform-launcher:1.12.2'
             }
         }
 
