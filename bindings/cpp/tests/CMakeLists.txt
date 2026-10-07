@@ -1,4 +1,5 @@
 set(tests cancellation
+          client
           copy
           dht
           file
