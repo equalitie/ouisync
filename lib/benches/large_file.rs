@@ -1,4 +1,4 @@
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{SeedableRng, rngs::StdRng};
 use state_monitor::StateMonitor;
 use std::time::Instant;
 use tempfile::TempDir;

@@ -1,9 +1,9 @@
-use anyhow::{format_err, Result};
+use anyhow::{Result, format_err};
 use clap::Parser;
 use comfy_table::{Attribute, Cell, CellAlignment, Table};
 use indicatif::HumanBytes;
 use rand::seq::SliceRandom;
-use serde::{de::Error as _, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de::Error as _};
 use std::{
     env,
     ffi::OsString,

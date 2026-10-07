@@ -3,9 +3,9 @@
 #[macro_use]
 mod common;
 
-use self::common::{actor, Env, DEFAULT_REPO};
+use self::common::{DEFAULT_REPO, Env, actor};
 use common::Proto;
-use ouisync::{AccessMode, File, Repository, BLOB_HEADER_SIZE, BLOCK_SIZE};
+use ouisync::{AccessMode, BLOB_HEADER_SIZE, BLOCK_SIZE, File, Repository};
 use tokio::sync::mpsc;
 
 #[test]

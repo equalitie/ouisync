@@ -41,9 +41,7 @@ class SocketTest {
         ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { server ->
             val addr = SocketAddress.Tcp(InetSocketAddress(server.inetAddress, server.localPort))
 
-            Socket.connect(addr).use { socket ->
-                server.accept().use { checkCancelRead(socket) }
-            }
+            Socket.connect(addr).use { socket -> server.accept().use { checkCancelRead(socket) } }
         }
     }
 
@@ -65,11 +63,13 @@ class SocketTest {
     // Starts a read which never completes (the peer never sends anything), cancels it and checks the
     // cancellation completes promptly.
     private suspend fun checkCancelRead(socket: Socket) = withContext(Dispatchers.Default) {
-        // Use a separate scope so that if the cancellation doesn't work, the test fails on the timeout
+        // Use a separate scope so that if the cancellation doesn't work, the test fails on the
+        // timeout
         // below instead of hanging forever.
-        val job = CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.UNDISPATCHED) {
-            socket.read(ByteBuffer.allocate(1))
-        }
+        val job =
+            CoroutineScope(Dispatchers.Default).launch(start = CoroutineStart.UNDISPATCHED) {
+                socket.read(ByteBuffer.allocate(1))
+            }
 
         // Give the read some time to actually block.
         delay(100)

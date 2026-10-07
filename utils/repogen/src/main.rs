@@ -62,8 +62,12 @@ fn help() {
     println!();
     println!("Options:");
     println!("  -w, --write          Generate new write token");
-    println!("  -r, --read [TOKEN]   If TOKEN given, convert it to read token, otherwise generate new read token");
-    println!("  -b, --blind [TOKEN]  If TOKEN given, convert it to blind token, otherwise generate new blind token");
+    println!(
+        "  -r, --read [TOKEN]   If TOKEN given, convert it to read token, otherwise generate new read token"
+    );
+    println!(
+        "  -b, --blind [TOKEN]  If TOKEN given, convert it to blind token, otherwise generate new blind token"
+    );
     println!("  -i, --info [TOKEN]   Print information about the given token");
     println!("  -v, --version        Print version");
     println!("  -h, --help           Print help");
