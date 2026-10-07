@@ -302,22 +302,24 @@ private class MessageMatcher {
 
 private sealed class Completer {
     class Oneshot(val deferred: CompletableDeferred<ResponseResult>) : Completer() {
-        override suspend fun complete(value: ResponseResult) {
+        override fun complete(value: ResponseResult) {
             deferred.complete(value)
         }
     }
 
     class Channel(val channel: SendChannel<ResponseResult>) : Completer() {
-        override suspend fun complete(value: ResponseResult) {
+        override fun complete(value: ResponseResult) {
             if (value is ResponseResult.Success && value.value is Response.None) {
                 channel.close()
             } else {
-                channel.send(value)
+                // We can safely use `trySend` because the channel uses
+                // `BufferOverflow.DROP_OLDEST`.
+                channel.trySend(value)
             }
         }
     }
 
-    abstract suspend fun complete(value: ResponseResult)
+    abstract fun complete(value: ResponseResult)
 }
 
 private suspend fun Socket.readExact(buffer: ByteBuffer): Int {
