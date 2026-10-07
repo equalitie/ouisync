@@ -1,5 +1,10 @@
 package org.equalitie.ouisync.session
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.equalitie.ouisync.service.Service
 import org.equalitie.ouisync.service.initLog
@@ -41,5 +46,54 @@ class ClientTest {
             client.invoke(Request.SessionGetStoreDirs)
             fail("unexpected success")
         } catch (e: IOException) {}
+    }
+
+    @Test
+    fun cancelSubscription() = runTest {
+        val configDir = "$tempDir/config"
+        val service = Service.start(configDir)
+        val client = Client.connect(configDir)
+
+        try {
+            // Message ids are allocated sequentially starting from 0 and `connect` doesn't consume
+            // any, so the ids of the requests below are known in advance.
+
+            // id 0
+            val job0 = launchSubscription(client)
+
+            // Cancelling the collection sends `Cancel` for the subscription (id 1) and waits for the
+            // response.
+            job0.cancelAndJoin()
+
+            // id 2: The subscription has already been cancelled so there is nothing to remove.
+            assertEquals(Response.Bool(false), client.invoke(Request.Cancel(MessageId(0))))
+
+            // Control case to verify the message id assumptions: cancelling an active subscription
+            // removes it.
+
+            // id 3
+            val job3 = launchSubscription(client)
+
+            // id 4
+            assertEquals(Response.Bool(true), client.invoke(Request.Cancel(MessageId(3))))
+
+            job3.cancelAndJoin()
+        } finally {
+            client.close()
+            service.stop()
+        }
+    }
+
+    // Subscribes to network events and returns the job collecting them, once the subscription has
+    // been confirmed by the service.
+    private suspend fun TestScope.launchSubscription(client: Client): Job {
+        val subscribed = CompletableDeferred<Unit>()
+        val job = launch {
+            client.subscribe(Request.SessionSubscribeToNetwork).collect { subscribed.complete(Unit) }
+        }
+
+        subscribed.await()
+
+        return job
     }
 }
