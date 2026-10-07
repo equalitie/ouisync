@@ -14,8 +14,11 @@ service (started either by `bindings/python/service`, or by an external
 matching every other binding's async concurrency model.
 
 The socket is a unix domain socket (`<config_dir>/local_endpoint.sock`, authenticated via file
-permissions) when the service exposes one, otherwise TCP on loopback whose address and auth key are
-read from `<config_dir>/local_endpoint.conf`.
+permissions) when the service exposes one. Otherwise the address is read from
+`<config_dir>/local_endpoint.conf`, which contains either a unix domain socket at a custom location
+(`"unix:///path/to/socket"`, relative paths are resolved against the config dir) or a TCP endpoint
+(usually on loopback, but any IP address works) with an auth key
+(`"tcp://127.0.0.1:12345?auth_key=..."`).
 
 ## Regenerating the API surface
 

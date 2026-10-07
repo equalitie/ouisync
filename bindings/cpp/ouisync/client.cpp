@@ -523,16 +523,16 @@ ServiceAddress read_service_address(const boost::filesystem::path& config_dir_pa
     }
 #endif
 
-    boost::filesystem::path tcp_conf_path = config_dir_path / "local_endpoint.conf";
-    std::ifstream tcp_conf_file;
-    tcp_conf_file.open(tcp_conf_path);
+    boost::filesystem::path conf_path = config_dir_path / "local_endpoint.conf";
+    std::ifstream conf_file;
+    conf_file.open(conf_path);
 
-    if (!tcp_conf_file.is_open()) {
-        throw_error(error::connect, "Could not open file " + tcp_conf_path.string());
+    if (!conf_file.is_open()) {
+        throw_error(error::connect, "Could not open file " + conf_path.string());
     }
 
     std::stringstream buffer;
-    buffer << tcp_conf_file.rdbuf();
+    buffer << conf_file.rdbuf();
 
     namespace js = boost::json;
 
@@ -541,6 +541,25 @@ ServiceAddress read_service_address(const boost::filesystem::path& config_dir_pa
 
     if (raw == nullptr) {
         throw_invalid_address(buffer.str(), "not a string");
+    }
+
+    constexpr std::string_view unix_scheme = "unix://";
+
+    if (raw->starts_with(unix_scheme)) {
+#if defined(BOOST_ASIO_HAS_LOCAL_SOCKETS)
+        // Relative path is resolved against the config dir.
+        boost::filesystem::path path(std::string(raw->subview(unix_scheme.size())));
+        if (path.is_relative()) {
+            path = config_dir_path / path;
+        }
+
+        return ServiceAddress {
+            asio::local::stream_protocol::endpoint(path.string()),
+            std::nullopt,
+        };
+#else
+        throw_invalid_address(*raw, "unix domain sockets not supported on this platform");
+#endif
     }
 
     return parse_tcp_service_address(*raw);
