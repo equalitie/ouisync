@@ -359,11 +359,20 @@ private fun readServiceAddress(configDir: String): ServiceAddress {
         return ServiceAddress(SocketAddress.Unix(unixSocket.path), null)
     }
 
-    val tcpConf = File(configDir, "local_endpoint.conf")
-    val uri = URI(Json.decodeFromString<String>(tcpConf.readText()))
+    val conf = File(configDir, "local_endpoint.conf")
+    val raw = Json.decodeFromString<String>(conf.readText())
+
+    if (raw.startsWith(UNIX_SCHEME)) {
+        // Relative path is resolved against the config dir.
+        val path = File(raw.removePrefix(UNIX_SCHEME))
+        val resolved = if (path.isAbsolute) path else File(configDir, path.path)
+        return ServiceAddress(SocketAddress.Unix(resolved.path), null)
+    }
+
+    val uri = URI(raw)
 
     if (uri.scheme != "tcp") {
-        throw IllegalArgumentException("invalid service address: $uri - unuported scheme")
+        throw IllegalArgumentException("invalid service address: $uri - unsupported scheme")
     }
 
     val authKey =
@@ -384,8 +393,13 @@ private fun readServiceAddress(configDir: String): ServiceAddress {
         throw IllegalArgumentException("invalid service address: $uri - missing or invalid auth_key")
     }
 
-    return ServiceAddress(SocketAddress.Tcp(InetSocketAddress(uri.host, uri.port)), authKey)
+    // Missing port is reported as -1
+    val port = if (uri.port < 0) 0 else uri.port
+
+    return ServiceAddress(SocketAddress.Tcp(InetSocketAddress(uri.host, port)), authKey)
 }
+
+private const val UNIX_SCHEME = "unix://"
 
 private const val HEADER_SIZE = Int.SIZE_BYTES + Long.SIZE_BYTES
 

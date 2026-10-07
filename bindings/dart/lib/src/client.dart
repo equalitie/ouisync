@@ -285,12 +285,26 @@ Future<_ServiceAddress> _readServiceAddress(String dir) async {
     );
   }
 
-  final tcpConf = File('$dir/local_endpoint.conf');
-  final content = await tcpConf.readAsString();
+  final conf = File('$dir/local_endpoint.conf');
+  final content = await conf.readAsString();
 
   final raw = json.decode(content);
   if (raw is! String) {
     throw FormatException('invalid service address: $raw');
+  }
+
+  const unixScheme = 'unix://';
+
+  if (raw.startsWith(unixScheme)) {
+    // Relative path is resolved against the config dir.
+    var path = raw.substring(unixScheme.length);
+    if (!File(path).isAbsolute) {
+      path = '$dir/$path';
+    }
+
+    return _ServiceAddress(
+      InternetAddress(path, type: InternetAddressType.unix),
+    );
   }
 
   final uri = Uri.tryParse(raw);
