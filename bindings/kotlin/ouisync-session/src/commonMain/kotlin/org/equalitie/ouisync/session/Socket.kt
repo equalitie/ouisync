@@ -37,8 +37,7 @@ internal abstract class Socket : Closeable {
     /**
      * Runs the blocking [block] on the IO dispatcher. If the calling coroutine is cancelled while
      * [block] is running, closes this socket to unblock it, then waits for [block] to finish and
-     * throws [CancellationException]. If cancelled before [block] started, the socket is not
-     * closed.
+     * throws [CancellationException]. If cancelled before [block] started, the socket is not closed.
      */
     protected suspend fun <T> runCancellable(block: () -> T): T = coroutineScope {
         // Whichever side (the block or the cancellation handler) transitions out of
@@ -46,21 +45,22 @@ internal abstract class Socket : Closeable {
         // needed.
         val state = AtomicInteger(NOT_STARTED)
 
-        val result = async(Dispatchers.IO) {
-            if (!state.compareAndSet(NOT_STARTED, RUNNING)) {
-                // The cancellation handler below observed the cancellation before we started.
-                throw CancellationException()
-            }
+        val result =
+            async(Dispatchers.IO) {
+                if (!state.compareAndSet(NOT_STARTED, RUNNING)) {
+                    // The cancellation handler below observed the cancellation before we started.
+                    throw CancellationException()
+                }
 
-            try {
-                block()
-            } catch (e: IOException) {
-                // If cancelled, the exception is most likely caused by `close` so report it as
-                // cancellation instead.
-                ensureActive()
-                throw e
+                try {
+                    block()
+                } catch (e: IOException) {
+                    // If cancelled, the exception is most likely caused by `close` so report it as
+                    // cancellation instead.
+                    ensureActive()
+                    throw e
+                }
             }
-        }
 
         try {
             result.await()

@@ -2,7 +2,7 @@ use std::{collections::HashSet, io, mem, net::SocketAddr, time::Duration};
 
 use clap::Parser;
 use ouisync_service::Service;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use tokio::{runtime, select, time};
 #[path = "../src/test_utils.rs"]
 mod test_utils;
@@ -71,7 +71,7 @@ async fn run() {
     let rng = if let Some(seed) = options.seed {
         StdRng::seed_from_u64(seed)
     } else {
-        StdRng::from_entropy()
+        StdRng::from_rng(&mut rand::rng())
     };
 
     match (options.client, options.server) {
@@ -105,7 +105,7 @@ async fn case<Client: Socket, Server: Socket>(rng: StdRng, packet_count: usize) 
     ) {
         let packets: Vec<_> = (0..packet_count)
             .map(|_| {
-                let size = rng.gen_range(MIN_PACKET_SIZE..=MAX_PACKET_SIZE);
+                let size = rng.random_range(MIN_PACKET_SIZE..=MAX_PACKET_SIZE);
 
                 let mut data = vec![0u8; size];
                 rng.fill(&mut data[..]);
