@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
 
 plugins {
     id 'org.jetbrains.kotlin.multiplatform'
@@ -55,7 +56,26 @@ kotlin {
             jvmTarget = JvmTarget.JVM_17
         }
 
-        withHostTest {
+        // Put the device tests into the same source set tree as the jvm tests so that they can share
+        // the tests in `serviceTest` (see below). Host tests are not enabled because the tests run
+        // against a real service which can't run with the stubbed android classes.
+        withDeviceTestBuilder {
+            sourceSetTreeName = 'test'
+        }.configure {
+            instrumentationRunner = 'androidx.test.runner.AndroidJUnitRunner'
+        }
+    }
+
+    // Shared source set for the jvm and android targets (`serviceMain` and `serviceTest`). It's used
+    // instead of `commonTest` for the tests, because AGP warns when `commonTest` exists while android
+    // host tests are disabled. Declared using the hierarchy template instead of `dependsOn` to avoid
+    // a warning from the Kotlin plugin.
+    applyDefaultHierarchyTemplate { root ->
+        root.common { common ->
+            common.group('service') { service ->
+                service.withJvm()
+                service.withCompilations { it.platformType == KotlinPlatformType.androidJvm }
+            }
         }
     }
 
@@ -72,30 +92,30 @@ kotlin {
             }
         }
 
-        commonTest {
+        serviceTest {
             dependencies {
                 implementation 'org.jetbrains.kotlin:kotlin-test'
                 implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2'
 
-                // The tests run against a real service, including the native library for the host platform
-                // (built by `ouisync-service-jvm`).
-                implementation project(':ouisync-service-jvm')
-
+                // The tests run against a real service. This provides only its API, the
+                // platform-specific test source sets provide the native library.
+                implementation project(':ouisync-service-common')
             }
         }
 
         jvmTest {
             dependencies {
+                implementation project(':ouisync-service-jvm')
                 runtimeOnly 'org.junit.platform:junit-platform-launcher:1.12.2'
             }
         }
 
-        // androidDeviceTest {
-        //     dependencies {
-        //         implementation 'androidx.test:runner:1.7.0'
-        //         implementation 'androidx.test.ext:junit:1.3.0'
-        //     }
-        // }
+        androidDeviceTest {
+            dependencies {
+                implementation project(':ouisync-service-android')
+                implementation 'androidx.test:runner:1.7.0'
+            }
+        }
     }
 }
 
@@ -142,8 +162,8 @@ publishing {
 }
 
 signing {
-    if (project.signingKey) {
-        useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
+    if (rootProject.signingKey) {
+        useInMemoryPgpKeys(rootProject.signingKeyId, rootProject.signingKey, rootProject.signingPassword)
     }
 
     // Only require signing when publishing to sonatype, not local (same as in the root project).
