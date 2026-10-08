@@ -147,10 +147,10 @@ jobs:
               working-directory: bindings/kotlin
               run: >
                   ./gradlew
-                    --stacktrace
-                    ouisync-session:jvmTest
-                    ouisync-android:testDebugUnitTest
-                    -Pouisync.profile=debug
+                  --stacktrace
+                  ouisync-session:jvmTest
+                  ouisync-android:testDebugUnitTest
+                  -Pouisync.profile=debug
 
             - name: Run instrumented tests
               uses: reactivecircus/android-emulator-runner@v2
@@ -161,9 +161,9 @@ jobs:
                   working-directory: bindings/kotlin
                   script: >
                     ./gradlew
-                      ouisync-android:connectedDebugAndroidTest
-                      ouisync-session:connectedAndroidDeviceTest
-                      -Ptarget-platform=android-x64
+                    ouisync-android:connectedDebugAndroidTest
+                    ouisync-session:connectedAndroidDeviceTest
+                    -Ptarget-platform=android-x64
 
             - name: Upload test results
               uses: actions/upload-artifact@v7
