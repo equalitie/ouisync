@@ -16,6 +16,9 @@ group   = rootProject.group
 // Generate the API source files
 def generateApi = tasks.register('generateApi', Exec) {
     outputs.dir(layout.buildDirectory.dir('gen'))
+    // Always rerun: the generator is fast and tracking all its inputs (rust sources, the
+    // generator, the api parser, ...) is error-prone.
+    outputs.upToDateWhen { false }
 
     description = 'Generate the API classes'
     group = 'Build'
