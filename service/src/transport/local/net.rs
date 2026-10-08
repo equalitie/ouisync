@@ -8,13 +8,117 @@ use std::{
 use tokio::{
     fs,
     io::{AsyncRead, AsyncWrite, ReadBuf},
-    net::{TcpListener, TcpStream, UnixListener, UnixStream, tcp, unix},
+    net::{TcpListener, TcpStream, tcp},
 };
 
 use super::{
     LocalAddr,
     auth::{self, AuthKey},
 };
+
+#[cfg(unix)]
+use tokio::net::{UnixListener, UnixStream, unix};
+
+#[cfg(not(unix))]
+mod unix {
+    use super::*;
+
+    macro_rules! impl_async_read {
+        ($ty:ty) => {
+            impl AsyncRead for $ty {
+                fn poll_read(
+                    self: Pin<&mut Self>,
+                    _: &mut Context<'_>,
+                    _: &mut ReadBuf<'_>,
+                ) -> Poll<Result<(), io::Error>> {
+                    Poll::Ready(unsupported())
+                }
+            }
+        };
+    }
+
+    macro_rules! impl_async_write {
+        ($ty:ty) => {
+            impl AsyncWrite for $ty {
+                fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+                    Poll::Ready(unsupported())
+                }
+
+                fn poll_shutdown(
+                    self: Pin<&mut Self>,
+                    _: &mut Context<'_>,
+                ) -> Poll<io::Result<()>> {
+                    Poll::Ready(unsupported())
+                }
+
+                fn poll_write(
+                    self: Pin<&mut Self>,
+                    _: &mut Context<'_>,
+                    _: &[u8],
+                ) -> Poll<Result<usize, io::Error>> {
+                    Poll::Ready(unsupported())
+                }
+            }
+        };
+    }
+
+    pub struct SocketAddr;
+
+    impl SocketAddr {
+        pub fn as_pathname(&self) -> Option<&Path> {
+            None
+        }
+    }
+
+    pub struct OwnedReadHalf;
+
+    impl_async_read!(OwnedReadHalf);
+
+    pub struct OwnedWriteHalf;
+
+    impl_async_write!(OwnedWriteHalf);
+
+    pub struct UnixListener;
+
+    impl UnixListener {
+        pub fn bind(_: impl AsRef<Path>) -> Result<Self, io::Error> {
+            unsupported()
+        }
+
+        pub async fn accept(&self) -> Result<(UnixStream, SocketAddr), io::Error> {
+            unsupported()
+        }
+
+        pub fn local_addr(&self) -> Result<unix::SocketAddr, io::Error> {
+            unsupported()
+        }
+    }
+
+    pub struct UnixStream;
+
+    impl UnixStream {
+        pub async fn connect(_: impl AsRef<Path>) -> Result<Self, io::Error> {
+            unsupported()
+        }
+
+        pub fn into_split(self) -> (OwnedReadHalf, OwnedWriteHalf) {
+            (OwnedReadHalf, OwnedWriteHalf)
+        }
+    }
+
+    impl_async_read!(UnixStream);
+    impl_async_write!(UnixStream);
+
+    fn unsupported<T>() -> Result<T, io::Error> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "unix domain sockets are not supported on this platform",
+        ))
+    }
+}
+
+#[cfg(not(unix))]
+pub(super) use unix::{UnixListener, UnixStream};
 
 pub(super) enum LocalListener {
     Tcp {
