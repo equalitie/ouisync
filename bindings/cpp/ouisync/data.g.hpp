@@ -793,6 +793,8 @@ inline bool operator != (const Datagram& lhs, const Datagram& rhs) {
     return !(lhs == rhs);
 }
 
+const int64_t API_PROTOCOL_VERSION = 1;
+
 struct FileHandle {
     size_t value;
 };

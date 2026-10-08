@@ -186,6 +186,7 @@ pub enum Item {
     SimpleEnum(SimpleEnum),
     ComplexEnum(ComplexEnum),
     Struct(Struct),
+    Const(Const),
 }
 
 /// Simple enum (C-style enums)
@@ -246,6 +247,12 @@ pub struct Struct {
     pub fields: Fields,
     /// Is the struct content secret (e.g., password, secret key, ...)?
     pub secret: bool,
+}
+
+#[derive(Debug)]
+pub struct Const {
+    pub docs: Docs,
+    pub value: u64,
 }
 
 #[derive(Debug)]
