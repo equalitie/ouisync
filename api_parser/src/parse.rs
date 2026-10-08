@@ -3,14 +3,14 @@ use std::{fs, io, path::Path};
 use anyhow::{Context as _, Error, Result, bail, format_err};
 use heck::AsPascalCase;
 use syn::{
-    Attribute, BinOp, Expr, ExprBinary, FnArg, GenericArgument, ImplItem, ItemEnum, ItemMod,
-    ItemStruct, Lit, Meta, Pat, PathArguments, ReturnType, Signature, Token, parenthesized,
-    punctuated::Punctuated,
+    Attribute, BinOp, Expr, ExprBinary, FnArg, GenericArgument, ImplItem, ItemConst, ItemEnum,
+    ItemMod, ItemStruct, Lit, Meta, Pat, PathArguments, ReturnType, Signature, Token,
+    parenthesized, punctuated::Punctuated,
 };
 
 use crate::{
-    ComplexEnum, ComplexVariant, Context, Docs, EnumRepr, Field, Fields, Item, RequestVariant,
-    SimpleEnum, SimpleVariant, Struct, Type, Visibility,
+    ComplexEnum, ComplexVariant, Const, Context, Docs, EnumRepr, Field, Fields, Item,
+    RequestVariant, SimpleEnum, SimpleVariant, Struct, Type, Visibility,
 };
 
 pub(crate) fn parse_file(ctx: &mut Context, path: &Path, fail_on_not_found: bool) -> Result<bool> {
@@ -79,6 +79,18 @@ fn parse_mod(ctx: &mut Context, path: &Path, items: Vec<syn::Item>) -> Result<()
                         path.display()
                     )
                 })?;
+            }
+            syn::Item::Const(item) => {
+                if !is_api_item(&item.attrs) {
+                    continue;
+                }
+
+                let name = item.ident.to_string();
+                let item = parse_const(item).with_context(|| {
+                    format!("failed to parse const '{name}' in '{}'", path.display())
+                })?;
+
+                ctx.items.push((name, Item::Const(item)));
             }
             _ => (),
         }
@@ -377,6 +389,29 @@ fn parse_struct(item: ItemStruct) -> Result<Struct> {
             }),
         }
     }
+}
+
+fn parse_const(item: ItemConst) -> Result<Const> {
+    let docs = parse_docs(&item.attrs)?;
+    let ty = parse_type(&item.ty)?;
+
+    let supported_types = ["i8", "i16", "i32", "u8", "u16", "u32", "u64"];
+    let valid_type = matches!(&ty,
+        Type::Scalar(scalar) if supported_types.contains(&scalar.as_str()));
+
+    if !valid_type {
+        bail!("unsupported constant type: {ty} (supported: {supported_types:?})");
+    }
+
+    let value = match *item.expr {
+        Expr::Lit(expr) => match expr.lit {
+            Lit::Int(lit) => lit.base10_parse()?,
+            _ => bail!("non-integer constant values not supported"),
+        },
+        _ => bail!("non-literal constant values not supported"),
+    };
+
+    Ok(Const { docs, value })
 }
 
 fn parse_enum_repr(attrs: &[Attribute]) -> Result<Option<EnumRepr>> {
@@ -992,5 +1027,14 @@ mod tests {
         };
 
         similar_asserts::assert_eq!(ctx.request, expected);
+    }
+
+    #[test]
+    fn test_parse_const() {
+        let item: syn::ItemConst = parse_quote! {
+            #[api]
+            const FOO: u32 = 1234;
+        };
+        assert_matches!(parse_const(item), Ok(Const { value: 1234, .. }));
     }
 }

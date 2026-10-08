@@ -546,6 +546,8 @@ class Datagram:
     data: bytes
     addr: str
 
+API_PROTOCOL_VERSION: int = 1
+
 @dataclass
 class FileHandle:
     _shape: ClassVar[str] = "unnamed"

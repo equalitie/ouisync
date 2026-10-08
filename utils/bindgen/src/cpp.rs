@@ -2,7 +2,7 @@ use anyhow::Result;
 use heck::{AsPascalCase, AsSnakeCase};
 use indoc::writedoc;
 use ouisync_api_parser::{
-    ComplexEnum, Context, Docs, EnumRepr, Fields, Item, RequestVariant, SimpleEnum, Struct,
+    ComplexEnum, Const, Context, Docs, EnumRepr, Fields, Item, RequestVariant, SimpleEnum, Struct,
     ToResponseVariantName, Type,
 };
 use std::{
@@ -61,6 +61,11 @@ pub(crate) fn generate(ctx: &Context, out_dir: &Path) -> Result<()> {
                 item,
             },
             Item::Struct(item) => NamedItem::Struct {
+                item_type: ItemType::Data,
+                name,
+                item,
+            },
+            Item::Const(item) => NamedItem::Const {
                 item_type: ItemType::Data,
                 name,
                 item,
@@ -639,6 +644,14 @@ fn write_struct(out: &mut OutFiles<'_>, name: &str, item: &Struct) -> Result<()>
     Ok(())
 }
 
+fn write_const(out: &mut OutFiles<'_>, name: &str, item: &Const) -> Result<()> {
+    write_docs(out.hpp, "", &item.docs)?;
+    writeln!(out.hpp, "const int64_t {} = {};", name, item.value)?;
+    writeln!(out.hpp)?;
+
+    Ok(())
+}
+
 fn write_service_error_code(
     name: &str,
     hpp: &mut dyn Write,
@@ -1055,6 +1068,11 @@ enum NamedItem<'a> {
         name: &'a str,
         item: &'a Struct,
     },
+    Const {
+        item_type: ItemType,
+        name: &'a str,
+        item: &'a Const,
+    },
 }
 
 impl<'a> NamedItem<'a> {
@@ -1063,6 +1081,7 @@ impl<'a> NamedItem<'a> {
             Self::SimpleEnum { name, .. } => name,
             Self::ComplexEnum { name, .. } => name,
             Self::Struct { name, .. } => name,
+            Self::Const { name, .. } => name,
         }
     }
 
@@ -1071,6 +1090,7 @@ impl<'a> NamedItem<'a> {
             Self::SimpleEnum { item_type, .. } => *item_type,
             Self::ComplexEnum { item_type, .. } => *item_type,
             Self::Struct { item_type, .. } => *item_type,
+            Self::Const { item_type, .. } => *item_type,
         }
     }
 
@@ -1097,6 +1117,13 @@ impl<'a> NamedItem<'a> {
             } => {
                 write_struct(out, name, item)?;
             }
+            Self::Const {
+                name,
+                item,
+                item_type: _,
+            } => {
+                write_const(out, name, item)?;
+            }
         }
         Ok(())
     }
@@ -1115,7 +1142,6 @@ impl<'a> DependentItem for NamedItem<'a> {
 
     fn depends_on(&self) -> HashSet<String> {
         match self {
-            Self::SimpleEnum { .. } => Default::default(),
             Self::ComplexEnum { item, .. } => item
                 .variants
                 .iter()
@@ -1132,6 +1158,7 @@ impl<'a> DependentItem for NamedItem<'a> {
                 .iter()
                 .flat_map(|(_name, field)| decompose(&field.ty))
                 .collect(),
+            Self::SimpleEnum { .. } | Self::Const { .. } => Default::default(),
         }
     }
 }

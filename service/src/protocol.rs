@@ -19,3 +19,8 @@ pub use response::{
 };
 
 pub(crate) use error_code::ToErrorCode;
+
+use ouisync_macros::api;
+
+#[api]
+pub const API_PROTOCOL_VERSION: u64 = 1;

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use heck::{AsLowerCamelCase, AsPascalCase, AsShoutySnakeCase, AsSnakeCase};
 use ouisync_api_parser::{
-    ComplexEnum, Context, Docs, EnumRepr, Fields, Item, RequestVariant, SimpleEnum, Struct,
+    ComplexEnum, Const, Context, Docs, EnumRepr, Fields, Item, RequestVariant, SimpleEnum, Struct,
     ToResponseVariantName, Type, Visibility,
 };
 use std::{
@@ -36,6 +36,7 @@ pub(crate) fn generate(ctx: &Context, out: &mut dyn Write) -> Result<()> {
             }
             Item::ComplexEnum(item) => write_complex_enum(out, name, item)?,
             Item::Struct(item) => write_struct(out, name, item)?,
+            Item::Const(item) => write_const(out, name, item)?,
         }
     }
 
@@ -226,6 +227,14 @@ fn write_struct(out: &mut dyn Write, name: &str, item: &Struct) -> Result<()> {
         writeln!(out)?;
     }
 
+    writeln!(out)?;
+
+    Ok(())
+}
+
+fn write_const(out: &mut dyn Write, name: &str, item: &Const) -> Result<()> {
+    write_docs(out, "", &item.docs)?;
+    writeln!(out, "const val {name} = {}", item.value)?;
     writeln!(out)?;
 
     Ok(())
