@@ -394,9 +394,16 @@ private fun readServiceAddress(configDir: String): ServiceAddress {
     }
 
     // Missing port is reported as -1
-    val port = if (uri.port < 0) 0 else uri.port
+    if (uri.port < 0) {
+        throw IllegalArgumentException("invalid service address: $uri - missing port")
+    }
 
-    return ServiceAddress(SocketAddress.Tcp(InetSocketAddress(uri.host, port)), authKey)
+    // Port 0 is only meaningful to the service (bind to random port), not to the client.
+    if (uri.port == 0) {
+        throw IllegalArgumentException("invalid service address: $uri - port must not be zero")
+    }
+
+    return ServiceAddress(SocketAddress.Tcp(InetSocketAddress(uri.host, uri.port)), authKey)
 }
 
 private const val UNIX_SCHEME = "unix://"
