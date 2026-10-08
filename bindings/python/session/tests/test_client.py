@@ -41,6 +41,19 @@ async def test_sanity_check_unix_custom_path(tmp_path):
     assert not (config_dir / "local_endpoint.sock").exists()
 
 
+# Connecting to TCP service address with missing or zero port must fail.
+@pytest.mark.parametrize("endpoint", ["127.0.0.1", "127.0.0.1:0", "[::1]", "[::1]:0"])
+async def test_connect_tcp_invalid_port(tmp_path, endpoint):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+
+    addr = f"tcp://{endpoint}?auth_key={secrets.token_hex(32)}"
+    (config_dir / "local_endpoint.conf").write_text(json.dumps(addr))
+
+    with pytest.raises(ValueError, match="port"):
+        await Client.connect(config_dir)
+
+
 async def _sanity_check(config_dir):
     service = await Service.start(str(config_dir))
     try:
