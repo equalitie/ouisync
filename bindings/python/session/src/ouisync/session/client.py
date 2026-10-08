@@ -243,7 +243,14 @@ def _read_service_address(config_dir: Path) -> _UnixAddress | _TcpAddress:
     except ValueError as error:
         raise ValueError(f"invalid service address: {raw} - invalid auth_key") from error
 
-    return _TcpAddress(url.hostname, url.port or 0, auth_key)
+    if url.port is None:
+        raise ValueError(f"invalid service address: {raw} - missing port")
+
+    # Port 0 is only meaningful to the service (bind to random port), not to the client.
+    if url.port == 0:
+        raise ValueError(f"invalid service address: {raw} - port must not be zero")
+
+    return _TcpAddress(url.hostname, url.port, auth_key)
 
 
 def _decode_response_result(raw):
