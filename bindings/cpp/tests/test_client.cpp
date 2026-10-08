@@ -91,13 +91,31 @@ BOOST_AUTO_TEST_CASE(connect_tcp_invalid_port) {
             asio::io_context ctx;
 
             asio::spawn(ctx, [&] (asio::yield_context yield) {
-                ouisync::Session::connect(config_dir, yield);
+                boost::system::error_code ec;
+                ouisync::Session::connect(config_dir, yield[ec]);
+                BOOST_CHECK_EQUAL(ec, ouisync::error::invalid_service_address);
             }, check_exception);
 
-            // NOTE: The address is parsed in the async initiation function which, with
-            // `yield_context`, runs outside of the coroutine. So the error propagates out of
-            // `ctx.run()` instead of from `Session::connect`.
-            BOOST_CHECK_THROW(ctx.run(), boost::system::system_error);
+            ctx.run();
         }
     }
+}
+
+// Connecting when the service config doesn't exist must fail with an error that can be caught
+// inside the coroutine.
+BOOST_AUTO_TEST_CASE(connect_missing_config) {
+    auto tempdir = TempDir();
+    auto config_dir = mkdir(tempdir.path() / "config");
+
+    asio::io_context ctx;
+
+    asio::spawn(ctx, [&] (asio::yield_context yield) {
+        BOOST_CHECK_EXCEPTION(
+            ouisync::Session::connect(config_dir, yield),
+            boost::system::system_error,
+            [](const auto& e) { return e.code() == ouisync::error::service_config_not_found; }
+        );
+    }, check_exception);
+
+    ctx.run();
 }

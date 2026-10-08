@@ -436,7 +436,7 @@ struct ServiceAddress {
 [[noreturn]] static
 void throw_invalid_address(std::string_view raw, std::string_view reason) {
     throw system::system_error(
-        make_error_code(error::connect),
+        make_error_code(error::invalid_service_address),
         "invalid service address: " + std::string(raw) + " - " + std::string(reason)
     );
 }
@@ -534,7 +534,7 @@ ServiceAddress read_service_address(const boost::filesystem::path& config_dir_pa
     conf_file.open(conf_path);
 
     if (!conf_file.is_open()) {
-        throw_error(error::connect, "Could not open file " + conf_path.string());
+        throw_error(error::service_config_not_found, "Could not open file " + conf_path.string());
     }
 
     std::stringstream buffer;
@@ -542,7 +542,12 @@ ServiceAddress read_service_address(const boost::filesystem::path& config_dir_pa
 
     namespace js = boost::json;
 
-    js::value value = js::parse(buffer.str());
+    system::error_code ec;
+    js::value value = js::parse(buffer.str(), ec);
+    if (ec) {
+        throw_invalid_address(buffer.str(), "invalid json");
+    }
+
     auto raw = value.if_string();
 
     if (raw == nullptr) {
@@ -634,13 +639,25 @@ void Client::connect_impl(
     const boost::filesystem::path& config_dir_path,
     asio::any_completion_handler<void(system::error_code, std::shared_ptr<Client>)> handler
 ) {
-    auto addr = read_service_address(config_dir_path);
+    // NOTE: Everything that can fail must happen inside the coroutine and the errors must be
+    // passed to the handler. Throwing from here (the initiation function) would bypass the
+    // caller's try/catch when using `yield_context`.
     asio::spawn(
         exec,
-        [addr = std::move(addr), handler = std::move(handler)]
+        [config_dir_path, handler = std::move(handler)]
         (asio::yield_context yield) mutable {
             system::error_code ec;
-            auto client = connect_coro(std::move(addr), yield[ec]);
+            std::shared_ptr<Client> client;
+
+            try {
+                auto addr = read_service_address(config_dir_path);
+                client = connect_coro(std::move(addr), yield[ec]);
+            } catch (const system::system_error& e) {
+                // The completion signature only carries the error code, so log the details.
+                std::cerr << "Failed to connect to Ouisync service: " << e.what() << std::endl;
+                ec = e.code();
+            }
+
             handler(ec, std::move(client));
         },
         asio::detached
