@@ -39,8 +39,8 @@ rust-version = "1.91.0"
 [workspace.dependencies]
 anyhow = "1.0.100"
 assert_matches = "1.5"
-async-recursion = "1.1.1"
-async-trait = "0.1.89"
+async-recursion = "1.2.0"
+async-trait = "0.1.92"
 btdht = { git = "https://github.com/equalitie/btdht.git", rev = "ad423e21faeb6a4549397f8c6050cb8e4470b77e" }
 bytes = "1.11.0"
 camino = "1.2.1"
