@@ -15,6 +15,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.fail
 
@@ -77,6 +78,21 @@ class ClientTest {
         }
 
         assertFalse(File(configDir, "local_endpoint.sock").exists())
+    }
+
+    @Test
+    fun connectTcpInvalidPort() = runTest {
+        val configDir = File(tempDir, "config").apply { mkdirs() }
+        val authKey = "00".repeat(32)
+
+        for (endpoint in listOf("127.0.0.1", "127.0.0.1:0", "[::1]", "[::1]:0")) {
+            File(configDir, "local_endpoint.conf")
+                .writeText("\"tcp://$endpoint?auth_key=$authKey\"")
+
+            assertFailsWith<IllegalArgumentException>("endpoint: $endpoint") {
+                Client.connect(configDir.path)
+            }
+        }
     }
 
     @Test
