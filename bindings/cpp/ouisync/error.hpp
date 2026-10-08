@@ -46,6 +46,16 @@ enum Client {
     logic,
     already_subscribed,
     not_subscribed,
+    /**
+     * The service config file (local_endpoint.conf) doesn't exist or can't be read
+     *
+     * Likely cause: the service is not running
+     */
+    service_config_not_found,
+    /**
+     * The service address in the service config file is malformed
+     */
+    invalid_service_address,
 };
 
 /**
@@ -71,6 +81,8 @@ public:
             case error::serialize: return "Failed to serialize request";
             case error::deserialize: return "Failed to parse response";
             case error::logic: return "Bug in the Ouisync client code";
+            case error::service_config_not_found: return "Ouisync service config not found";
+            case error::invalid_service_address: return "Invalid Ouisync service address";
             default: return "Unknown error";
         }
     }
