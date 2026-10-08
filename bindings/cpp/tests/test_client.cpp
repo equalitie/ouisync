@@ -77,3 +77,27 @@ BOOST_AUTO_TEST_CASE(sanity_check_unix_custom_path) {
     BOOST_REQUIRE(!fs::exists(config_dir / "local_endpoint.sock"));
 }
 #endif
+
+// Connecting to TCP service address with missing or zero port must fail.
+BOOST_AUTO_TEST_CASE(connect_tcp_invalid_port) {
+    auto tempdir = TempDir();
+    auto config_dir = mkdir(tempdir.path() / "config");
+
+    for (std::string endpoint : { "127.0.0.1", "127.0.0.1:0", "[::1]", "::1", "[::1]:0" }) {
+        BOOST_TEST_CONTEXT("endpoint: " << endpoint) {
+            fs::ofstream(config_dir / "local_endpoint.conf")
+                << "\"tcp://" << endpoint << "?auth_key=" << random_hex(64) << "\"";
+
+            asio::io_context ctx;
+
+            asio::spawn(ctx, [&] (asio::yield_context yield) {
+                ouisync::Session::connect(config_dir, yield);
+            }, check_exception);
+
+            // NOTE: The address is parsed in the async initiation function which, with
+            // `yield_context`, runs outside of the coroutine. So the error propagates out of
+            // `ctx.run()` instead of from `Session::connect`.
+            BOOST_CHECK_THROW(ctx.run(), boost::system::system_error);
+        }
+    }
+}

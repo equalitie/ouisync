@@ -441,15 +441,17 @@ void throw_invalid_address(std::string_view raw, std::string_view reason) {
     );
 }
 
-// Parses TCP endpoint in the form `ADDR:PORT` (`[ADDR]:PORT` for IPv6) or just `ADDR` (port is 0
-// then).
+// Parses TCP endpoint in the form `ADDR:PORT` (`[ADDR]:PORT` for IPv6). The port is required and
+// must be non-zero.
 static
 asio::ip::tcp::endpoint parse_tcp_endpoint(std::string_view raw) {
     system::error_code ec;
 
-    auto addr = asio::ip::make_address(std::string(raw), ec);
-    if (!ec) {
-        return asio::ip::tcp::endpoint(addr, 0);
+    // Bare address without port (also catches unbracketed IPv6 address, which would otherwise be
+    // ambiguously split on its last colon).
+    asio::ip::make_address(std::string(raw), ec);
+    if (!ec || raw.ends_with(']')) {
+        throw_invalid_address(raw, "missing port");
     }
 
     auto colon = raw.rfind(':');
@@ -464,7 +466,7 @@ asio::ip::tcp::endpoint parse_tcp_endpoint(std::string_view raw) {
         raw_host = raw_host.substr(1, raw_host.size() - 2);
     }
 
-    addr = asio::ip::make_address(std::string(raw_host), ec);
+    auto addr = asio::ip::make_address(std::string(raw_host), ec);
     if (ec) {
         throw_invalid_address(raw, "invalid ip address");
     }
@@ -473,6 +475,10 @@ asio::ip::tcp::endpoint parse_tcp_endpoint(std::string_view raw) {
     auto [ptr, port_ec] = std::from_chars(raw_port.data(), raw_port.data() + raw_port.size(), port);
     if (port_ec != std::errc() || ptr != raw_port.data() + raw_port.size()) {
         throw_invalid_address(raw, "invalid port");
+    }
+
+    if (port == 0) {
+        throw_invalid_address(raw, "port must not be zero");
     }
 
     return asio::ip::tcp::endpoint(addr, port);
