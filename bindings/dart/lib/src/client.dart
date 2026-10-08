@@ -323,8 +323,16 @@ Future<_ServiceAddress> _readServiceAddress(String dir) async {
     );
   }
 
-  final addr = uri.host;
+  // NOTE: `Uri` treats 0 as the default port for unknown schemes, so `uri.port` is 0 both when the
+  // port is missing and when it's explicitly 0. Either way it's useless to the client.
   final port = uri.port;
+  if (port == 0) {
+    throw FormatException(
+      'invalid service address: $raw - missing or zero port',
+    );
+  }
+
+  final addr = uri.host;
   final authKey = HEX.decode(uri.queryParameters['auth_key']!);
 
   return _ServiceAddress(InternetAddress(addr), port, authKey);

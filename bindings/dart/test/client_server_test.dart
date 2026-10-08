@@ -66,6 +66,24 @@ void main() {
         : false,
   );
 
+  // Connecting to TCP service address with missing or zero port must fail.
+  for (final endpoint in ['127.0.0.1', '127.0.0.1:0', '[::1]', '[::1]:0']) {
+    test('connect tcp invalid port ($endpoint)', () async {
+      final configPath = '${temp.path}/config';
+
+      final conf = io.File('$configPath/local_endpoint.conf');
+      await conf.create(recursive: true);
+      await conf.writeAsString(
+        json.encode('tcp://$endpoint?auth_key=${_randomHex(64)}'),
+      );
+
+      await expectLater(
+        Client.connect(configPath: configPath),
+        throwsA(isA<FormatException>()),
+      );
+    });
+  }
+
   test('server already running', () async {
     final configPath = '${temp.path}/config';
 
