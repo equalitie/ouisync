@@ -5,7 +5,12 @@ mod format;
 #[path = "android.rs"]
 mod output;
 
-#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos", target_os = "ios"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "ios"
+))]
 #[path = "stdout.rs"]
 mod output;
 

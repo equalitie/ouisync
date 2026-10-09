@@ -2209,8 +2209,8 @@ impl State {
 
         for store_dir in store_dirs {
             if !fs::try_exists(store_dir).await.unwrap_or(false) {
-                tracing::debug!("store dir doesn't exist: {}", store_dir.display());
-                return;
+                tracing::warn!("store dir doesn't exist: {}", store_dir.display());
+                continue;
             }
 
             let mut walkdir = fs_util::WalkDir::new(store_dir).into_stream();
