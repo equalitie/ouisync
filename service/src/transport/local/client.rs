@@ -5,7 +5,7 @@ use crate::{
     transport::ClientError,
 };
 
-use super::{LocalAddr, LocalClientReader, LocalClientWriter};
+use super::{LocalClientReader, LocalClientWriter, LocalEndpoint};
 
 pub struct LocalClient {
     reader: LocalClientReader,
@@ -13,8 +13,8 @@ pub struct LocalClient {
 }
 
 impl LocalClient {
-    pub async fn connect(addr: &LocalAddr) -> Result<Self, ClientError> {
-        let (reader, writer) = super::connect(addr).await?;
+    pub async fn connect(endpoint: &LocalEndpoint) -> Result<Self, ClientError> {
+        let (reader, writer) = super::connect(endpoint).await?;
         Ok(Self { reader, writer })
     }
 

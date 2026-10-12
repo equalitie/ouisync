@@ -1,11 +1,11 @@
-mod addr;
 mod auth;
 mod client;
+mod endpoint;
 mod net;
 
-pub use addr::LocalAddr;
 pub use auth::AuthKey;
 pub use client::LocalClient;
+pub use endpoint::LocalEndpoint;
 
 use std::{
     io,
@@ -21,51 +21,74 @@ use tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec};
 
 use super::{ClientError, ReadError, WriteError};
 use crate::protocol::{Message, Request, ResponseResult};
-use net::{LocalAccept, LocalListener, LocalOwnedReadHalf, LocalOwnedWriteHalf, LocalStream};
+use endpoint::LocalAddr;
+use net::{LocalListener, LocalOwnedReadHalf, LocalOwnedWriteHalf, LocalStream};
 
 pub(crate) struct LocalServer {
     listener: LocalListener,
-    addr: LocalAddr,
+    endpoint: LocalEndpoint,
 }
 
 impl LocalServer {
-    pub async fn bind(addr: LocalAddr) -> io::Result<Self> {
-        let listener = LocalListener::bind(addr).await?;
-        let addr = listener.local_addr()?;
+    pub async fn bind(endpoint: LocalEndpoint) -> io::Result<Self> {
+        let listener = LocalListener::bind(endpoint.addr()).await?;
 
-        Ok(Self { listener, addr })
+        // Reconstruct the endpoint using the actual address the listener bound to (e.g., when using
+        // TCP with port `0`, the listener actually binds to a random port).
+        let addr = listener.local_addr()?;
+        let endpoint = match (endpoint, addr) {
+            (LocalEndpoint::Tcp { auth_key, .. }, LocalAddr::Tcp(addr)) => {
+                LocalEndpoint::Tcp { addr, auth_key }
+            }
+            (LocalEndpoint::Unix(_), LocalAddr::Unix(path)) => LocalEndpoint::Unix(path),
+            (LocalEndpoint::Tcp { .. }, LocalAddr::Unix(_))
+            | (LocalEndpoint::Unix(_), LocalAddr::Tcp(_)) => unreachable!(),
+        };
+
+        Ok(Self { listener, endpoint })
     }
 
     /// Accept the next local client connection. The returned value needs to be finalized (
     /// [AcceptedLocalConnection::finalize]) before use.
     pub async fn accept(&self) -> io::Result<AcceptedLocalConnection> {
-        let accept = self.listener.accept().await?;
+        let stream = self.listener.accept().await?;
 
-        Ok(AcceptedLocalConnection { accept })
+        Ok(AcceptedLocalConnection {
+            stream,
+            endpoint: self.endpoint.clone(),
+        })
     }
 
-    pub fn addr(&self) -> &LocalAddr {
-        &self.addr
+    pub fn endpoint(&self) -> &LocalEndpoint {
+        &self.endpoint
     }
 }
 
 pub(crate) struct AcceptedLocalConnection {
-    accept: LocalAccept,
+    stream: LocalStream,
+    endpoint: LocalEndpoint,
 }
 
 impl AcceptedLocalConnection {
     /// Finalize accepting the connection.
-    pub async fn finalize(self) -> Option<(LocalServerReader, LocalServerWriter)> {
-        let socket = self
-            .accept
-            .finalize()
-            .await
-            .inspect_err(|error| {
-                tracing::debug!(?error, "failed to finalize accepted client connection")
-            })
-            .ok()?;
+    pub async fn finalize(mut self) -> Option<(LocalServerReader, LocalServerWriter)> {
+        match (&mut self.stream, &self.endpoint) {
+            (LocalStream::Tcp(stream), LocalEndpoint::Tcp { auth_key, .. }) => {
+                auth::server(stream, auth_key)
+                    .await
+                    .inspect_err(|error| {
+                        tracing::debug!(?error, "failed to authenticated client connection")
+                    })
+                    .ok()?;
+            }
+            (LocalStream::Unix(_), LocalEndpoint::Unix(_)) => {
+                // UNIX sockets are authenticated using file permissions
+            }
+            (LocalStream::Tcp(_), LocalEndpoint::Unix(_))
+            | (LocalStream::Unix(_), LocalEndpoint::Tcp { .. }) => unreachable!(),
+        }
 
-        let (reader, writer) = socket.into_split();
+        let (reader, writer) = self.stream.into_split();
         let reader = LocalReader::new(reader);
         let writer = LocalWriter::new(writer);
 
@@ -74,13 +97,24 @@ impl AcceptedLocalConnection {
 }
 
 pub async fn connect(
-    addr: &LocalAddr,
+    endpoint: &LocalEndpoint,
 ) -> Result<(LocalClientReader, LocalClientWriter), ClientError> {
-    let socket = LocalStream::connect(addr)
+    let mut stream = LocalStream::connect(&endpoint.addr())
         .await
         .map_err(ClientError::Connect)?;
 
-    let (reader, writer) = socket.into_split();
+    match (&mut stream, endpoint) {
+        (LocalStream::Tcp(stream), LocalEndpoint::Tcp { auth_key, .. }) => {
+            auth::client(stream, auth_key)
+                .await
+                .map_err(ClientError::Connect)?;
+        }
+        (LocalStream::Unix(_), LocalEndpoint::Unix(_)) => (),
+        (LocalStream::Tcp(_), LocalEndpoint::Unix(_))
+        | (LocalStream::Unix(_), LocalEndpoint::Tcp { .. }) => unreachable!(),
+    }
+
+    let (reader, writer) = stream.into_split();
     let reader = LocalReader::new(reader);
     let writer = LocalWriter::new(writer);
 
@@ -202,7 +236,7 @@ mod tests {
         transport::{self, ClientError},
     };
 
-    use super::{AuthKey, LocalAddr, LocalClientReader, LocalClientWriter};
+    use super::{AuthKey, LocalClientReader, LocalClientWriter, LocalEndpoint};
 
     enum LocalTransport {
         Tcp,
@@ -229,12 +263,12 @@ mod tests {
         // Write the local_endpoint.conf file before initializing the service to force the requested
         // transport for the API protocol.
         let local_addr = match local_transport {
-            LocalTransport::Tcp => LocalAddr::Tcp {
+            LocalTransport::Tcp => LocalEndpoint::Tcp {
                 addr: (Ipv4Addr::LOCALHOST, 0).into(),
                 auth_key: AuthKey::random(),
             },
             LocalTransport::Unix => {
-                LocalAddr::Unix(Path::new(LOCAL_ENDPOINT_NAME).with_added_extension("sock"))
+                LocalEndpoint::Unix(Path::new(LOCAL_ENDPOINT_NAME).with_added_extension("sock"))
             }
         };
         ConfigStore::new(config_dir)
@@ -244,7 +278,7 @@ mod tests {
             .unwrap();
 
         let service = Service::init(temp_dir.path().join("config")).await.unwrap();
-        let service_addr = service.local_addr().clone();
+        let service_endpoint = service.local_endpoint().clone();
         service
             .state()
             .session_insert_store_dirs(vec![store_dir.clone()])
@@ -253,7 +287,7 @@ mod tests {
 
         let runner = ServiceRunner::start(service);
 
-        let mut client = TestClient::connect(&service_addr).await;
+        let mut client = TestClient::connect(&service_endpoint).await;
 
         let message_id = MessageId::next();
         let value: Vec<PathBuf> = client
@@ -279,7 +313,7 @@ mod tests {
         let config_dir = temp_dir.path().join("config");
         ConfigStore::new(&config_dir)
             .entry(LOCAL_ENDPOINT_KEY)
-            .set(&LocalAddr::Tcp {
+            .set(&LocalEndpoint::Tcp {
                 addr: (Ipv4Addr::LOCALHOST, 0).into(),
                 auth_key: AuthKey::random(),
             })
@@ -288,10 +322,10 @@ mod tests {
 
         let service = Service::init(config_dir).await.unwrap();
 
-        let invalid_addr = LocalAddr::Tcp {
-            addr: match service.local_addr() {
-                LocalAddr::Tcp { addr, .. } => *addr,
-                LocalAddr::Unix(_) => unreachable!(),
+        let invalid_addr = LocalEndpoint::Tcp {
+            addr: match service.local_endpoint() {
+                LocalEndpoint::Tcp { addr, .. } => *addr,
+                LocalEndpoint::Unix(_) => unreachable!(),
             },
             auth_key: AuthKey::random(),
         };
@@ -316,7 +350,7 @@ mod tests {
         let store_dir = temp_dir.path().join("store");
 
         let service = Service::init(temp_dir.path().join("config")).await.unwrap();
-        let service_addr = service.local_addr().clone();
+        let service_endpoint = service.local_endpoint().clone();
         service
             .state()
             .session_insert_store_dirs(vec![store_dir])
@@ -325,7 +359,7 @@ mod tests {
 
         let runner = ServiceRunner::start(service);
 
-        let mut client = TestClient::connect(&service_addr).await;
+        let mut client = TestClient::connect(&service_endpoint).await;
 
         let repo_handle: RepositoryHandle = client
             .invoke(
@@ -419,11 +453,11 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         // Create two separate services (A and B), each with its own client.
-        let (addr_a, runner_a) = async {
+        let (endpoint_a, runner_a) = async {
             let service = Service::init(temp_dir.path().join("config_a"))
                 .await
                 .unwrap();
-            let addr = service.local_addr().clone();
+            let endpoint = service.local_endpoint().clone();
             service
                 .state()
                 .session_insert_store_dirs(vec![temp_dir.path().join("store_a")])
@@ -431,16 +465,16 @@ mod tests {
                 .unwrap();
             let runner = ServiceRunner::start(service);
 
-            (addr, runner)
+            (endpoint, runner)
         }
         .instrument(tracing::info_span!("a"))
         .await;
 
-        let (addr_b, runner_b) = async {
+        let (endpoint_b, runner_b) = async {
             let service = Service::init(temp_dir.path().join("config_b"))
                 .await
                 .unwrap();
-            let addr = service.local_addr().clone();
+            let endpoint = service.local_endpoint().clone();
             service
                 .state()
                 .session_insert_store_dirs(vec![temp_dir.path().join("store_b")])
@@ -448,13 +482,13 @@ mod tests {
                 .unwrap();
             let runner = ServiceRunner::start(service);
 
-            (addr, runner)
+            (endpoint, runner)
         }
         .instrument(tracing::info_span!("b"))
         .await;
 
-        let mut client_a = TestClient::connect(&addr_a).await;
-        let mut client_b = TestClient::connect(&addr_b).await;
+        let mut client_a = TestClient::connect(&endpoint_a).await;
+        let mut client_b = TestClient::connect(&endpoint_b).await;
 
         let bind_addr = PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into());
 
@@ -566,8 +600,8 @@ mod tests {
     }
 
     impl TestClient {
-        async fn connect(addr: &LocalAddr) -> Self {
-            let (reader, writer) = transport::local::connect(addr).await.unwrap();
+        async fn connect(endpoint: &LocalEndpoint) -> Self {
+            let (reader, writer) = transport::local::connect(endpoint).await.unwrap();
 
             Self {
                 reader,
