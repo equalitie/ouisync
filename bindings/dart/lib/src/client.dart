@@ -15,7 +15,9 @@ import '../generated/api.g.dart'
         Request,
         Response,
         ResponseNone,
-        RequestCancel;
+        RequestCancel,
+        Unsupported,
+        apiProtocolVersion;
 import 'length_delimited_codec.dart';
 import 'message_codec.dart';
 
@@ -96,7 +98,13 @@ class Client {
       final response = completer.future;
       _responses[id] = completer;
 
-      final socket = await _ensureConnected();
+      final Socket socket;
+      try {
+        socket = await _ensureConnected();
+      } catch (_) {
+        _responses.remove(id);
+        rethrow;
+      }
 
       try {
         socket.add(bytes);
@@ -118,13 +126,19 @@ class Client {
           final completer = Completer();
           _state = _Transitioning(completer.future);
 
-          final (socket, stream) = await _connector.connect();
-          final subscription = stream
-              .transform(LengthDelimitedCodec())
-              .listen(_receive, onError: _receiveError, onDone: _receiveDone);
+          try {
+            final (socket, stream) = await _connector.connect();
+            final subscription = stream
+                .transform(LengthDelimitedCodec())
+                .listen(_receive, onError: _receiveError, onDone: _receiveDone);
 
-          _state = _Connected(socket, subscription);
-          completer.complete();
+            _state = _Connected(socket, subscription);
+          } catch (_) {
+            _state = _Disconnected();
+            rethrow;
+          } finally {
+            completer.complete();
+          }
         case _Connected():
           return state.socket;
         case _Closed():
@@ -357,11 +371,19 @@ class _Connector {
     while (true) {
       try {
         final socket = await Socket.connect(endpoint.address, endpoint.port);
-        final stream = socket.asBroadcastStream();
 
-        await _authenticate(stream, socket);
+        try {
+          final stream = socket.asBroadcastStream();
+          final reader = _Reader(stream);
 
-        return (socket, stream);
+          await _negotiateProtocolVersion(reader, socket);
+          await _authenticate(reader, socket);
+
+          return (socket, stream);
+        } catch (_) {
+          socket.destroy();
+          rethrow;
+        }
       } on SocketException {
         delay = _minDuration(delay * 2, maxDelay);
         await Future.delayed(delay);
@@ -369,7 +391,31 @@ class _Connector {
     }
   }
 
-  Future<void> _authenticate(Stream<Uint8List> stream, IOSink sink) async {
+  // Negotiate the API protocol version with the service. See
+  // `service/src/transport/local/protocol_negotiation.rs` for the description of the protocol.
+  Future<int> _negotiateProtocolVersion(_Reader reader, IOSink sink) async {
+    final clientVersion = apiProtocolVersion;
+
+    sink.add(
+      (ByteData(
+        8,
+      )..setUint64(0, clientVersion, Endian.big)).buffer.asUint8List(),
+    );
+
+    final serverVersion = ByteData.sublistView(
+      Uint8List.fromList(await reader.read(8)),
+    ).getUint64(0, Endian.big);
+
+    if (serverVersion != clientVersion) {
+      throw Unsupported(
+        'unsupported protocol version (client: $clientVersion, server: $serverVersion)',
+      );
+    }
+
+    return serverVersion;
+  }
+
+  Future<void> _authenticate(_Reader reader, IOSink sink) async {
     final authKey = endpoint.authKey;
     if (authKey == null) {
       return;
@@ -380,7 +426,6 @@ class _Connector {
 
     final random = Random.secure();
     final hmac = Hmac(sha256, authKey);
-    final reader = _Reader(stream);
 
     final clientChallenge = List<int>.generate(
       challengeSize,
@@ -441,6 +486,10 @@ class _Reader {
           break;
         }
       }
+    }
+
+    if (builder.length < length) {
+      throw SocketException.closed();
     }
 
     final bytes = builder.takeBytes();

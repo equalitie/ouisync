@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert' show json;
 import 'dart:io' as io;
 import 'dart:math' show Random;
+import 'dart:typed_data';
 
 import 'package:ouisync/ouisync.dart';
 import 'package:ouisync/src/client.dart';
@@ -83,6 +85,71 @@ void main() {
       );
     });
   }
+
+  // Connecting to a service that uses a different API protocol version must fail.
+  test('connect unsupported protocol version', () async {
+    final configPath = '${temp.path}/config';
+
+    // Fake service which responds with an unsupported protocol version.
+    final server = await io.ServerSocket.bind(
+      io.InternetAddress.loopbackIPv4,
+      0,
+    );
+    final clientVersions = <int>[];
+
+    server.listen((socket) {
+      final bytes = BytesBuilder();
+
+      socket.listen((chunk) {
+        bytes.add(chunk);
+
+        if (bytes.length < 8) {
+          return;
+        }
+
+        clientVersions.add(
+          ByteData.sublistView(bytes.takeBytes()).getUint64(0, Endian.big),
+        );
+
+        socket.add(
+          (ByteData(8)..setUint64(0, apiProtocolVersion + 1, Endian.big)).buffer
+              .asUint8List(),
+        );
+        unawaited(socket.close());
+      });
+    });
+
+    final conf = io.File('$configPath/local_endpoint.conf');
+    await conf.create(recursive: true);
+    await conf.writeAsString(
+      json.encode(
+        Uri(
+          scheme: 'tcp',
+          host: '127.0.0.1',
+          port: server.port,
+          queryParameters: {'auth_key': _randomHex(64)},
+        ).toString(),
+      ),
+    );
+
+    final client = await Client.connect(configPath: configPath);
+
+    try {
+      // Repeat to check the client recovers from the failed connection attempt instead of getting
+      // stuck.
+      for (var i = 0; i < 2; ++i) {
+        await expectLater(
+          client.invoke(RequestSessionGetStoreDirs()),
+          throwsA(isA<Unsupported>()),
+        );
+      }
+
+      expect(clientVersions, equals([apiProtocolVersion, apiProtocolVersion]));
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 
   test('server already running', () async {
     final configPath = '${temp.path}/config';
