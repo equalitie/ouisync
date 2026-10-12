@@ -240,6 +240,7 @@ mod tests {
 
     enum LocalTransport {
         Tcp,
+        #[cfg_attr(not(unix), expect(unused))]
         Unix,
     }
 
@@ -248,6 +249,7 @@ mod tests {
         sanity_check(LocalTransport::Tcp).await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn sanity_check_unix() {
         sanity_check(LocalTransport::Unix).await;
