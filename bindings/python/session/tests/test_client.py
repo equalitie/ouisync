@@ -1,11 +1,18 @@
+import asyncio
 import json
 import secrets
+import struct
 import sys
 
 import pytest
 
 from ouisync.service import Service
-from ouisync.session import Request_SessionGetStoreDirs, Response_Paths
+from ouisync.session import (
+    API_PROTOCOL_VERSION,
+    OuisyncError_Unsupported,
+    Request_SessionGetStoreDirs,
+    Response_Paths,
+)
 from ouisync.session.client import Client
 
 
@@ -52,6 +59,35 @@ async def test_connect_tcp_invalid_port(tmp_path, endpoint):
 
     with pytest.raises(ValueError, match="port"):
         await Client.connect(config_dir)
+
+
+# Connecting to a service that uses a different API protocol version must fail.
+async def test_connect_unsupported_protocol_version(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+
+    client_versions = []
+
+    # Fake service which responds with an unsupported protocol version.
+    async def handle(reader, writer):
+        (client_version,) = struct.unpack(">Q", await reader.readexactly(8))
+        client_versions.append(client_version)
+
+        writer.write(struct.pack(">Q", API_PROTOCOL_VERSION + 1))
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+
+    addr = f"tcp://127.0.0.1:{port}?auth_key={secrets.token_hex(32)}"
+    (config_dir / "local_endpoint.conf").write_text(json.dumps(addr))
+
+    async with server:
+        with pytest.raises(OuisyncError_Unsupported):
+            await asyncio.wait_for(Client.connect(config_dir), timeout=10)
+
+    assert client_versions == [API_PROTOCOL_VERSION]
 
 
 async def _sanity_check(config_dir):
