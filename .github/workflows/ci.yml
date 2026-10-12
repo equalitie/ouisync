@@ -464,6 +464,33 @@ jobs:
                   RUST_LOG: ouisync=debug,sqlx=warn
               run: flutter test
 
+    check_swift_bindings:
+        name: check swift bindings
+        runs-on: macos-latest
+        steps:
+            - uses: actions/checkout@v7
+
+            # build-xcframework-macos.sh builds a universal (arm64 + x86_64) library
+            - name: Add rust targets
+              run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+            - uses: Swatinem/rust-cache@v2
+              with:
+                  key: swift
+
+            # Needed by build-xcframework-macos.sh to generate the C header
+            - name: Install cbindgen
+              run: cargo install --force cbindgen
+
+            - name: Build the xcframework
+              run: bash bindings/swift/OuisyncLib/build-xcframework-macos.sh
+
+            - name: Run tests
+              working-directory: bindings/swift/OuisyncLib
+              env:
+                  RUST_LOG: ouisync=debug,sqlx=warn
+              run: swift test
+
     build_session_python_bindings:
         name: build session python bindings package
         runs-on: ubuntu-24.04
