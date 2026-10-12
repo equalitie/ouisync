@@ -56,7 +56,7 @@ internal class Client private constructor(private val socket: Socket) {
             minWait: Duration = 50.milliseconds,
             maxWait: Duration = 1.seconds,
         ): Client {
-            val serviceAddress = readServiceAddress(configPath)
+            val serviceEndpoint = readServiceEndpoint(configPath)
 
             var start = Clock.System.now()
             var wait = minWait
@@ -70,9 +70,9 @@ internal class Client private constructor(private val socket: Socket) {
                 }
 
                 try {
-                    val socket = Socket.connect(serviceAddress.socketAddress)
+                    val socket = Socket.connect(serviceEndpoint.address)
 
-                    serviceAddress.authKey?.let { authKey -> authenticate(socket, authKey) }
+                    serviceEndpoint.authKey?.let { authKey -> authenticate(socket, authKey) }
 
                     return Client(socket)
                 } catch (e: IOException) {
@@ -351,12 +351,12 @@ private suspend fun Socket.writeAll(buffer: ByteBuffer) {
     }
 }
 
-private data class ServiceAddress(val socketAddress: SocketAddress, val authKey: ByteArray?)
+private data class ServiceEndpoint(val address: SocketAddress, val authKey: ByteArray?)
 
-private fun readServiceAddress(configDir: String): ServiceAddress {
+private fun readServiceEndpoint(configDir: String): ServiceEndpoint {
     val unixSocket = File(configDir, "local_endpoint.sock")
     if (unixSocket.exists()) {
-        return ServiceAddress(SocketAddress.Unix(unixSocket.path), null)
+        return ServiceEndpoint(SocketAddress.Unix(unixSocket.path), null)
     }
 
     val conf = File(configDir, "local_endpoint.conf")
@@ -366,13 +366,13 @@ private fun readServiceAddress(configDir: String): ServiceAddress {
         // Relative path is resolved against the config dir.
         val path = File(raw.removePrefix(UNIX_SCHEME))
         val resolved = if (path.isAbsolute) path else File(configDir, path.path)
-        return ServiceAddress(SocketAddress.Unix(resolved.path), null)
+        return ServiceEndpoint(SocketAddress.Unix(resolved.path), null)
     }
 
     val uri = URI(raw)
 
     if (uri.scheme != "tcp") {
-        throw IllegalArgumentException("invalid service address: $uri - unsupported scheme")
+        throw IllegalArgumentException("invalid service endpoint: $uri - unsupported scheme")
     }
 
     val authKey =
@@ -390,20 +390,20 @@ private fun readServiceAddress(configDir: String): ServiceAddress {
             ?.let { it.hexToByteArray() }
 
     if (authKey == null) {
-        throw IllegalArgumentException("invalid service address: $uri - missing or invalid auth_key")
+        throw IllegalArgumentException("invalid service endpoint: $uri - missing or invalid auth_key")
     }
 
     // Missing port is reported as -1
     if (uri.port < 0) {
-        throw IllegalArgumentException("invalid service address: $uri - missing port")
+        throw IllegalArgumentException("invalid service endpoint: $uri - missing port")
     }
 
     // Port 0 is only meaningful to the service (bind to random port), not to the client.
     if (uri.port == 0) {
-        throw IllegalArgumentException("invalid service address: $uri - port must not be zero")
+        throw IllegalArgumentException("invalid service endpoint: $uri - port must not be zero")
     }
 
-    return ServiceAddress(SocketAddress.Tcp(InetSocketAddress(uri.host, uri.port)), authKey)
+    return ServiceEndpoint(SocketAddress.Tcp(InetSocketAddress(uri.host, uri.port)), authKey)
 }
 
 private const val UNIX_SCHEME = "unix://"
