@@ -35,9 +35,9 @@ class Client {
     Duration minReconnectDelay = const Duration(milliseconds: 50),
     Duration maxReconnectDelay = const Duration(seconds: 1),
   }) async {
-    final addr = await _readServiceAddress(configPath);
+    final endpoint = await _readServiceEndpoint(configPath);
     final connector = _Connector(
-      addr: addr,
+      endpoint: endpoint,
       minDelay: minReconnectDelay,
       maxDelay: maxReconnectDelay,
     );
@@ -269,18 +269,18 @@ class Client {
 
 _minDuration(Duration a, Duration b) => (a < b) ? a : b;
 
-final class _ServiceAddress {
+final class _ServiceEndpoint {
   final InternetAddress address;
   final int port;
   final List<int>? authKey;
 
-  _ServiceAddress(this.address, [this.port = 0, this.authKey]);
+  _ServiceEndpoint(this.address, [this.port = 0, this.authKey]);
 }
 
-Future<_ServiceAddress> _readServiceAddress(String dir) async {
+Future<_ServiceEndpoint> _readServiceEndpoint(String dir) async {
   final unixSocket = File('$dir/local_endpoint.sock');
   if (await unixSocket.exists()) {
-    return _ServiceAddress(
+    return _ServiceEndpoint(
       InternetAddress(unixSocket.path, type: InternetAddressType.unix),
     );
   }
@@ -290,7 +290,7 @@ Future<_ServiceAddress> _readServiceAddress(String dir) async {
 
   final raw = json.decode(content);
   if (raw is! String) {
-    throw FormatException('invalid service address: $raw');
+    throw FormatException('invalid service endpoint: $raw');
   }
 
   const unixScheme = 'unix://';
@@ -302,7 +302,7 @@ Future<_ServiceAddress> _readServiceAddress(String dir) async {
       path = '$dir/$path';
     }
 
-    return _ServiceAddress(
+    return _ServiceEndpoint(
       InternetAddress(path, type: InternetAddressType.unix),
     );
   }
@@ -310,16 +310,18 @@ Future<_ServiceAddress> _readServiceAddress(String dir) async {
   final uri = Uri.tryParse(raw);
 
   if (uri == null) {
-    throw FormatException('invalid service address: $raw');
+    throw FormatException('invalid service endpoint: $raw');
   }
 
   if (uri.scheme != 'tcp') {
-    throw FormatException('invalid service address: $raw - unsupported scheme');
+    throw FormatException(
+      'invalid service endpoint: $raw - unsupported scheme',
+    );
   }
 
   if (!uri.queryParameters.containsKey('auth_key')) {
     throw FormatException(
-      'invalid service address: $raw - missing auth_key query parameter',
+      'invalid service endpoint: $raw - missing auth_key query parameter',
     );
   }
 
@@ -328,23 +330,23 @@ Future<_ServiceAddress> _readServiceAddress(String dir) async {
   final port = uri.port;
   if (port == 0) {
     throw FormatException(
-      'invalid service address: $raw - missing or zero port',
+      'invalid service endpoint: $raw - missing or zero port',
     );
   }
 
   final addr = uri.host;
   final authKey = HEX.decode(uri.queryParameters['auth_key']!);
 
-  return _ServiceAddress(InternetAddress(addr), port, authKey);
+  return _ServiceEndpoint(InternetAddress(addr), port, authKey);
 }
 
 class _Connector {
-  final _ServiceAddress addr;
+  final _ServiceEndpoint endpoint;
   final Duration minDelay;
   final Duration maxDelay;
 
   const _Connector({
-    required this.addr,
+    required this.endpoint,
     this.minDelay = const Duration(milliseconds: 50),
     this.maxDelay = const Duration(seconds: 1),
   });
@@ -354,7 +356,7 @@ class _Connector {
 
     while (true) {
       try {
-        final socket = await Socket.connect(addr.address, addr.port);
+        final socket = await Socket.connect(endpoint.address, endpoint.port);
         final stream = socket.asBroadcastStream();
 
         await _authenticate(stream, socket);
@@ -368,7 +370,7 @@ class _Connector {
   }
 
   Future<void> _authenticate(Stream<Uint8List> stream, IOSink sink) async {
-    final authKey = addr.authKey;
+    final authKey = endpoint.authKey;
     if (authKey == null) {
       return;
     }
