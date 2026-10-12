@@ -15,8 +15,10 @@ from pathlib import Path
 import msgpack
 
 from ._generated.api import (
+    API_PROTOCOL_VERSION,
     ErrorCode,
     OuisyncError,
+    OuisyncError_Unsupported,
     Response,
     Response_None,
     dispatch_error,
@@ -53,16 +55,35 @@ class Client:
 
         client = cls(reader, writer)
 
-        # Unix sockets are authenticated via file permissions, TCP sockets need explicit handshake.
-        if isinstance(endpoint, _TcpEndpoint):
-            try:
+        try:
+            await client._negotiate_protocol_version()
+
+            # Unix sockets are authenticated via file permissions, TCP sockets need explicit
+            # handshake.
+            if isinstance(endpoint, _TcpEndpoint):
                 await client._auth(endpoint.auth_key)
-            except Exception:
-                writer.close()
-                raise
+        except Exception:
+            writer.close()
+            raise
 
         client._receive_task = asyncio.create_task(client._receive_loop())
         return client
+
+    # Negotiate the API protocol version with the service. See
+    # `service/src/transport/local/protocol_negotiation.rs` for the description of the protocol.
+    async def _negotiate_protocol_version(self) -> int:
+        client_version = API_PROTOCOL_VERSION
+        self._writer.write(struct.pack(">Q", client_version))
+        await self._writer.drain()
+
+        (server_version,) = struct.unpack(">Q", await self._recv_exact(8))
+
+        if server_version != client_version:
+            raise OuisyncError_Unsupported(
+                f"unsupported protocol version (client: {client_version}, server: {server_version})"
+            )
+
+        return server_version
 
     async def _auth(self, auth_key: bytes):
         client_challenge = secrets.token_bytes(AUTH_CHALLENGE_SIZE)
