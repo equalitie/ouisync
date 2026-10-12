@@ -72,7 +72,13 @@ internal class Client private constructor(private val socket: Socket) {
                 try {
                     val socket = Socket.connect(serviceEndpoint.address)
 
-                    serviceEndpoint.authKey?.let { authKey -> authenticate(socket, authKey) }
+                    try {
+                        negotiateProtocolVersion(socket)
+                        serviceEndpoint.authKey?.let { authKey -> authenticate(socket, authKey) }
+                    } catch (e: Exception) {
+                        socket.close()
+                        throw e
+                    }
 
                     return Client(socket)
                 } catch (e: IOException) {
@@ -412,6 +418,37 @@ private const val HEADER_SIZE = Int.SIZE_BYTES + Long.SIZE_BYTES
 
 private const val CHALLENGE_SIZE = 256
 private const val PROOF_SIZE = 32
+
+// Negotiate the API protocol version with the service. See
+// `service/src/transport/local/protocol_negotiation.rs` for the description of the protocol.
+private suspend fun negotiateProtocolVersion(socket: Socket): Long {
+    val clientVersion = API_PROTOCOL_VERSION.toLong()
+
+    val buffer = ByteBuffer.allocate(Long.SIZE_BYTES)
+    buffer.order(ByteOrder.BIG_ENDIAN)
+
+    buffer.putLong(clientVersion)
+    buffer.flip()
+    socket.writeAll(buffer)
+
+    buffer.clear()
+    socket.readExact(buffer)
+    buffer.flip()
+
+    if (buffer.remaining() < Long.SIZE_BYTES) {
+        throw EOFException()
+    }
+
+    val serverVersion = buffer.getLong()
+
+    if (serverVersion != clientVersion) {
+        throw OuisyncException.Unsupported(
+            "unsupported protocol version (client: $clientVersion, server: $serverVersion)",
+        )
+    }
+
+    return serverVersion
+}
 
 private suspend fun authenticate(socket: Socket, authKey: ByteArray) {
     val random = SecureRandom()

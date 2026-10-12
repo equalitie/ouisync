@@ -8,8 +8,13 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.equalitie.ouisync.service.Service
 import org.equalitie.ouisync.service.initLog
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.io.File
 import java.io.IOException
+import java.net.InetAddress
+import java.net.ServerSocket
+import kotlin.concurrent.thread
 import kotlin.io.path.createTempDirectory
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
@@ -18,6 +23,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.fail
+import kotlin.time.Duration.Companion.seconds
 
 class ClientTest {
     lateinit var tempDir: File
@@ -86,12 +92,51 @@ class ClientTest {
         val authKey = "00".repeat(32)
 
         for (endpoint in listOf("127.0.0.1", "127.0.0.1:0", "[::1]", "[::1]:0")) {
-            File(configDir, "local_endpoint.conf")
-                .writeText("\"tcp://$endpoint?auth_key=$authKey\"")
+            File(configDir, "local_endpoint.conf").writeText("\"tcp://$endpoint?auth_key=$authKey\"")
 
             assertFailsWith<IllegalArgumentException>("endpoint: $endpoint") {
                 Client.connect(configDir.path)
             }
+        }
+    }
+
+    @Test
+    fun connectUnsupportedProtocolVersion() = runTest {
+        val configDir = File(tempDir, "config").apply { mkdirs() }
+        val authKey = "00".repeat(32)
+
+        // Fake service which responds with an unsupported protocol version.
+        //
+        // NOTE: Bind to 127.0.0.1 explicitly because `InetAddress.getLoopbackAddress()` returns the
+        // IPv6 loopback on Android.
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { server ->
+            var clientVersion: Long? = null
+
+            val serverThread = thread {
+                try {
+                    server.accept().use { socket ->
+                        val input = DataInputStream(socket.getInputStream())
+                        val output = DataOutputStream(socket.getOutputStream())
+
+                        clientVersion = input.readLong()
+                        output.writeLong(API_PROTOCOL_VERSION.toLong() + 1)
+                        output.flush()
+                    }
+                } catch (_: IOException) {
+                    // Server closed before the client connected. The test fails on the assertion
+                    // below.
+                }
+            }
+
+            File(configDir, "local_endpoint.conf")
+                .writeText("\"tcp://127.0.0.1:${server.localPort}?auth_key=$authKey\"")
+
+            assertFailsWith<OuisyncException.Unsupported> {
+                Client.connect(configDir.path, timeout = 10.seconds)
+            }
+
+            serverThread.join()
+            assertEquals(API_PROTOCOL_VERSION.toLong(), clientVersion)
         }
     }
 
