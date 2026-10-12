@@ -56,6 +56,12 @@ enum Client {
      * The service endpoint file is malformed
      */
     service_endpoint_invalid,
+    /**
+     * The service doesn't support the API protocol version used by this client
+     *
+     * Likely cause: the client and the service are from different Ouisync releases
+     */
+    unsupported_protocol_version,
 };
 
 /**
@@ -83,6 +89,7 @@ public:
             case error::logic: return "Bug in the Ouisync client code";
             case error::service_endpoint_not_found: return "Ouisync service endpoint file not found";
             case error::service_endpoint_invalid: return "Ouisync service endpoint is invalid";
+            case error::unsupported_protocol_version: return "Unsupported API protocol version";
             default: return "Unknown error";
         }
     }
