@@ -3,6 +3,7 @@
 
 #include <boost/asio.hpp>
 #include <boost/asio/spawn.hpp>
+#include <boost/endian/conversion.hpp>
 #include <boost/filesystem/fstream.hpp>
 #include <ouisync.hpp>
 #include <ouisync/service.hpp>
@@ -115,6 +116,48 @@ BOOST_AUTO_TEST_CASE(connect_missing_config) {
             boost::system::system_error,
             [](const auto& e) { return e.code() == ouisync::error::service_endpoint_not_found; }
         );
+    }, check_exception);
+
+    ctx.run();
+}
+
+// Connecting to a service that uses a different API protocol version must fail.
+BOOST_AUTO_TEST_CASE(connect_unsupported_protocol_version) {
+    namespace endian = boost::endian;
+    using tcp = asio::ip::tcp;
+
+    auto tempdir = TempDir();
+    auto config_dir = mkdir(tempdir.path() / "config");
+
+    asio::io_context ctx;
+
+    // Fake service which responds with an unsupported protocol version.
+    tcp::acceptor acceptor(ctx, tcp::endpoint(asio::ip::address_v4::loopback(), 0));
+
+    fs::ofstream(config_dir / "local_endpoint.conf")
+        << "\"tcp://127.0.0.1:" << acceptor.local_endpoint().port()
+        << "?auth_key=" << random_hex(64) << "\"";
+
+    asio::spawn(ctx, [&] (asio::yield_context yield) {
+        auto socket = acceptor.async_accept(yield);
+
+        uint64_t client_version_be = 0;
+        asio::async_read(socket, asio::buffer(&client_version_be, sizeof(client_version_be)), yield);
+        BOOST_CHECK_EQUAL(
+            endian::big_to_native(client_version_be),
+            static_cast<uint64_t>(ouisync::API_PROTOCOL_VERSION)
+        );
+
+        uint64_t server_version_be = endian::native_to_big(
+            static_cast<uint64_t>(ouisync::API_PROTOCOL_VERSION + 1)
+        );
+        asio::async_write(socket, asio::buffer(&server_version_be, sizeof(server_version_be)), yield);
+    }, check_exception);
+
+    asio::spawn(ctx, [&] (asio::yield_context yield) {
+        boost::system::error_code ec;
+        ouisync::Session::connect(config_dir, yield[ec]);
+        BOOST_CHECK_EQUAL(ec, ouisync::error::unsupported_protocol_version);
     }, check_exception);
 
     ctx.run();
