@@ -50,14 +50,15 @@ use tokio::{
 };
 use transport::{
     AcceptedConnection, ClientError,
-    local::{AuthKey, LocalAddr, LocalServer},
+    local::{AuthKey, LocalEndpoint, LocalServer},
 };
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 const LOCAL_ENDPOINT_NAME: &str = "local_endpoint";
 // Don't use comments here so the file can be parsed as json.
-const LOCAL_ENDPOINT_KEY: ConfigKey<LocalAddr> = ConfigKey::new(LOCAL_ENDPOINT_NAME, "").private();
+const LOCAL_ENDPOINT_KEY: ConfigKey<LocalEndpoint> =
+    ConfigKey::new(LOCAL_ENDPOINT_NAME, "").private();
 
 pub struct Service {
     state: Arc<State>,
@@ -90,15 +91,15 @@ impl Service {
 
         // The TCP address might change (e.g, when the port was 0 or it was taken) so we need to
         // write it back to the config so the clients can get the correct one.
-        match local_server.addr() {
-            addr @ LocalAddr::Tcp { .. } => {
-                local_endpoint_entry.set(addr).await?;
+        match local_server.endpoint() {
+            endpoint @ LocalEndpoint::Tcp { .. } => {
+                local_endpoint_entry.set(endpoint).await?;
             }
-            LocalAddr::Unix(_) => (),
+            LocalEndpoint::Unix(_) => (),
         }
 
         tracing::debug!(
-            addr = %local_server.addr(),
+            addr = %local_server.endpoint().addr(),
             "local server listening"
         );
 
@@ -153,8 +154,8 @@ impl Service {
         .await;
     }
 
-    pub fn local_addr(&self) -> &LocalAddr {
-        self.local_server.addr()
+    pub fn local_endpoint(&self) -> &LocalEndpoint {
+        self.local_server.endpoint()
     }
 
     pub fn store_dirs(&self) -> Vec<PathBuf> {
@@ -216,11 +217,11 @@ impl Service {
 }
 
 /// Returns the address for establishing local connection to the service.
-pub async fn service_addr(config_dir: &Path) -> Result<LocalAddr, ClientError> {
+pub async fn service_addr(config_dir: &Path) -> Result<LocalEndpoint, ClientError> {
     let unix_path = config_dir.join(unix_socket_name());
 
     if fs::try_exists(&unix_path).await? {
-        Ok(LocalAddr::Unix(unix_path))
+        Ok(LocalEndpoint::Unix(unix_path))
     } else {
         ConfigStore::new(config_dir)
             .entry(LOCAL_ENDPOINT_KEY)
@@ -232,19 +233,21 @@ pub async fn service_addr(config_dir: &Path) -> Result<LocalAddr, ClientError> {
 }
 
 /// Resolves relative unix socket path against the config dir.
-fn absolutize(addr: LocalAddr, config_dir: &Path) -> LocalAddr {
+fn absolutize(addr: LocalEndpoint, config_dir: &Path) -> LocalEndpoint {
     match addr {
-        LocalAddr::Unix(path) if path.is_relative() => LocalAddr::Unix(config_dir.join(path)),
-        LocalAddr::Unix(_) | LocalAddr::Tcp { .. } => addr,
+        LocalEndpoint::Unix(path) if path.is_relative() => {
+            LocalEndpoint::Unix(config_dir.join(path))
+        }
+        LocalEndpoint::Unix(_) | LocalEndpoint::Tcp { .. } => addr,
     }
 }
 
-fn default_service_addr() -> LocalAddr {
+fn default_service_addr() -> LocalEndpoint {
     // TODO: use unix sockets on more platforms
     if cfg!(any(target_os = "linux", target_os = "android")) {
-        LocalAddr::Unix(unix_socket_name())
+        LocalEndpoint::Unix(unix_socket_name())
     } else {
-        LocalAddr::Tcp {
+        LocalEndpoint::Tcp {
             addr: (Ipv4Addr::LOCALHOST, 0).into(),
             auth_key: AuthKey::random(),
         }
@@ -317,10 +320,13 @@ mod tests {
             .unwrap();
 
             let mut service = Service::init(config_dir.clone()).await.unwrap();
-            assert_eq!(service.local_addr(), &LocalAddr::Unix(expected.clone()));
+            assert_eq!(
+                service.local_endpoint(),
+                &LocalEndpoint::Unix(expected.clone())
+            );
 
             let addr = service_addr(&config_dir).await.unwrap();
-            assert_eq!(addr, LocalAddr::Unix(expected));
+            assert_eq!(addr, LocalEndpoint::Unix(expected));
 
             transport::local::LocalClient::connect(&addr).await.unwrap();
 

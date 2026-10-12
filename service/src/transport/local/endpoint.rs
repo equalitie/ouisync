@@ -8,9 +8,24 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 
 use super::auth::AuthKey;
 
-/// Address of a service running on the same machine as the client.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LocalAddr {
+    Tcp(SocketAddr),
+    Unix(PathBuf),
+}
+
+impl fmt::Display for LocalAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Tcp(addr) => write!(f, "tcp://{addr}"),
+            Self::Unix(path) => write!(f, "unix://{}", path.display()),
+        }
+    }
+}
+
+/// Address of a service running on the same machine as the client.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LocalEndpoint {
     /// TCP socket, usually on loopback (but not required to be). Authentication is done with
     /// explicit handshake using the provided key.
     Tcp { addr: SocketAddr, auth_key: AuthKey },
@@ -18,7 +33,16 @@ pub enum LocalAddr {
     Unix(PathBuf),
 }
 
-impl fmt::Display for LocalAddr {
+impl LocalEndpoint {
+    pub fn addr(&self) -> LocalAddr {
+        match self {
+            Self::Tcp { addr, .. } => LocalAddr::Tcp(*addr),
+            Self::Unix(path) => LocalAddr::Unix(path.clone()),
+        }
+    }
+}
+
+impl fmt::Display for LocalEndpoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Tcp { addr, auth_key } => write!(f, "tcp://{addr}?auth_key={auth_key:x}"),
@@ -27,7 +51,7 @@ impl fmt::Display for LocalAddr {
     }
 }
 
-impl Serialize for LocalAddr {
+impl Serialize for LocalEndpoint {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -62,7 +86,7 @@ impl Serialize for LocalAddr {
 //     auth_key: "..."
 // }
 // ```
-impl<'de> Deserialize<'de> for LocalAddr {
+impl<'de> Deserialize<'de> for LocalEndpoint {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -70,7 +94,7 @@ impl<'de> Deserialize<'de> for LocalAddr {
         struct Visitor;
 
         impl<'de> de::Visitor<'de> for Visitor {
-            type Value = LocalAddr;
+            type Value = LocalEndpoint;
 
             fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 write!(f, "string or map")
@@ -179,35 +203,35 @@ mod tests {
 
         let tcp_old_without_addr = (
             format!("{{\"port\":12345,\"auth_key\":\"{auth_key_hex}\"}}"),
-            LocalAddr::Tcp {
+            LocalEndpoint::Tcp {
                 addr: (Ipv4Addr::LOCALHOST, 12345).into(),
                 auth_key,
             },
         );
         let tcp_old_with_addr = (
             format!("{{\"addr\":\"192.168.1.42\",\"port\":12345,\"auth_key\":\"{auth_key_hex}\"}}"),
-            LocalAddr::Tcp {
+            LocalEndpoint::Tcp {
                 addr: (Ipv4Addr::new(192, 168, 1, 42), 12345).into(),
                 auth_key,
             },
         );
         let tcp_new = (
             format!("\"tcp://127.0.0.1:12345?auth_key={auth_key_hex}\""),
-            LocalAddr::Tcp {
+            LocalEndpoint::Tcp {
                 addr: (Ipv4Addr::LOCALHOST, 12345).into(),
                 auth_key,
             },
         );
         let tcp_new_without_port = (
             format!("\"tcp://127.0.0.1?auth_key={auth_key_hex}\""),
-            LocalAddr::Tcp {
+            LocalEndpoint::Tcp {
                 addr: (Ipv4Addr::LOCALHOST, 0).into(),
                 auth_key,
             },
         );
         let unix = (
             "\"unix:///var/run/ouisync.sock\"".to_owned(),
-            LocalAddr::Unix(PathBuf::from("/var/run/ouisync.sock")),
+            LocalEndpoint::Unix(PathBuf::from("/var/run/ouisync.sock")),
         );
 
         for (serialized, expected) in [
@@ -217,7 +241,7 @@ mod tests {
             &tcp_new_without_port,
             &unix,
         ] {
-            let actual: LocalAddr = match serde_json::from_str(serialized) {
+            let actual: LocalEndpoint = match serde_json::from_str(serialized) {
                 Ok(value) => value,
                 Err(error) => {
                     panic!("error deserializing {serialized:?}: {error:?}");

@@ -325,7 +325,7 @@ fn wait_for_service_startup(config_dir: &Path) {
         .unwrap();
 
     loop {
-        match runtime.block_on(ouisync_service::service_addr(config_dir)) {
+        match runtime.block_on(ouisync_service::service_endpoint(config_dir)) {
             Ok(_) => break,
             Err(_) => {
                 thread::sleep(Duration::from_millis(50));
