@@ -425,10 +425,10 @@ MessageId Client::next_message_id() {
 }
 
 /**
- * Address of the local Ouisync service. It's either a unix domain socket (authenticated via file
+ * Endpoint of the local Ouisync service. It's either a unix domain socket (authenticated via file
  * permissions) or a TCP endpoint (authenticated by explicit handshake using `auth_key`).
  */
-struct ServiceAddress {
+struct ServiceEndpoint {
     asio::generic::stream_protocol::endpoint endpoint;
     std::optional<std::vector<uint8_t>> auth_key;
 };
@@ -436,8 +436,8 @@ struct ServiceAddress {
 [[noreturn]] static
 void throw_invalid_address(std::string_view raw, std::string_view reason) {
     throw system::system_error(
-        make_error_code(error::invalid_service_address),
-        "invalid service address: " + std::string(raw) + " - " + std::string(reason)
+        make_error_code(error::service_endpoint_invalid),
+        "invalid service endpoint: " + std::string(raw) + " - " + std::string(reason)
     );
 }
 
@@ -484,9 +484,9 @@ asio::ip::tcp::endpoint parse_tcp_endpoint(std::string_view raw) {
     return asio::ip::tcp::endpoint(addr, port);
 }
 
-// Parses TCP service address in the form `tcp://ADDR:PORT?auth_key=HEX`.
+// Parses TCP service endpoint in the form `tcp://ADDR:PORT?auth_key=HEX`.
 static
-ServiceAddress parse_tcp_service_address(std::string_view raw) {
+ServiceEndpoint parse_tcp_service_endpoint(std::string_view raw) {
     constexpr std::string_view scheme = "tcp://";
     constexpr std::string_view auth_key_param = "?auth_key=";
 
@@ -514,15 +514,15 @@ ServiceAddress parse_tcp_service_address(std::string_view raw) {
         throw_invalid_address(raw, "invalid auth_key");
     }
 
-    return ServiceAddress { endpoint, std::move(auth_key) };
+    return ServiceEndpoint { endpoint, std::move(auth_key) };
 }
 
 static
-ServiceAddress read_service_address(const boost::filesystem::path& config_dir_path) {
+ServiceEndpoint read_service_endpoint(const boost::filesystem::path& config_dir_path) {
 #if defined(BOOST_ASIO_HAS_LOCAL_SOCKETS)
     boost::filesystem::path unix_socket_path = config_dir_path / "local_endpoint.sock";
     if (boost::filesystem::exists(unix_socket_path)) {
-        return ServiceAddress {
+        return ServiceEndpoint {
             asio::local::stream_protocol::endpoint(unix_socket_path.string()),
             std::nullopt,
         };
@@ -534,7 +534,7 @@ ServiceAddress read_service_address(const boost::filesystem::path& config_dir_pa
     conf_file.open(conf_path);
 
     if (!conf_file.is_open()) {
-        throw_error(error::service_config_not_found, "Could not open file " + conf_path.string());
+        throw_error(error::service_endpoint_not_found, "Could not open file " + conf_path.string());
     }
 
     std::stringstream buffer;
@@ -564,7 +564,7 @@ ServiceAddress read_service_address(const boost::filesystem::path& config_dir_pa
             path = config_dir_path / path;
         }
 
-        return ServiceAddress {
+        return ServiceEndpoint {
             asio::local::stream_protocol::endpoint(path.string()),
             std::nullopt,
         };
@@ -573,7 +573,7 @@ ServiceAddress read_service_address(const boost::filesystem::path& config_dir_pa
 #endif
     }
 
-    return parse_tcp_service_address(*raw);
+    return parse_tcp_service_endpoint(*raw);
 }
 
 static
@@ -619,7 +619,7 @@ void authenticate(Socket& socket, const std::vector<uint8_t>& auth_key, asio::yi
     asio::async_write(socket, asio::buffer(client_proof), yield);
 }
 
-static std::shared_ptr<Client> connect_coro(ServiceAddress addr, asio::yield_context yield) {
+static std::shared_ptr<Client> connect_coro(ServiceEndpoint addr, asio::yield_context yield) {
     Socket socket(yield.get_executor());
 
     socket.async_connect(addr.endpoint, yield);
@@ -650,7 +650,7 @@ void Client::connect_impl(
             std::shared_ptr<Client> client;
 
             try {
-                auto addr = read_service_address(config_dir_path);
+                auto addr = read_service_endpoint(config_dir_path);
                 client = connect_coro(std::move(addr), yield[ec]);
             } catch (const system::system_error& e) {
                 // The completion signature only carries the error code, so log the details.
