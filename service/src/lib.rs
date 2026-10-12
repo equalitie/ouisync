@@ -76,7 +76,7 @@ impl Service {
         let local_endpoint_entry = config.entry(LOCAL_ENDPOINT_KEY);
         let local_endpoint = match local_endpoint_entry.get().await {
             Ok(value) => value,
-            Err(ConfigError::NotFound) => default_service_addr(),
+            Err(ConfigError::NotFound) => default_service_endpoint(),
             Err(error) => return Err(error.into()),
         };
 
@@ -216,8 +216,8 @@ impl Service {
     }
 }
 
-/// Returns the address for establishing local connection to the service.
-pub async fn service_addr(config_dir: &Path) -> Result<LocalEndpoint, ClientError> {
+/// Returns the endpoint for establishing local connection to the service.
+pub async fn service_endpoint(config_dir: &Path) -> Result<LocalEndpoint, ClientError> {
     let unix_path = config_dir.join(unix_socket_name());
 
     if fs::try_exists(&unix_path).await? {
@@ -242,7 +242,7 @@ fn absolutize(addr: LocalEndpoint, config_dir: &Path) -> LocalEndpoint {
     }
 }
 
-fn default_service_addr() -> LocalEndpoint {
+fn default_service_endpoint() -> LocalEndpoint {
     // TODO: use unix sockets on more platforms
     if cfg!(any(target_os = "linux", target_os = "android")) {
         LocalEndpoint::Unix(unix_socket_name())
@@ -272,9 +272,9 @@ mod tests {
     use crate::{
         test_utils::{ServiceRunner, init_log},
         tls,
-        transport::remote::RemoteClient,
     };
 
+    use super::transport::remote::RemoteClient;
     use super::*;
 
     #[tokio::test]
@@ -296,6 +296,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn custom_unix_socket_path() {
+        use crate::{protocol::Request, transport::local::LocalClient};
+
         let temp_dir = TempDir::new().unwrap();
         let config_dir = temp_dir.path().join("config");
         let socket_dir = temp_dir.path().join("sockets");
@@ -319,18 +321,23 @@ mod tests {
             .await
             .unwrap();
 
-            let mut service = Service::init(config_dir.clone()).await.unwrap();
+            let service = Service::init(config_dir.clone()).await.unwrap();
             assert_eq!(
                 service.local_endpoint(),
                 &LocalEndpoint::Unix(expected.clone())
             );
+            let runner = ServiceRunner::start(service);
 
-            let addr = service_addr(&config_dir).await.unwrap();
+            let addr = service_endpoint(&config_dir).await.unwrap();
             assert_eq!(addr, LocalEndpoint::Unix(expected));
 
-            transport::local::LocalClient::connect(&addr).await.unwrap();
+            let mut client = LocalClient::connect(&addr).await.unwrap();
+            let _: u64 = client
+                .invoke(Request::SessionGetCurrentProtocolVersion)
+                .await
+                .unwrap();
 
-            service.close().await;
+            runner.stop().await.close().await;
         }
     }
 

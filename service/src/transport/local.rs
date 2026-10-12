@@ -2,6 +2,7 @@ mod auth;
 mod client;
 mod endpoint;
 mod net;
+mod protocol_negotiation;
 
 pub use auth::AuthKey;
 pub use client::LocalClient;
@@ -72,12 +73,17 @@ pub(crate) struct AcceptedLocalConnection {
 impl AcceptedLocalConnection {
     /// Finalize accepting the connection.
     pub async fn finalize(mut self) -> Option<(LocalServerReader, LocalServerWriter)> {
+        protocol_negotiation::server(&mut self.stream)
+            .await
+            .inspect_err(|error| tracing::debug!(?error, "failed to negotiate protocol"))
+            .ok()?;
+
         match (&mut self.stream, &self.endpoint) {
             (LocalStream::Tcp(stream), LocalEndpoint::Tcp { auth_key, .. }) => {
                 auth::server(stream, auth_key)
                     .await
                     .inspect_err(|error| {
-                        tracing::debug!(?error, "failed to authenticated client connection")
+                        tracing::debug!(?error, "failed to authenticate client connection")
                     })
                     .ok()?;
             }
@@ -100,6 +106,10 @@ pub async fn connect(
     endpoint: &LocalEndpoint,
 ) -> Result<(LocalClientReader, LocalClientWriter), ClientError> {
     let mut stream = LocalStream::connect(&endpoint.addr())
+        .await
+        .map_err(ClientError::Connect)?;
+
+    let _protocol_version = protocol_negotiation::client(&mut stream)
         .await
         .map_err(ClientError::Connect)?;
 
