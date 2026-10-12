@@ -47,15 +47,15 @@ enum Client {
     already_subscribed,
     not_subscribed,
     /**
-     * The service config file (local_endpoint.conf) doesn't exist or can't be read
+     * The service endpoint file (local_endpoint.conf) doesn't exist or can't be read
      *
      * Likely cause: the service is not running
      */
-    service_config_not_found,
+    service_endpoint_not_found,
     /**
-     * The service address in the service config file is malformed
+     * The service endpoint file is malformed
      */
-    invalid_service_address,
+    service_endpoint_invalid,
 };
 
 /**
@@ -81,8 +81,8 @@ public:
             case error::serialize: return "Failed to serialize request";
             case error::deserialize: return "Failed to parse response";
             case error::logic: return "Bug in the Ouisync client code";
-            case error::service_config_not_found: return "Ouisync service config not found";
-            case error::invalid_service_address: return "Invalid Ouisync service address";
+            case error::service_endpoint_not_found: return "Ouisync service endpoint file not found";
+            case error::service_endpoint_invalid: return "Ouisync service endpoint is invalid";
             default: return "Unknown error";
         }
     }
@@ -192,4 +192,3 @@ inline std::exception_ptr to_exception_ptr(
 }
 
 } // ouisync namespace
-

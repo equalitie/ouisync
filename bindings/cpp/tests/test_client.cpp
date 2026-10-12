@@ -93,7 +93,7 @@ BOOST_AUTO_TEST_CASE(connect_tcp_invalid_port) {
             asio::spawn(ctx, [&] (asio::yield_context yield) {
                 boost::system::error_code ec;
                 ouisync::Session::connect(config_dir, yield[ec]);
-                BOOST_CHECK_EQUAL(ec, ouisync::error::invalid_service_address);
+                BOOST_CHECK_EQUAL(ec, ouisync::error::service_endpoint_invalid);
             }, check_exception);
 
             ctx.run();
@@ -113,7 +113,7 @@ BOOST_AUTO_TEST_CASE(connect_missing_config) {
         BOOST_CHECK_EXCEPTION(
             ouisync::Session::connect(config_dir, yield),
             boost::system::system_error,
-            [](const auto& e) { return e.code() == ouisync::error::service_config_not_found; }
+            [](const auto& e) { return e.code() == ouisync::error::service_endpoint_not_found; }
         );
     }, check_exception);
 
