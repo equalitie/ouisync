@@ -576,6 +576,30 @@ ServiceEndpoint read_service_endpoint(const boost::filesystem::path& config_dir_
     return parse_tcp_service_endpoint(*raw);
 }
 
+// Negotiate the API protocol version with the service. See
+// `service/src/transport/local/protocol_negotiation.rs` for the description of the protocol.
+static
+uint64_t negotiate_protocol_version(Socket& socket, asio::yield_context yield) {
+    const auto client_version = static_cast<uint64_t>(API_PROTOCOL_VERSION);
+
+    uint64_t client_version_be = endian::native_to_big(client_version);
+    asio::async_write(socket, asio::buffer(&client_version_be, sizeof(client_version_be)), yield);
+
+    uint64_t server_version_be = 0;
+    asio::async_read(socket, asio::buffer(&server_version_be, sizeof(server_version_be)), yield);
+    uint64_t server_version = endian::big_to_native(server_version_be);
+
+    if (server_version != client_version) {
+        throw_error(
+            error::unsupported_protocol_version,
+            "client: " + std::to_string(client_version)
+                + ", server: " + std::to_string(server_version)
+        );
+    }
+
+    return server_version;
+}
+
 static
 void authenticate(Socket& socket, const std::vector<uint8_t>& auth_key, asio::yield_context yield) {
     using Hmac = boost::hash2::hmac_sha2_256;
@@ -624,6 +648,8 @@ static std::shared_ptr<Client> connect_coro(ServiceEndpoint addr, asio::yield_co
 
     socket.async_connect(addr.endpoint, yield);
 
+    negotiate_protocol_version(socket, yield);
+
     if (addr.auth_key) {
         authenticate(socket, *addr.auth_key, yield);
     }
@@ -651,7 +677,7 @@ void Client::connect_impl(
 
             try {
                 auto addr = read_service_endpoint(config_dir_path);
-                client = connect_coro(std::move(addr), yield[ec]);
+                client = connect_coro(std::move(addr), yield);
             } catch (const system::system_error& e) {
                 // The completion signature only carries the error code, so log the details.
                 std::cerr << "Failed to connect to Ouisync service: " << e.what() << std::endl;
