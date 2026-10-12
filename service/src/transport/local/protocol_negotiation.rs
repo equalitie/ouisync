@@ -43,7 +43,9 @@ pub(super) async fn client(stream: &mut LocalStream) -> Result<u64, io::Error> {
     } else {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "unsupported protocol version (client: {client_version}, server: {server_version})",
+            format!(
+                "unsupported protocol version (client: {client_version}, server: {server_version})"
+            ),
         ))
     }
 }
