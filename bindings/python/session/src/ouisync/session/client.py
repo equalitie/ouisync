@@ -44,19 +44,19 @@ class Client:
 
     @classmethod
     async def connect(cls, config_dir) -> "Client":
-        addr = _read_service_address(Path(config_dir))
+        endpoint = _read_service_endpoint(Path(config_dir))
 
-        if isinstance(addr, _UnixAddress):
-            reader, writer = await asyncio.open_unix_connection(addr.path)
+        if isinstance(endpoint, _UnixEndpoint):
+            reader, writer = await asyncio.open_unix_connection(endpoint.path)
         else:
-            reader, writer = await asyncio.open_connection(addr.host, addr.port)
+            reader, writer = await asyncio.open_connection(endpoint.host, endpoint.port)
 
         client = cls(reader, writer)
 
         # Unix sockets are authenticated via file permissions, TCP sockets need explicit handshake.
-        if isinstance(addr, _TcpAddress):
+        if isinstance(endpoint, _TcpEndpoint):
             try:
-                await client._auth(addr.auth_key)
+                await client._auth(endpoint.auth_key)
             except Exception:
                 writer.close()
                 raise
@@ -202,55 +202,55 @@ class Client:
 
 
 @dataclasses.dataclass(frozen=True)
-class _UnixAddress:
+class _UnixEndpoint:
     path: Path
 
 
 @dataclasses.dataclass(frozen=True)
-class _TcpAddress:
+class _TcpEndpoint:
     host: str
     port: int
     auth_key: bytes
 
 
-def _read_service_address(config_dir: Path) -> _UnixAddress | _TcpAddress:
+def _read_service_endpoint(config_dir: Path) -> _UnixEndpoint | _TcpEndpoint:
     unix_socket = config_dir / "local_endpoint.sock"
     if unix_socket.exists():
-        return _UnixAddress(unix_socket)
+        return _UnixEndpoint(unix_socket)
 
     conf = config_dir / "local_endpoint.conf"
     raw = json.loads(conf.read_text())
     if not isinstance(raw, str):
-        raise ValueError(f"invalid service address: {raw!r}")
+        raise ValueError(f"invalid service endpoint: {raw!r}")
 
     if raw.startswith("unix://"):
         # Relative path is resolved against the config dir (joining an absolute path replaces it).
-        return _UnixAddress(config_dir / raw.removeprefix("unix://"))
+        return _UnixEndpoint(config_dir / raw.removeprefix("unix://"))
 
     url = urllib.parse.urlsplit(raw)
     if url.scheme != "tcp":
-        raise ValueError(f"invalid service address: {raw} - unsupported scheme")
+        raise ValueError(f"invalid service endpoint: {raw} - unsupported scheme")
 
     if url.hostname is None:
-        raise ValueError(f"invalid service address: {raw} - missing host")
+        raise ValueError(f"invalid service endpoint: {raw} - missing host")
 
     raw_auth_key = urllib.parse.parse_qs(url.query).get("auth_key")
     if not raw_auth_key:
-        raise ValueError(f"invalid service address: {raw} - missing auth_key query parameter")
+        raise ValueError(f"invalid service endpoint: {raw} - missing auth_key query parameter")
 
     try:
         auth_key = bytes.fromhex(raw_auth_key[0])
     except ValueError as error:
-        raise ValueError(f"invalid service address: {raw} - invalid auth_key") from error
+        raise ValueError(f"invalid service endpoint: {raw} - invalid auth_key") from error
 
     if url.port is None:
-        raise ValueError(f"invalid service address: {raw} - missing port")
+        raise ValueError(f"invalid service endpoint: {raw} - missing port")
 
     # Port 0 is only meaningful to the service (bind to random port), not to the client.
     if url.port == 0:
-        raise ValueError(f"invalid service address: {raw} - port must not be zero")
+        raise ValueError(f"invalid service endpoint: {raw} - port must not be zero")
 
-    return _TcpAddress(url.hostname, url.port, auth_key)
+    return _TcpEndpoint(url.hostname, url.port, auth_key)
 
 
 def _decode_response_result(raw):
