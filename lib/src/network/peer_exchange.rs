@@ -427,12 +427,8 @@ mod tests {
     use crate::sync::DropAwaitable;
 
     use super::*;
-    use std::{
-        hash::Hash,
-        iter,
-        net::Ipv4Addr,
-        sync::atomic::{AtomicU8, Ordering},
-    };
+    use portable_atomic::{AtomicU8, Ordering};
+    use std::{hash::Hash, iter, net::Ipv4Addr};
 
     #[tokio::test]
     async fn sanity_check() {

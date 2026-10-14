@@ -7,13 +7,11 @@ use super::{
     stats::{ByteCounters, StatsTracker},
 };
 use crate::sync::{AwaitDrop, DropAwaitable, WatchSenderExt};
+use portable_atomic::{AtomicU64, Ordering};
 use std::{
     collections::{HashMap, hash_map::Entry},
     fmt,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::Arc,
     time::SystemTime,
 };
 use tokio::sync::watch;

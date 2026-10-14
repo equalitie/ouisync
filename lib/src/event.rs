@@ -4,7 +4,7 @@
 use crate::{crypto::sign::PublicKey, protocol::BlockId};
 use core::fmt;
 use futures_util::{Stream, stream};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use portable_atomic::{AtomicUsize, Ordering};
 use tokio::sync::broadcast;
 
 #[derive(Copy, Clone, Debug)]

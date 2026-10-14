@@ -7,15 +7,12 @@ use dokan::{
     MountOptions, OperationInfo, OperationResult, VolumeInfo, init, shutdown, unmount,
 };
 use ouisync_lib::Repository;
+use portable_atomic::{AtomicU64, Ordering};
 use std::io;
 use std::{
     collections::{HashMap, hash_map},
     path::{Component, Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-        mpsc,
-    },
+    sync::{Arc, mpsc},
     thread,
     time::UNIX_EPOCH,
 };

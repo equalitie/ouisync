@@ -777,9 +777,9 @@ mod trash {
 
 mod utils {
     use futures_util::{Stream, StreamExt};
+    use portable_atomic::{AtomicU64, Ordering};
     use std::{
         pin::pin,
-        sync::atomic::{AtomicU64, Ordering},
     };
     use tokio::select;
 

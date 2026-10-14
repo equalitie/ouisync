@@ -54,6 +54,7 @@ num_enum = { workspace = true }
 ouisync-macros = { path = "../macros" }
 parse-size = { version = "1.0.0", features = ["std"] }
 pin-project-lite = { workspace = true }
+portable-atomic = { workspace = true }
 rand = { workspace = true }
 ref-cast = "1.0.14"
 rupnp = { version = "2.0.0", default-features = false, features = [] }

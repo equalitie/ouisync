@@ -35,6 +35,7 @@ ouisync-tracing-fmt         = { path = "../tracing_fmt" }
 ouisync-vfs                 = { path = "../vfs", optional = true }
 pem                         = { workspace = true }
 pin-project-lite            = { workspace = true }
+portable-atomic             = { workspace = true }
 rand                        = { workspace = true }
 rmp-serde                   = { workspace = true }
 serde                       = { workspace = true }

@@ -1,11 +1,9 @@
 //! Simple blocking timer
 
+use portable_atomic::{AtomicU64, Ordering};
 use std::{
     collections::{BTreeMap, BTreeSet, btree_map},
-    sync::{
-        Condvar, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Condvar, Mutex},
     time::{Duration, Instant},
 };
 

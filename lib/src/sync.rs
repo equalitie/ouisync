@@ -108,13 +108,11 @@ impl Future for AwaitDrop {
 pub(crate) mod broadcast_hash_set {
     use super::uninitialized_watch;
     pub use super::uninitialized_watch::RecvError;
+    use portable_atomic::{AtomicUsize, Ordering};
     use std::{
         collections::{HashMap, HashSet},
         hash::Hash,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
+        sync::{Arc, Mutex},
     };
 
     #[derive(Clone)]

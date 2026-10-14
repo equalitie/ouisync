@@ -13,15 +13,13 @@ use std::{
     io::{self, PipeWriter, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
     thread::{self, JoinHandle},
     time::Duration,
 };
 
 use anyhow::{Result, bail, format_err};
+use portable_atomic::{AtomicBool, Ordering};
 use rand::{Rng, rngs::OsRng};
 use serde_json::{Map, json};
 use tempfile::TempDir;

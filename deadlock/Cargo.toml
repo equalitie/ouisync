@@ -10,3 +10,4 @@ version.workspace = true
 [dependencies]
 tokio   = { workspace = true, features = ["sync"] }
 tracing = { workspace = true }
+portable-atomic = { workspace = true }

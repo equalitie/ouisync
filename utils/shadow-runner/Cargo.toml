@@ -8,10 +8,11 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-anyhow      = { workspace = true }
-rand        = { workspace = true }
-serde_json  = { workspace = true }
-tempfile    = { workspace = true }
+anyhow          = { workspace = true }
+portable-atomic = { workspace = true }
+rand            = { workspace = true }
+serde_json      = { workspace = true }
+tempfile        = { workspace = true }
 
 [lints]
 workspace = true
