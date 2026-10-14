@@ -2,13 +2,11 @@ use crate::{KEEP_ALIVE_INTERVAL, SocketOptions};
 use bytes::BytesMut;
 use pin_project_lite::pin_project;
 use quinn::{
-    UdpPoller,
-    crypto::rustls::QuicClientConfig,
-    rustls::{
+    UdpSender, crypto::rustls::QuicClientConfig, rustls::{
         self, DigitallySignedStruct, SignatureScheme,
         client::danger::{HandshakeSignatureValid, ServerCertVerified},
         pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName, UnixTime},
-    },
+    }, udp::Transmit,
 };
 use std::{
     fmt,
@@ -17,7 +15,8 @@ use std::{
     net::SocketAddr,
     pin::Pin,
     sync::Arc,
-    task::{Context, Poll},
+    task::{self, Context, Poll},
+    time::{Duration, Instant},
 };
 use tokio::sync::{
     Mutex as AsyncMutex,
@@ -155,13 +154,13 @@ pub fn configure(
     options: SocketOptions,
 ) -> Result<(Connector, Acceptor, SideChannelMaker), Error> {
     let server_config = make_server_config()?;
-    let custom_socket = Arc::new(CustomUdpSocket::bind(bind_addr, options)?);
-    let side_channel_maker = custom_socket.clone().side_channel_maker();
+    let custom_socket = CustomUdpSocket::bind(bind_addr, options)?;
+    let side_channel_maker = Arc::new(custom_socket.clone()).side_channel_maker();
 
-    let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
+    let endpoint = quinn::Endpoint::new_with_abstract_socket(
         quinn::EndpointConfig::default(),
         Some(server_config),
-        custom_socket,
+        Box::new(custom_socket),
         Arc::new(quinn::TokioRuntime),
     )?;
 
@@ -327,10 +326,10 @@ struct Packet {
     from: SocketAddr,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CustomUdpSocket {
-    io: tokio::net::UdpSocket,
-    state: quinn::udp::UdpSocketState,
+    io: Arc<tokio::net::UdpSocket>,
+    state: Arc<quinn::udp::UdpSocketState>,
     side_channel_tx: broadcast::Sender<Packet>,
 }
 
@@ -342,8 +341,8 @@ impl CustomUdpSocket {
         let state = quinn::udp::UdpSocketState::new((&socket).into())?;
 
         Ok(Self {
-            io: tokio::net::UdpSocket::from_std(socket)?,
-            state,
+            io: Arc::new(tokio::net::UdpSocket::from_std(socket)?),
+            state: Arc::new(state),
             side_channel_tx: broadcast::channel(MAX_SIDE_CHANNEL_PENDING_PACKETS).0,
         })
     }
@@ -354,29 +353,26 @@ impl CustomUdpSocket {
 }
 
 impl quinn::AsyncUdpSocket for CustomUdpSocket {
-    fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn UdpPoller>> {
-        Box::pin(UdpPollHelper::new(move || {
-            let socket = self.clone();
-            async move { socket.io.writable().await }
-        }))
-    }
-
-    fn try_send(&self, transmit: &quinn::udp::Transmit) -> io::Result<()> {
-        self.io.try_io(Interest::WRITABLE, || {
-            self.state.send((&self.io).into(), transmit)
-        })
+    fn create_sender(&self) -> Pin<Box<dyn UdpSender>> {
+        Box::pin(UdpSenderHelper::new(
+            self.clone(),
+            |socket: &CustomUdpSocket| {
+                let socket = socket.clone();
+                async move { socket.io.writable().await }
+            },
+        ))
     }
 
     fn poll_recv(
-        &self,
+        &mut self,
         cx: &mut Context,
         bufs: &mut [std::io::IoSliceMut<'_>],
         metas: &mut [quinn::udp::RecvMeta],
     ) -> Poll<io::Result<usize>> {
         loop {
             ready!(self.io.poll_recv_ready(cx))?;
-            if let Ok(res) = self.io.try_io(Interest::READABLE, || {
-                let res = self.state.recv((&self.io).into(), bufs, metas);
+            match self.io.try_io(Interest::READABLE, || {
+                let res = self.state.recv((&*self.io).into(), bufs, metas);
 
                 if let Ok(msg_count) = res {
                     send_to_side_channels(&self.side_channel_tx, bufs, metas, msg_count);
@@ -384,7 +380,11 @@ impl quinn::AsyncUdpSocket for CustomUdpSocket {
 
                 res
             }) {
-                return Poll::Ready(Ok(res));
+                Ok(res) => return Poll::Ready(Ok(res)),
+                // `try_io` clears readiness only for `WouldBlock`. Looping on any other
+                // error would spin because readiness stays asserted and the receive fails again.
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                Err(e) => return Poll::Ready(Err(e)),
             }
         }
     }
@@ -395,10 +395,6 @@ impl quinn::AsyncUdpSocket for CustomUdpSocket {
 
     fn may_fragment(&self) -> bool {
         self.state.may_fragment()
-    }
-
-    fn max_transmit_segments(&self) -> usize {
-        self.state.max_gso_segments()
     }
 
     fn max_receive_segments(&self) -> usize {
@@ -432,52 +428,146 @@ fn send_to_side_channels(
     }
 }
 
-// This is copied verbatim from [quinn]
-// (https://github.com/quinn-rs/quinn/blob/main/quinn/src/runtime.rs) as it's unfortunatelly not
-// exposed from there.
+// This is copied from
+// [quinn](https://github.com/quinn-rs/quinn/blob/main/quinn/src/runtime/mod.rs)
+// as it's not exposed from there.
 pin_project! {
-    struct UdpPollHelper<MakeFut, Fut> {
-        make_fut: MakeFut,
+    /// A helper for constructing [`UdpSender`]s from an underlying `Socket` type.
+    ///
+    /// This struct implements [`UdpSender`] if `MakeWritableFut` produces a `WritableFut`.
+    ///
+    /// Also serves as a trick, since `WritableFut` doesn't need to be a named future,
+    /// it can be an anonymous async block, as long as `MakeWritableFut` produces that
+    /// anonymous async block type.
+    ///
+    /// The `UdpSenderHelper` generic type parameters don't need to named, as it will be
+    /// used in its dyn-compatible form as a `Pin<Box<dyn UdpSender>>`.
+    struct UdpSenderHelper<MakeWritableFutFn, WritableFut> {
+        socket: CustomUdpSocket,
+        last_send_error: Option<Instant>,
+        make_writable_fut_fn: MakeWritableFutFn,
         #[pin]
-        fut: Option<Fut>,
+        writable_fut: Option<WritableFut>,
     }
 }
 
-impl<MakeFut, Fut> UdpPollHelper<MakeFut, Fut> {
-    fn new(make_fut: MakeFut) -> Self {
+impl<MakeWritableFutFn, WritableFut> UdpSenderHelper<MakeWritableFutFn, WritableFut> {
+    /// Create helper that implements [`UdpSender`] from a socket.
+    ///
+    /// Additionally you need to provide what is essentially an async function
+    /// that resolves once the socket is write-ready.
+    ///
+    /// See also the bounds on this struct's [`UdpSender`] implementation.
+    fn new(inner: CustomUdpSocket, make_fut: MakeWritableFutFn) -> Self {
         Self {
-            make_fut,
-            fut: None,
+            socket: inner,
+            last_send_error: None,
+            make_writable_fut_fn: make_fut,
+            writable_fut: None,
         }
     }
 }
 
-impl<MakeFut, Fut> UdpPoller for UdpPollHelper<MakeFut, Fut>
+impl<MakeWritableFutFn, WritableFut> UdpSender for UdpSenderHelper<MakeWritableFutFn, WritableFut>
 where
-    MakeFut: Fn() -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = io::Result<()>> + Send + Sync + 'static,
+    MakeWritableFutFn: Fn(&CustomUdpSocket) -> WritableFut + Send + Sync + 'static,
+    WritableFut: Future<Output = io::Result<()>> + Send + Sync + 'static,
 {
-    fn poll_writable(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+    fn poll_send(
+        self: Pin<&mut Self>,
+        transmit: &Transmit<'_>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<()>> {
         let mut this = self.project();
+        loop {
+            if this.writable_fut.is_none() {
+                this.writable_fut
+                    .set(Some((this.make_writable_fut_fn)(this.socket)));
+            }
+            // We're forced to `unwrap` here because `Fut` may be `!Unpin`, which means we can't safely
+            // obtain an `&mut WritableFut` after storing it in `self.writable_fut` when `self` is already behind `Pin`,
+            // and if we didn't store it then we wouldn't be able to keep it alive between
+            // `poll_send` calls.
+            let result = task::ready!(this.writable_fut.as_mut().as_pin_mut().unwrap().poll(cx));
 
-        if this.fut.is_none() {
-            this.fut.set(Some((this.make_fut)()));
+            // Polling an arbitrary `Future` after it becomes ready is a logic error, so arrange for
+            // a new `Future` to be created on the next call.
+            this.writable_fut.set(None);
+
+            // If .writable() fails, propagate the error
+            result?;
+
+            match this.socket.try_send(transmit) {
+                // We thought the socket was writable, but it wasn't, then retry so that either another
+                // `writable().await` call determines that the socket is indeed not writable and
+                // registers us for a wakeup, or the send succeeds if this really was just a
+                // transient failure.
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(e) => {
+                    log_sendmsg_error(this.last_send_error, &e, transmit);
+                    return Poll::Ready(Ok(()));
+                }
+                Ok(()) => return Poll::Ready(Ok(())),
+            }
         }
+    }
 
-        let result = this.fut.as_mut().as_pin_mut().unwrap().poll(cx);
-
-        if result.is_ready() {
-            this.fut.set(None);
-        }
-
-        result
+    fn max_transmit_segments(&self) -> usize {
+        self.socket.max_transmit_segments()
     }
 }
 
-impl<MakeFut, Fut> fmt::Debug for UdpPollHelper<MakeFut, Fut> {
+impl<MakeWritableFutFn, WritableFut> fmt::Debug
+    for UdpSenderHelper<MakeWritableFutFn, WritableFut>
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("UdpPollHelper").finish_non_exhaustive()
+        f.write_str("UdpSender")
     }
+}
+
+impl CustomUdpSocket {
+    fn try_send(&self, transmit: &quinn::udp::Transmit<'_>) -> io::Result<()> {
+        self.io.try_io(Interest::WRITABLE, || {
+            self.state.try_send((&*self.io).into(), transmit)
+        })
+    }
+
+    fn max_transmit_segments(&self) -> usize {
+        self.state.max_gso_segments()
+    }
+}
+
+/// Limits I/O error logging to one message per minute.
+const IO_ERROR_LOG_INTERVAL: Duration = Duration::from_secs(60);
+
+fn log_sendmsg_error(
+    last_send_error: &mut Option<Instant>,
+    error: &io::Error,
+    transmit: &quinn::udp::Transmit<'_>,
+) {
+    #[cfg(unix)]
+    // Unix `EMSGSIZE` is expected for MTU probes.
+    if quinn::udp::is_msg_size_err(error) {
+        return;
+    }
+
+    let now = Instant::now();
+    if last_send_error
+        .is_some_and(|last| now.saturating_duration_since(last) <= IO_ERROR_LOG_INTERVAL)
+    {
+        return;
+    }
+    *last_send_error = Some(now);
+
+    tracing::warn!(
+        "sendmsg error: {:?}, Transmit: {{ destination: {:?}, src_ip: {:?}, ecn: {:?}, len: {:?}, segment_size: {:?} }}",
+        error,
+        transmit.destination,
+        transmit.src_ip,
+        transmit.ecn,
+        transmit.contents.len(),
+        transmit.segment_size
+    );
 }
 //------------------------------------------------------------------------------
 

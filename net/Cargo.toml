@@ -16,7 +16,7 @@ num_enum           = { workspace = true }
 ouisync-macros     = { path = "../macros" }
 pin-project-lite   = { workspace = true }
 portable-atomic    = { workspace = true }
-quinn              = "0.11.9"
+quinn              = { git = "https://github.com/quinn-rs/quinn.git", rev = "9d729c1b6b7ad30d45d40265037eeeb9d98a7420" }
 rand               = { workspace = true }
 rcgen              = { workspace = true }
 serde              = { workspace = true }
