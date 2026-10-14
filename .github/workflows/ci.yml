@@ -1,6 +1,8 @@
 name: CI
 
-on: [push]
+on:
+  push:
+  pull_request:
 
 env:
     PROPTEST_CASES: 32
