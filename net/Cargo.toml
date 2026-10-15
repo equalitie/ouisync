@@ -16,7 +16,7 @@ num_enum           = { workspace = true }
 ouisync-macros     = { path = "../macros" }
 pin-project-lite   = { workspace = true }
 portable-atomic    = { workspace = true }
-quinn              = "0.11.9"
+quinn              = "0.11.12"
 rand               = { workspace = true }
 rcgen              = { workspace = true }
 serde              = { workspace = true }
