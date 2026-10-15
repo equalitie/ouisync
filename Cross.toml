@@ -10,6 +10,12 @@ image = "@sha256:629f74b46c0b7b0e4dcbef65aede80a2e00cc822d03b6549595d2c85401c98e
 [target.aarch64-unknown-linux-gnu]
 image = "@sha256:adbd580b3f1c48a278e8352202bc4bc63f6f57f8e7975572cb7d2b7f033e4a0f"
 
+[target.mips-unknown-linux-musl]
+image = "@sha256:2ee54195acc24fce42bcaddf0eb6248d8f9d7807c4d4162e8e260017263c11f3"
+
+[target.mipsel-unknown-linux-musl]
+image = "@sha256:aaded52ba6e4b55ca63ec9776bb6b18f2118395c67554954c582bdb010a1de1c"
+
 [target.aarch64-linux-android]
 image = "@sha256:542845b8efa0d6df2efb4f15c7803c609d28e64bc09e412a621c8d9d28e09fbd"
 
