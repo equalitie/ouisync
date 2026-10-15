@@ -12,8 +12,8 @@ use std::{
 
 #[cfg(test)]
 use rand::{
-    Rng,
-    distributions::{Distribution, Standard},
+    Rng, RngExt,
+    distr::{Distribution, StandardUniform},
 };
 
 /// Wrapper for a 256-bit hash digest. Also implements friendly formatting.
@@ -99,9 +99,9 @@ impl Hashable for Hash {
 derive_sqlx_traits_for_byte_array_wrapper!(Hash);
 
 #[cfg(test)]
-impl Distribution<Hash> for Standard {
+impl Distribution<Hash> for StandardUniform {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Hash {
-        let array: [u8; Hash::SIZE] = rng.r#gen();
+        let array: [u8; Hash::SIZE] = rng.random();
         Hash(array.into())
     }
 }

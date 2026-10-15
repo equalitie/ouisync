@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use indexmap::set::IndexSet;
 use ouisync::DhtContactsStoreTrait;
+use rand::RngExt;
 use std::{
     cmp::Eq,
     collections::HashSet,
@@ -119,8 +120,7 @@ where
 
     // Returns true if `self.cache` was modified.
     fn update_cache(&mut self, contacts: &HashSet<Addr>) -> bool {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let mut modified = false;
 
@@ -128,7 +128,7 @@ where
             modified |= self.cache.insert(*contact);
 
             if self.cache.len() > MAX_STORE_SIZE {
-                let to_remove = rng.gen_range(0..self.cache.len());
+                let to_remove = rng.random_range(0..self.cache.len());
                 self.cache.swap_remove_index(to_remove);
             }
         }

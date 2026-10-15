@@ -1,4 +1,4 @@
-use rand::{rngs::StdRng, SeedableRng};
+use rand::rngs::StdRng;
 use state_monitor::StateMonitor;
 use std::time::Instant;
 use tempfile::TempDir;
@@ -13,7 +13,7 @@ const BUFFER_SIZE: usize = 1024 * 1024;
 fn main() {
     let runtime = Runtime::new().unwrap();
 
-    let mut rng = StdRng::from_entropy();
+    let mut rng: StdRng = rand::make_rng();
     let base_dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let state_monitor = StateMonitor::make_root();
 

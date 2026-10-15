@@ -6,8 +6,6 @@ use deadlock::AsyncMutex;
 use futures_util::StreamExt;
 use if_watch::{IfEvent, tokio::IfWatcher};
 use net::udp::{DatagramSocket, MULTICAST_ADDR, MULTICAST_PORT, UdpSocket};
-use rand::Rng;
-use rand::rngs::OsRng;
 use scoped_task::ScopedJoinHandle;
 use serde::{Deserialize, Serialize};
 use state_monitor::StateMonitor;
@@ -53,7 +51,7 @@ impl LocalDiscovery {
                     listener_ports,
                     peer_tx,
                     per_interface_discovery: HashMap::default(),
-                    id: OsRng.r#gen(),
+                    id: rand::random(),
                 };
 
                 let mut interface_watcher = match IfWatcher::new() {
@@ -91,7 +89,7 @@ impl LocalDiscovery {
     pub async fn recv(&mut self) -> SeenPeer {
         // NOTE: This *almost* never returns `None`. One exception is if `LocalDiscovery` is
         // created while the runtime is shutting down. Then it can happen that the worker task is
-        // never started and `peer_tx` is immediatelly dropped.
+        // never started and `peer_tx` is immediately dropped.
         match self.peer_rx.recv().await {
             Some(peer) => peer,
             None => {
@@ -356,7 +354,7 @@ async fn run_beacon(
                 }
             }
 
-            let delay = rand::thread_rng().gen_range(BEACON_INTERVAL);
+            let delay = rand::random_range(BEACON_INTERVAL);
             sleep(delay).await;
         }
     }

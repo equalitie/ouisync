@@ -1,8 +1,8 @@
 mod utils;
 
 use camino::Utf8Path;
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
-use rand::{rngs::StdRng, SeedableRng};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use rand::rngs::StdRng;
 use state_monitor::StateMonitor;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
@@ -26,7 +26,7 @@ fn write_file(c: &mut Criterion) {
         group.bench_function(BenchmarkId::from_parameter(format!("{m} MiB")), |b| {
             b.iter_batched_ref(
                 || {
-                    let mut rng = StdRng::from_entropy();
+                    let mut rng: StdRng = rand::make_rng();
                     let base_dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
                     let repo = runtime.block_on(utils::create_repo(
                         &mut rng,
@@ -70,7 +70,7 @@ fn read_file(c: &mut Criterion) {
 
             b.iter_batched_ref(
                 || {
-                    let mut rng = StdRng::from_entropy();
+                    let mut rng: StdRng = rand::make_rng();
                     let base_dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
 
                     let repo = runtime.block_on(async {
@@ -121,7 +121,7 @@ fn sync(c: &mut Criterion) {
 
             b.iter_batched_ref(
                 || {
-                    let mut rng = StdRng::from_entropy();
+                    let mut rng: StdRng = rand::make_rng();
                     let base_dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
 
                     let (reader, writer) = runtime.block_on(async {

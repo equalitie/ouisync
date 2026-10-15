@@ -1,9 +1,9 @@
-use anyhow::{format_err, Result};
+use anyhow::{Result, format_err};
 use clap::Parser;
 use comfy_table::{Attribute, Cell, CellAlignment, Table};
 use indicatif::HumanBytes;
 use rand::seq::SliceRandom;
-use serde::{de::Error as _, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de::Error as _};
 use std::{
     env,
     ffi::OsString,
@@ -173,7 +173,7 @@ fn run(options: &Options) -> Result<()> {
     let dir = options.bench_dir();
     let mut bench_versions = list_bench_versions(&dir, &options.bench, label.as_ref())?;
     let mut output = NamedTempFile::new()?;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for i in 0..options.samples {
         println!("Running sample {}/{}", i + 1, options.samples);

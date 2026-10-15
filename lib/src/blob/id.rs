@@ -1,7 +1,7 @@
 use crate::crypto::{Digest, Hashable};
 use rand::{
     Rng,
-    distributions::{Distribution, Standard},
+    distr::{Distribution, StandardUniform},
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +16,7 @@ impl BlobId {
 }
 
 // Never generates `ROOT`
-impl Distribution<BlobId> for Standard {
+impl Distribution<BlobId> for StandardUniform {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> BlobId {
         loop {
             let sample = BlobId(self.sample(rng));

@@ -318,7 +318,7 @@ dependencies = [
  "clap",
  "comfy-table",
  "indicatif",
- "rand 0.8.5",
+ "rand 0.10.3",
  "serde",
  "serde_json",
  "tempfile",
@@ -442,12 +442,13 @@ dependencies = [
 [[package]]
 name = "btdht"
 version = "1.0.1"
-source = "git+https://github.com/equalitie/btdht.git?rev=ad423e21faeb6a4549397f8c6050cb8e4470b77e#ad423e21faeb6a4549397f8c6050cb8e4470b77e"
+source = "git+https://github.com/equalitie/btdht.git?rev=aeabfcc77998f030bc36f73a1dff107e8d3c1afe#aeabfcc77998f030bc36f73a1dff107e8d3c1afe"
 dependencies = [
  "async-trait",
  "crc32c",
  "futures-util",
- "rand 0.8.5",
+ "rand 0.10.3",
+ "ref-cast",
  "serde",
  "serde_bytes",
  "sha-1",
@@ -1719,7 +1720,7 @@ dependencies = [
  "ipnet",
  "jni",
  "once_cell",
- "rand 0.10.1",
+ "rand 0.10.3",
  "thiserror 2.0.18",
  "tinyvec",
  "tracing",
@@ -2944,7 +2945,7 @@ dependencies = [
  "pin-project-lite",
  "portable-atomic",
  "proptest",
- "rand 0.8.5",
+ "rand 0.10.3",
  "ref-cast",
  "rmp",
  "rmp-serde",
@@ -3011,7 +3012,7 @@ dependencies = [
  "libc",
  "ouisync",
  "ouisync-service",
- "rand 0.8.5",
+ "rand 0.10.3",
  "rcgen",
  "tempfile",
  "thiserror 2.0.18",
@@ -3043,7 +3044,7 @@ dependencies = [
  "portable-atomic",
  "proptest",
  "quinn",
- "rand 0.8.5",
+ "rand 0.10.3",
  "rcgen",
  "serde",
  "serde_bytes",
@@ -3119,7 +3120,7 @@ dependencies = [
  "pem",
  "pin-project-lite",
  "portable-atomic",
- "rand 0.8.5",
+ "rand 0.10.3",
  "rcgen",
  "reqwest",
  "rmp",
@@ -3187,8 +3188,9 @@ dependencies = [
  "futures-util",
  "log",
  "ouisync",
- "rand 0.8.5",
+ "rand 0.10.3",
  "tokio",
+ "torrust-serde-bencode",
 ]
 
 [[package]]
@@ -3206,7 +3208,7 @@ dependencies = [
  "libc",
  "ouisync",
  "proptest",
- "rand 0.8.5",
+ "rand 0.10.3",
  "slab",
  "tempfile",
  "test-strategy",
@@ -3566,7 +3568,7 @@ dependencies = [
  "fastbloom",
  "getrandom 0.4.1",
  "lru-slab",
- "rand 0.10.1",
+ "rand 0.10.3",
  "rand_pcg",
  "ring",
  "rustc-hash",
@@ -3632,9 +3634,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.1"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
+checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
 dependencies = [
  "chacha20 0.10.0",
  "getrandom 0.4.1",
@@ -4271,7 +4273,7 @@ version = "0.10.1"
 dependencies = [
  "anyhow",
  "portable-atomic",
- "rand 0.8.5",
+ "rand 0.10.3",
  "serde_json",
  "tempfile",
 ]

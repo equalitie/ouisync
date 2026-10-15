@@ -5,7 +5,7 @@ use crate::{
     test_utils,
 };
 use assert_matches::assert_matches;
-use rand::Rng;
+use rand::RngExt;
 use std::{io::SeekFrom, slice};
 use tempfile::TempDir;
 use tokio::{
@@ -218,7 +218,7 @@ async fn concurrent_write_and_read_file() {
             let mut buffer = vec![0; chunk_size];
 
             for _ in 0..chunk_count {
-                rand::thread_rng().fill(&mut buffer[..]);
+                rand::rng().fill(&mut buffer[..]);
                 file.write_all(&buffer).await.unwrap();
             }
 
@@ -1362,14 +1362,14 @@ async fn create_file_in_directory(dir: &mut Directory, name: &str, content: &[u8
 
 fn random_bytes(size: usize) -> Vec<u8> {
     let mut buffer = vec![0; size];
-    rand::thread_rng().fill(&mut buffer[..]);
+    rand::rng().fill(&mut buffer[..]);
     buffer
 }
 
 async fn write_random_data(file: &mut File, size: usize) {
     let mut buffer = [0u8; 4 * 1024];
     let mut remaining = size;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     while remaining > 0 {
         let chunk_size = buffer.len().min(remaining);

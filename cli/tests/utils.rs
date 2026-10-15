@@ -1,7 +1,7 @@
 #![allow(unused)]
 use anyhow::{Error, format_err};
 use backoff::{self, ExponentialBackoffBuilder};
-use rand::Rng;
+use rand::{Rng, RngExt};
 use std::{
     cell::Cell,
     env, fmt, fs,

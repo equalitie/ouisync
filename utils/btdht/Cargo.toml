@@ -15,6 +15,7 @@ path = "src/btdht.rs"
 
 [dependencies]
 async-trait = { workspace = true }
+serde_bencode = { package = "torrust-serde-bencode", version = "0.2.3" }
 futures-util = { version = "0.3.21", default-features = false }
 btdht = { workspace = true }
 ouisync-lib = { package = "ouisync", path = "../../lib" }

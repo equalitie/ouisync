@@ -35,7 +35,6 @@ use ouisync::{
 use ouisync_macros::api;
 #[cfg(feature = "vfs")]
 use ouisync_vfs::{MultiRepoMount, MultiRepoVFS};
-use rand::{Rng, rngs::OsRng};
 use state_monitor::{MonitorId, StateMonitor};
 use std::{
     borrow::Cow,
@@ -1925,7 +1924,7 @@ impl State {
 
     #[api]
     pub fn session_generate_password_salt(&self) -> PasswordSalt {
-        OsRng.r#gen()
+        rand::random()
     }
 
     #[api]

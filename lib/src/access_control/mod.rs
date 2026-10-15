@@ -15,7 +15,7 @@ use crate::{
     protocol::RepositoryId,
 };
 use ouisync_macros::api;
-use rand::{CryptoRng, Rng, rngs::OsRng};
+use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt, str::Utf8Error, string::FromUtf8Error, sync::Arc};
 use thiserror::Error;
@@ -154,9 +154,9 @@ impl WriteSecrets {
         Self::from(sign::Keypair::generate(rng))
     }
 
-    /// Generates random write secrets using OsRng.
+    /// Generates random write secrets using a cryptographically secure default rng
     pub fn random() -> Self {
-        Self::generate(&mut OsRng)
+        Self::generate(&mut rand::rng())
     }
 }
 

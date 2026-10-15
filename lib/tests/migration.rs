@@ -10,8 +10,8 @@ use ouisync::{
     Repository, RepositoryParams, SCHEMA_VERSION,
 };
 use rand::{
-    Rng, SeedableRng,
-    distributions::{Alphanumeric, DistString, Standard},
+    RngExt, SeedableRng,
+    distr::{Alphanumeric, SampleString, StandardUniform},
     prelude::Distribution,
     rngs::StdRng,
 };
@@ -216,7 +216,7 @@ async fn load_repo(work_dir: &Path, input_dump: &Path, access_mode: AccessMode) 
 
 fn make_store_path(work_dir: &Path) -> PathBuf {
     work_dir
-        .join(Alphanumeric.sample_string(&mut rand::thread_rng(), 8))
+        .join(Alphanumeric.sample_string(&mut rand::rng(), 8))
         .with_extension(DB_EXTENSION)
 }
 
@@ -273,14 +273,14 @@ fn seeded_random_bytes(seed: u64, size: usize) -> Vec<u8> {
     StdRng::seed_from_u64(seed)
         // The `u8` should be inferred but for some reason it doesn't work when compiling on
         // windows...
-        .sample_iter::<u8, _>(Standard)
+        .sample_iter::<u8, _>(StandardUniform)
         .take(size)
         .collect()
 }
 
 fn seeded_random<T>(seed: u64) -> T
 where
-    Standard: Distribution<T>,
+    StandardUniform: Distribution<T>,
 {
-    StdRng::seed_from_u64(seed).r#gen()
+    StdRng::seed_from_u64(seed).random()
 }

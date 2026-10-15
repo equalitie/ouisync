@@ -11,7 +11,7 @@ use crate::{
     test_utils,
 };
 use proptest::collection::vec;
-use rand::{distributions::Standard, prelude::*};
+use rand::{distr::StandardUniform, prelude::*};
 use tempfile::TempDir;
 use test_strategy::proptest;
 
@@ -62,7 +62,7 @@ async fn write_and_read_case(
     let mut tx = store.begin_write().await.unwrap();
     let mut changeset = Changeset::new();
 
-    let block_id = if is_root { BlobId::ROOT } else { rng.r#gen() };
+    let block_id = if is_root { BlobId::ROOT } else { rng.random() };
 
     // Create the blob and write to it in chunks of `write_len` bytes.
     let mut blob = Blob::create(branch.clone(), block_id);
@@ -292,7 +292,7 @@ async fn truncate_to_empty() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
     let mut tx = store.begin_write().await.unwrap();
 
-    let id = rng.r#gen();
+    let id = rng.random();
 
     let content = random_bytes(&mut rng, 2 * BLOCK_SIZE);
 
@@ -330,7 +330,7 @@ async fn truncate_to_shorter() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
     let mut tx = store.begin_write().await.unwrap();
 
-    let id = rng.r#gen();
+    let id = rng.random();
 
     let content = random_bytes(&mut rng, 3 * BLOCK_SIZE);
 
@@ -372,7 +372,7 @@ async fn truncate_marks_as_dirty() {
     let mut tx = store.begin_write().await.unwrap();
     let mut changeset = Changeset::new();
 
-    let id = rng.r#gen();
+    let id = rng.random();
 
     let content = random_bytes(&mut rng, 2 * BLOCK_SIZE);
 
@@ -395,7 +395,7 @@ async fn modify_blob() {
 
     let mut tx = store.begin_write().await.unwrap();
 
-    let id = rng.r#gen();
+    let id = rng.random();
     let locator0 = Locator::head(id);
     let locator1 = locator0.next();
 
@@ -454,7 +454,7 @@ async fn append() {
 
     let mut tx = store.begin_write().await.unwrap();
 
-    let id = rng.r#gen();
+    let id = rng.random();
     let mut changeset = Changeset::new();
     let mut blob = Blob::create(branch.clone(), id);
     blob.write_all(&mut tx, &mut changeset, b"foo")
@@ -512,7 +512,7 @@ mod append_after_flush_to_partial_block {
 
         let mut tx = store.begin_write().await.unwrap();
 
-        let id = rng.r#gen();
+        let id = rng.random();
         let content = random_bytes(&mut rng, len);
         let (head, tail) = content.split_at(split_at);
 
@@ -549,7 +549,7 @@ async fn write_reopen_and_read() {
     let mut tx = store.begin_write().await.unwrap();
     let mut changeset = Changeset::new();
 
-    let id = rng.r#gen();
+    let id = rng.random();
 
     let mut blob = Blob::create(branch.clone(), id);
     blob.write_all(&mut tx, &mut changeset, b"foo")
@@ -593,7 +593,7 @@ async fn fork_and_write_case(
     let src_id = if src_id_is_root {
         BlobId::ROOT
     } else {
-        rng.r#gen()
+        rng.random()
     };
 
     let src_content = random_bytes(&mut rng, src_len);
@@ -661,7 +661,7 @@ async fn fork_and_write_case(
 async fn fork_is_idempotent() {
     let (mut rng, _base_dir, store, [src_branch, dst_branch]) = setup(0).await;
 
-    let id = rng.r#gen();
+    let id = rng.random();
     let content = random_bytes(&mut rng, 512 * 1024);
 
     let mut tx = store.begin_write().await.unwrap();
@@ -688,8 +688,8 @@ async fn fork_is_idempotent() {
 async fn fork_then_remove_src_branch() {
     let (mut rng, _base_dir, store, [src_branch, dst_branch]) = setup(0).await;
 
-    let id_0 = rng.r#gen();
-    let id_1 = rng.r#gen();
+    let id_0 = rng.random();
+    let id_1 = rng.random();
 
     let mut tx = store.begin_write().await.unwrap();
     let mut changeset = Changeset::new();
@@ -735,7 +735,7 @@ async fn fork_then_remove_src_branch() {
 async fn block_ids_test() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
 
-    let blob_id: BlobId = rng.r#gen();
+    let blob_id: BlobId = rng.random();
     let mut blob = Blob::create(branch.clone(), blob_id);
 
     let content = random_bytes(rng, BLOCK_SIZE * 3 - HEADER_SIZE);
@@ -769,10 +769,10 @@ async fn block_ids_test() {
 async fn block_ids_of_identical_blobs_in_the_same_branch() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
 
-    let blob_id_0: BlobId = rng.r#gen();
+    let blob_id_0: BlobId = rng.random();
     let mut blob_0 = Blob::create(branch.clone(), blob_id_0);
 
-    let blob_id_1: BlobId = rng.r#gen();
+    let blob_id_1: BlobId = rng.random();
     let mut blob_1 = Blob::create(branch.clone(), blob_id_1);
 
     let content = random_bytes(rng, BLOCK_SIZE * 2 - HEADER_SIZE);
@@ -817,7 +817,7 @@ async fn block_ids_of_identical_blobs_in_the_same_branch() {
 async fn block_ids_of_identical_blobs_in_different_branches() {
     let (mut rng, _base_dir, store, [branch_0, branch_1]) = setup(0).await;
 
-    let blob_id: BlobId = rng.r#gen();
+    let blob_id: BlobId = rng.random();
     let mut blob_0 = Blob::create(branch_0.clone(), blob_id);
     let mut blob_1 = Blob::create(branch_1.clone(), blob_id);
 
@@ -861,7 +861,7 @@ async fn block_ids_of_identical_blobs_in_different_branches() {
 async fn block_ids_of_identical_blocks_in_the_same_blob() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
 
-    let blob_id: BlobId = rng.r#gen();
+    let blob_id: BlobId = rng.random();
     let mut blob = Blob::create(branch.clone(), blob_id);
 
     let content_block_0 = random_bytes(&mut rng, BLOCK_SIZE - HEADER_SIZE);
@@ -927,7 +927,7 @@ fn random_bytes<R: Rng>(rng: R, size: usize) -> Vec<u8> {
     rng
         // The `u8` should be inferred but for some reason it doesn't work when compiling on
         // windows, but only on the CI or cross-compilation ¯\_(ツ)_/¯
-        .sample_iter::<u8, _>(Standard)
+        .sample_iter::<u8, _>(StandardUniform)
         .take(size)
         .collect()
 }

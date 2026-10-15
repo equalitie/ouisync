@@ -6,7 +6,6 @@ mod implementation {
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group};
     use ouisync_lib::{Access, Repository, RepositoryParams, WriteSecrets};
     use ouisync_vfs::MountGuard;
-    use rand::{Rng, SeedableRng, rngs::StdRng};
     use std::path::Path;
     use tempfile::TempDir;
     use tokio::runtime::{Handle, Runtime};
@@ -35,6 +34,8 @@ mod implementation {
     }
 
     mod utils {
+        use rand::{RngExt, rngs::StdRng};
+
         use super::*;
         use std::{
             fs::File,
@@ -43,7 +44,7 @@ mod implementation {
         };
 
         pub async fn setup() -> (StdRng, TempDir, MountGuard) {
-            let mut rng = StdRng::from_entropy();
+            let mut rng: StdRng = rand::make_rng();
             let base_dir = TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
             let mount_dir = base_dir.path().join("mnt");
 

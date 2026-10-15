@@ -1,7 +1,7 @@
 use super::*;
 use ouisync_lib::{Access, AccessMode, Repository, RepositoryParams, WriteSecrets};
 use proptest::prelude::*;
-use rand::{self, Rng, SeedableRng, distributions::Standard, rngs::StdRng};
+use rand::{self, RngExt, SeedableRng, distr::StandardUniform, rngs::StdRng};
 use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},
@@ -58,8 +58,8 @@ async fn read_directory(setup: Setup) {
     let name_dir = OsStr::new("dir");
 
     // Small file
-    let content: Vec<u8> = rand::thread_rng()
-        .sample_iter(Standard)
+    let content: Vec<u8> = rand::rng()
+        .sample_iter(StandardUniform)
         .take(len_small)
         .collect();
     fs::write(setup.mount_dir_path().join(name_small), &content)
@@ -67,8 +67,8 @@ async fn read_directory(setup: Setup) {
         .unwrap();
 
     // Large file
-    let content: Vec<u8> = rand::thread_rng()
-        .sample_iter(Standard)
+    let content: Vec<u8> = rand::rng()
+        .sample_iter(StandardUniform)
         .take(len_large)
         .collect();
     fs::write(setup.mount_dir_path().join(name_large), &content)
@@ -236,7 +236,7 @@ async fn write_and_read_file_case_multi(len: usize, rng_seed: u64) {
 
 async fn write_and_read_file_case(len: usize, rng_seed: u64, setup: Setup) {
     let rng = StdRng::seed_from_u64(rng_seed);
-    let orig_data: Vec<u8> = rng.sample_iter(Standard).take(len).collect();
+    let orig_data: Vec<u8> = rng.sample_iter(StandardUniform).take(len).collect();
 
     let path = setup.mount_dir_path().join("file.txt");
 
@@ -318,7 +318,7 @@ async fn seek_and_read_case(len: usize, offset: usize, rng_seed: u64, setup: Set
     let path = setup.mount_dir_path().join("file.txt");
 
     let rng = StdRng::seed_from_u64(rng_seed);
-    let content: Vec<_> = rng.sample_iter(Standard).take(len).collect();
+    let content: Vec<_> = rng.sample_iter(StandardUniform).take(len).collect();
 
     fs::write(&path, &content).await.unwrap();
 

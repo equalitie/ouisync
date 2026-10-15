@@ -1,6 +1,6 @@
 use crate::crypto::{Digest, Hashable};
 use ed25519_dalek::{self as ext, Signer, Verifier};
-use rand::{CryptoRng, Rng, rngs::OsRng};
+use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use sqlx::{
     Sqlite,
@@ -18,11 +18,16 @@ impl Keypair {
     pub const SECRET_KEY_SIZE: usize = ext::SECRET_KEY_LENGTH;
 
     pub fn generate<R: Rng + CryptoRng>(rng: &mut R) -> Self {
-        Self(ext::SigningKey::generate(rng))
+        // NOTE: There is also `SigningKey::generate` but we are purposefully not using it here to
+        // not be forced to use the same version of `rand` as `ed25519_dalek` uses (which was a
+        // notorious source of hassle in the past).
+        let mut secret = ext::SecretKey::default();
+        rng.fill_bytes(&mut secret);
+        Self(ext::SigningKey::from_bytes(&secret))
     }
 
     pub fn random() -> Self {
-        Self::generate(&mut OsRng)
+        Self::generate(&mut rand::rng())
     }
 
     pub fn to_bytes(&self) -> [u8; Self::SECRET_KEY_SIZE] {
@@ -75,7 +80,7 @@ impl PublicKey {
 
     #[cfg(test)]
     pub fn random() -> Self {
-        Self::generate(&mut OsRng)
+        Self::generate(&mut rand::rng())
     }
 
     pub fn verify(&self, msg: &[u8], signature: &Signature) -> bool {
@@ -254,7 +259,7 @@ pub type SignatureError = ext::SignatureError;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{SeedableRng, rngs::StdRng};
+    use rand::{RngExt, SeedableRng, rngs::StdRng};
 
     // This test asserts that signatures from the same keys and input are identical between
     // different versions.
@@ -274,7 +279,7 @@ mod tests {
         );
 
         assert_eq!(
-            dump_signature(&keypair.sign(&rng.r#gen::<[u8; 32]>())),
+            dump_signature(&keypair.sign(&rng.random::<[u8; 32]>())),
             "3230b7f98529273c71f8af92b1581d290bf424fd7bd5015399c6213cbc461ca79ff932a7fcbb5e19d2ef6efa8ed9b833b6d17431793facf1b810c3b579570d0d"
         );
     }

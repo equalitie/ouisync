@@ -5,7 +5,7 @@ use hmac::{
     Hmac, Mac,
     digest::{OutputSizeUser, typenum::Unsigned},
 };
-use rand::{CryptoRng, Rng, rngs::OsRng};
+use rand::{CryptoRng, Rng, RngExt};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 use sha2::Sha256;
 use tokio::{
@@ -41,11 +41,11 @@ impl AuthKey {
     pub const SIZE: usize = 32;
 
     pub fn generate<R: Rng + CryptoRng + ?Sized>(rng: &mut R) -> Self {
-        Self(rng.r#gen())
+        Self(rng.random())
     }
 
     pub fn random() -> Self {
-        Self::generate(&mut OsRng)
+        Self::generate(&mut rand::rng())
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -104,7 +104,7 @@ pub(super) async fn server(socket: &mut TcpStream, auth_key: &AuthKey) -> io::Re
     let server_proof = hmac(auth_key, &client_challenge).finalize();
 
     let mut server_challenge = [0; AUTH_CHALLENGE_SIZE];
-    OsRng.fill(&mut server_challenge);
+    rand::rng().fill(&mut server_challenge);
 
     socket.write_all(&server_proof.into_bytes()).await?;
     socket.write_all(&server_challenge).await?;
@@ -122,7 +122,7 @@ pub(super) async fn server(socket: &mut TcpStream, auth_key: &AuthKey) -> io::Re
 /// Client-side part of the authentication protocol.
 pub(super) async fn client(socket: &mut TcpStream, auth_key: &AuthKey) -> Result<(), ClientError> {
     let mut client_challenge = [0; AUTH_CHALLENGE_SIZE];
-    OsRng.fill(&mut client_challenge);
+    rand::rng().fill(&mut client_challenge);
     socket.write_all(&client_challenge).await?;
 
     let mut server_proof = [0; AUTH_PROOF_SIZE];

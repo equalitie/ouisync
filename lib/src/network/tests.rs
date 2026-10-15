@@ -528,8 +528,8 @@ async fn create_changeset(
     let mut changeset = Changeset::new();
 
     for _ in 0..size {
-        let encoded_locator = rng.r#gen();
-        let block: Block = rng.r#gen();
+        let encoded_locator = rng.random();
+        let block: Block = rng.random();
 
         changeset.link_block(encoded_locator, block.id, SingleBlockPresence::Present);
         changeset.write_block(block);

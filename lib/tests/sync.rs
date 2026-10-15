@@ -10,7 +10,7 @@ use ouisync::{
     Access, AccessMode, BLOB_HEADER_SIZE, BLOCK_SIZE, EntryType, Error, Payload, Repository,
     StorageSize, StoreError, VersionVector,
 };
-use rand::Rng;
+use rand::RngExt;
 use std::{cmp::Ordering, collections::HashSet, io::SeekFrom, sync::Arc, time::Duration};
 use tokio::{
     sync::{Barrier, broadcast, mpsc},
@@ -177,7 +177,7 @@ fn sync_two_directories_one_with_subdirectory() {
 
 #[test]
 fn sync_many_files() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let num_files = 10;
     let min_size = 0;
@@ -186,7 +186,7 @@ fn sync_many_files() {
     let dump = (0..num_files)
         .map(|index| {
             let name = format!("file-{index}.dat");
-            let size = rng.gen_range(min_size..max_size);
+            let size = rng.random_range(min_size..max_size);
             let content = common::random_bytes(size);
 
             (name, content)

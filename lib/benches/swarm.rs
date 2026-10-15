@@ -12,7 +12,7 @@ use clap::Parser;
 use common::{DEFAULT_REPO, Env, Proto, actor, progress::ProgressReporter, sync_watch};
 use metrics::{Counter, Gauge, Recorder};
 use ouisync::{Access, AccessMode, File, Network, Repository, Stats};
-use rand::{RngCore, SeedableRng, rngs::StdRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::{
     fmt,
     fs::OpenOptions,

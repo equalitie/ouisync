@@ -9,7 +9,6 @@ use super::{
     seen_peers::{SeenPeer, SeenPeers},
 };
 use crate::sync::{AwaitDrop, WatchSenderExt};
-use rand::Rng;
 use scoped_task::ScopedJoinHandle;
 use serde::{Deserialize, Serialize};
 use slab::Slab;
@@ -250,7 +249,7 @@ impl PexSender {
                 message_tx.send(Message::Pex(PexPayload(addrs))).await.ok();
             }
 
-            let interval = rand::thread_rng().gen_range(SEND_INTERVAL_RANGE);
+            let interval = rand::random_range(SEND_INTERVAL_RANGE);
             time::sleep(interval).await;
         }
     }

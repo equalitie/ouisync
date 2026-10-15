@@ -71,7 +71,7 @@ macro_rules! define_byte_array_wrapper {
 //
 macro_rules! derive_rand_for_wrapper {
     ($name:ident) => {
-        impl rand::distributions::Distribution<$name> for rand::distributions::Standard {
+        impl rand::distr::Distribution<$name> for rand::distr::StandardUniform {
             fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> $name {
                 $name(self.sample(rng))
             }

@@ -8,7 +8,7 @@ use futures_util::future;
 use ouisync::{
     Access, Network, PeerAddr, Registration, Repository, RepositoryParams, WriteSecrets,
 };
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 use state_monitor::StateMonitor;
 use std::{net::Ipv4Addr, ops::Deref, path::Path, time::Duration};
 use tokio::runtime::Handle;
@@ -28,7 +28,7 @@ pub async fn create_repo(
 
     let repository = Repository::create(
         &RepositoryParams::new(store)
-            .with_device_id(rng.r#gen())
+            .with_device_id(rng.random())
             .with_monitor(monitor.make_child(store.to_string_lossy())),
         Access::WriteUnlocked { secrets },
     )

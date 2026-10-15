@@ -158,7 +158,7 @@ async fn run_single_action(info_hash: InfoHash, command: &Single) {
 
     println!("Sending GetPeers request to {node_addr:?}");
     socket
-        .send_to(&get_peers.encode().unwrap(), node_addr)
+        .send_to(&serde_bencode::to_bytes(&get_peers).unwrap(), node_addr)
         .await
         .unwrap();
 
@@ -171,7 +171,7 @@ async fn run_single_action(info_hash: InfoHash, command: &Single) {
             .unwrap();
 
         buffer.truncate(size);
-        let response = Message::decode(&buffer).unwrap();
+        let response: Message = serde_bencode::from_bytes(&buffer).unwrap();
         if response.transaction_id == get_peers.transaction_id {
             match response.body {
                 MessageBody::Request(_) => {
@@ -201,7 +201,7 @@ async fn run_single_action(info_hash: InfoHash, command: &Single) {
         };
 
         socket
-            .send_to(&announce.encode().unwrap(), node_addr)
+            .send_to(&serde_bencode::to_bytes(&announce).unwrap(), node_addr)
             .await
             .unwrap();
     }

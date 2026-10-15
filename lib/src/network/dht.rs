@@ -17,7 +17,6 @@ use chrono::{DateTime, offset::Local};
 use deadlock::BlockingMutex;
 use futures_util::{Stream, StreamExt, future, stream};
 use net::quic;
-use rand::Rng;
 use restartable::RestartableDht;
 use state_monitor::StateMonitor;
 use std::{
@@ -329,8 +328,7 @@ impl Lookup {
             }
 
             // sleep a random duration before the next search
-            let duration =
-                rand::thread_rng().gen_range(MIN_DHT_ANNOUNCE_DELAY..MAX_DHT_ANNOUNCE_DELAY);
+            let duration = rand::random_range(MIN_DHT_ANNOUNCE_DELAY..MAX_DHT_ANNOUNCE_DELAY);
 
             {
                 let time: DateTime<Local> = (SystemTime::now() + duration).into();

@@ -197,6 +197,8 @@ impl Drop for LoadGuard<'_> {
 mod tests {
     use std::iter;
 
+    use rand::RngExt;
+
     use super::{
         super::{Store, test_utils::SnapshotWriter},
         *,
@@ -206,14 +208,13 @@ mod tests {
         protocol::{RootNodeFilter, test_utils::Snapshot},
         version_vector::VersionVector,
     };
-    use rand::Rng;
 
     #[tokio::test]
     async fn sanity_check() {
         let num_blocks = 10;
         let num_present = 8;
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let (_temp_dir, pool) = db::create_temp().await.unwrap();
         let store = Store::new(pool);
 
@@ -273,7 +274,7 @@ mod tests {
         }
 
         // Looking up a non-existing locator fails.
-        let invalid_locator: Hash = rng.r#gen();
+        let invalid_locator: Hash = rng.random();
         assert_eq!(
             cache.lookup(snapshot.root_hash(), &invalid_locator),
             Err(LookupError::NotFound)
@@ -298,7 +299,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalidation() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let (_temp_dir, pool) = db::create_temp().await.unwrap();
         let store = Store::new(pool);
 

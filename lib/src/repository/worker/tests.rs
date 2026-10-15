@@ -10,13 +10,13 @@ use crate::{
 use assert_matches::assert_matches;
 use futures_util::TryStreamExt;
 use metrics::NoopRecorder;
-use rand::{SeedableRng, rngs::StdRng};
+use rand::rngs::StdRng;
 use state_monitor::StateMonitor;
 use tempfile::TempDir;
 
 #[tokio::test]
 async fn prune_sanity_check() {
-    let mut rng = StdRng::from_entropy();
+    let mut rng = rand::make_rng::<StdRng>();
     let (_base_dir, shared) = setup(&mut rng).await;
     let secrets = shared
         .credentials
@@ -165,7 +165,7 @@ async fn prune_sanity_check() {
 
 #[tokio::test]
 async fn do_not_prune_complete_snapshots_if_no_newer_snapshot_is_complete() {
-    let mut rng = StdRng::from_entropy();
+    let mut rng: StdRng = rand::make_rng();
     let (_base_dir, shared) = setup(&mut rng).await;
     let secrets = shared
         .credentials
@@ -246,7 +246,7 @@ async fn do_not_prune_complete_snapshots_if_no_newer_snapshot_is_complete() {
 
 #[tokio::test]
 async fn do_not_prune_incomplete_snapshots_if_no_newer_snapshot_is_complete() {
-    let mut rng = StdRng::from_entropy();
+    let mut rng: StdRng = rand::make_rng();
     let (_base_dir, shared) = setup(&mut rng).await;
     let secrets = shared
         .credentials

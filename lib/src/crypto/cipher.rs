@@ -8,7 +8,7 @@ use chacha20::{
 use generic_array::{sequence::GenericSequence, typenum::Unsigned};
 use hex;
 use ouisync_macros::api;
-use rand::{CryptoRng, Rng, rngs::OsRng};
+use rand::{CryptoRng, Rng, RngExt, rand_core::UnwrapErr, rngs::SysRng};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use std::{fmt, sync::Arc};
 use subtle::ConstantTimeEq;
@@ -65,7 +65,7 @@ impl SecretKey {
 
     /// Generate a random secret key using the default RNG.
     pub fn random() -> Self {
-        Self::generate(&mut OsRng)
+        Self::generate(&mut UnwrapErr(SysRng))
     }
 
     /// Derive a secret key from another secret key and a nonce.

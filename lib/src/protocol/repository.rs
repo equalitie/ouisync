@@ -24,7 +24,7 @@ impl RepositoryId {
 
     #[cfg(test)]
     pub fn random() -> Self {
-        Self::generate(&mut rand::rngs::OsRng)
+        Self::generate(&mut rand::rng())
     }
 
     /// Hash of this id using the given salt.

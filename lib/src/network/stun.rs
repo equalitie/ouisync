@@ -118,7 +118,7 @@ where
 {
     // Try all the servers in random order.
     let mut hosts: Vec<_> = STUN_SERVERS.to_vec();
-    hosts.shuffle(&mut rand::thread_rng());
+    hosts.shuffle(&mut rand::rng());
 
     let (tasks_tx, tasks_rx) = mpsc::channel(32);
 

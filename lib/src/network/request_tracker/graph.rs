@@ -180,18 +180,19 @@ impl<T> Node<T> {
 
 #[cfg(test)]
 mod tests {
+    use rand::RngExt;
+
     use super::*;
     use crate::{network::debug_payload::DebugRequest, protocol::MultiBlockPresence};
-    use rand::Rng;
 
     #[test]
     fn child_request() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut graph = Graph::new();
 
         assert_eq!(graph.requests().len(), 0);
 
-        let parent_request = Request::ChildNodes(rng.r#gen(), DebugRequest::start());
+        let parent_request = Request::ChildNodes(rng.random(), DebugRequest::start());
 
         let parent_node_key = graph.get_or_insert(
             PendingRequest {
@@ -212,7 +213,7 @@ mod tests {
         assert_eq!(node.children().len(), 0);
         assert_eq!(node.request().payload, parent_request);
 
-        let child_request = Request::ChildNodes(rng.r#gen(), DebugRequest::start());
+        let child_request = Request::ChildNodes(rng.random(), DebugRequest::start());
 
         let child_node_key = graph.get_or_insert(
             PendingRequest {
@@ -249,12 +250,12 @@ mod tests {
 
     #[test]
     fn duplicate_request() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut graph = Graph::new();
 
         assert_eq!(graph.requests().len(), 0);
 
-        let request = Request::ChildNodes(rng.r#gen(), DebugRequest::start());
+        let request = Request::ChildNodes(rng.random(), DebugRequest::start());
 
         let node_key0 = graph.get_or_insert(
             PendingRequest {
@@ -280,10 +281,10 @@ mod tests {
 
     #[test]
     fn multiple_parents() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut graph = Graph::new();
 
-        let hash = rng.r#gen();
+        let hash = rng.random();
 
         let parent_request_0 = PendingRequest {
             payload: Request::ChildNodes(hash, DebugRequest::start()),
@@ -295,7 +296,7 @@ mod tests {
             variant: RequestVariant::new(MultiBlockPresence::None, MultiBlockPresence::Full),
         };
 
-        let child_request = Request::Block(rng.r#gen(), DebugRequest::start());
+        let child_request = Request::Block(rng.random(), DebugRequest::start());
 
         let parent_key_0 = graph.get_or_insert(parent_request_0, None, 0);
         let parent_key_1 = graph.get_or_insert(parent_request_1, None, 1);
@@ -367,21 +368,21 @@ mod tests {
 
     #[test]
     fn multiple_children() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut graph = Graph::new();
 
         let parent_request = PendingRequest {
-            payload: Request::ChildNodes(rng.r#gen(), DebugRequest::start()),
+            payload: Request::ChildNodes(rng.random(), DebugRequest::start()),
             variant: RequestVariant::default(),
         };
 
         let child_request_0 = PendingRequest {
-            payload: Request::ChildNodes(rng.r#gen(), DebugRequest::start()),
+            payload: Request::ChildNodes(rng.random(), DebugRequest::start()),
             variant: RequestVariant::default(),
         };
 
         let child_request_1 = PendingRequest {
-            payload: Request::ChildNodes(rng.r#gen(), DebugRequest::start()),
+            payload: Request::ChildNodes(rng.random(), DebugRequest::start()),
             variant: RequestVariant::default(),
         };
 

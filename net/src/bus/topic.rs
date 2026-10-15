@@ -1,5 +1,5 @@
 use ouisync_macros::api;
-use rand::Rng;
+use rand::{Rng, RngExt};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -17,12 +17,12 @@ impl TopicId {
 
     /// Generates random topic id using the provided RNG.
     pub fn generate<R: Rng>(rng: &mut R) -> Self {
-        Self(rng.r#gen())
+        Self(rng.random())
     }
 
     /// Generates random topic id using [`rand::thread_rng()`].
     pub fn random() -> Self {
-        Self::generate(&mut rand::thread_rng())
+        Self::generate(&mut rand::rng())
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -61,11 +61,11 @@ impl TopicNonce {
     pub const SIZE: usize = 16;
 
     pub fn generate<R: Rng>(rng: &mut R) -> Self {
-        Self(rng.r#gen())
+        Self(rng.random())
     }
 
     pub fn random() -> Self {
-        Self::generate(&mut rand::thread_rng())
+        Self::generate(&mut rand::rng())
     }
 
     pub fn as_bytes(&self) -> &[u8] {

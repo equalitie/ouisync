@@ -7,7 +7,7 @@ use crate::crypto::{
     sign::{Keypair, PublicKey, Signature},
 };
 use ouisync_macros::api;
-use rand::{CryptoRng, Rng, rngs::OsRng};
+use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -96,7 +96,7 @@ where
     W: AsyncWrite + Unpin,
     R: AsyncRead + Unpin,
 {
-    let our_challenge: [u8; 32] = OsRng.r#gen();
+    let our_challenge: [u8; 32] = rand::random();
 
     writer.write_all(&our_challenge).await?;
     our_runtime_id.public().write_into(writer).await?;

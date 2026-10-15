@@ -10,7 +10,6 @@ use crate::{
     protocol::RepositoryId,
     store::Error as StoreError,
 };
-use rand::{Rng, rngs::OsRng};
 use sqlx::Row;
 use std::{borrow::Cow, fmt, time::Duration};
 use tracing::instrument;
@@ -186,7 +185,7 @@ pub(crate) async fn get_or_generate_database_id(db: &db::Pool) -> Result<Databas
     let database_id = match get_public_blob(&mut tx, DATABASE_ID).await {
         Ok(Some(database_id)) => database_id,
         Ok(None) => {
-            let database_id: DatabaseId = OsRng.r#gen();
+            let database_id: DatabaseId = rand::random();
             set_public_blob(&mut tx, DATABASE_ID, &database_id).await?;
             tx.commit().await?;
             database_id

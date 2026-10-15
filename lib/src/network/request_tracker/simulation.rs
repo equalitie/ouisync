@@ -15,7 +15,7 @@ use crate::{
     },
     version_vector::VersionVector,
 };
-use rand::{CryptoRng, Rng, seq::SliceRandom};
+use rand::{CryptoRng, Rng, RngExt, seq::SliceRandom};
 use std::collections::{HashMap, HashSet, VecDeque, hash_map::Entry};
 
 /// Simple network simulation for testing `RequestTracker`.
@@ -63,7 +63,7 @@ impl Simulation {
     }
 
     pub fn remove_peer<R: Rng>(&mut self, rng: &mut R) {
-        let index = rng.gen_range(0..self.peers.len());
+        let index = rng.random_range(0..self.peers.len());
         let peer = self.peers.remove(index);
 
         for (key, variant) in peer.requests {

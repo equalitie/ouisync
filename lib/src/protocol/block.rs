@@ -1,5 +1,8 @@
 use crate::crypto::{Digest, Hash, Hashable};
-use rand::{Rng, distributions::Standard, prelude::Distribution};
+use rand::{
+    Rng, RngExt,
+    distr::{Distribution, StandardUniform},
+};
 use serde::{Deserialize, Serialize};
 use std::{
     array::TryFromSliceError,
@@ -83,10 +86,10 @@ impl Block {
     }
 }
 
-impl Distribution<Block> for Standard {
+impl Distribution<Block> for StandardUniform {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Block {
-        let content = rng.r#gen();
-        let nonce = rng.r#gen();
+        let content = rng.random();
+        let nonce = rng.random();
         Block::new(content, nonce)
     }
 }
@@ -170,7 +173,7 @@ impl DerefMut for BlockContent {
     }
 }
 
-impl Distribution<BlockContent> for Standard {
+impl Distribution<BlockContent> for StandardUniform {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> BlockContent {
         let mut content = vec![0; BLOCK_SIZE].into_boxed_slice();
         rng.fill(&mut content[..]);

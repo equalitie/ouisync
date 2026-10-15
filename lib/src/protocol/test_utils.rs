@@ -3,7 +3,7 @@ use crate::{
     crypto::{Hash, Hashable},
     protocol::{Block, BlockId, INNER_LAYER_COUNT, InnerNode, InnerNodes, LeafNode, LeafNodes},
 };
-use rand::{Rng, distributions::Standard};
+use rand::{Rng, RngExt, distr::StandardUniform};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, VecDeque, btree_map::Entry},
@@ -24,7 +24,7 @@ pub(crate) struct Snapshot {
 impl Snapshot {
     // Generate a random snapshot with the given number of blocks.
     pub fn generate<R: Rng>(rng: &mut R, block_count: usize) -> Self {
-        Self::from_present_blocks(rng.sample_iter(Standard).take(block_count))
+        Self::from_present_blocks(rng.sample_iter(StandardUniform).take(block_count))
     }
 
     // Convenience alternative to `from_blocks` when all blocks are present.
@@ -449,7 +449,7 @@ mod tests {
             println!("seed = {seed}, max_blocks = {max_blocks}");
 
             let mut rng = StdRng::seed_from_u64(seed);
-            let num_blocks = rng.gen_range(1..=max_blocks);
+            let num_blocks = rng.random_range(1..=max_blocks);
             let s = Snapshot::generate(&mut rng, num_blocks);
 
             assert_ne!(*s.root_hash(), *EMPTY_INNER_HASH);
@@ -496,7 +496,7 @@ mod tests {
             println!("seed = {seed}, max_blocks = {max_blocks}");
 
             let mut rng = StdRng::seed_from_u64(seed);
-            let num_blocks = rng.gen_range(1..=max_blocks);
+            let num_blocks = rng.random_range(1..=max_blocks);
             let s = Snapshot::generate(&mut rng, num_blocks);
 
             let mut visited = HashSet::from([s.root_hash()]);
@@ -516,7 +516,7 @@ mod tests {
             println!("seed = {seed}, max_blocks = {max_blocks}");
 
             let mut rng = StdRng::seed_from_u64(seed);
-            let block_count = rng.gen_range(0..=max_blocks);
+            let block_count = rng.random_range(0..=max_blocks);
 
             let src = Snapshot::generate(&mut rng, block_count);
             let mut dst = Snapshot::default();

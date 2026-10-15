@@ -2,7 +2,7 @@ mod utils;
 
 use self::utils::{Bin, CountWrite, RngRead, check_eq, eventually};
 use anyhow::{Result, format_err};
-use rand::{Rng, distributions::Standard};
+use rand::distr::StandardUniform;
 use std::{
     collections::HashSet,
     fs::{self, File},
@@ -38,7 +38,7 @@ fn transfer_single_large_file() {
 
     // Create the file by A
     {
-        let mut src = RngRead(rand::thread_rng()).take(size as u64);
+        let mut src = RngRead(rand::rng()).take(size as u64);
         let mut dst = File::create(a.root().join(file_name)).unwrap();
         io::copy(&mut src, &mut dst).unwrap();
     }
@@ -119,7 +119,7 @@ fn concurrent_read_and_write_file(size: usize) {
     let file_name = "test.txt";
 
     let a_handle = thread::spawn(move || {
-        let mut src = RngRead(rand::thread_rng()).take(size as u64);
+        let mut src = RngRead(rand::rng()).take(size as u64);
         let mut dst = File::create(a.root().join(file_name)).unwrap();
         io::copy(&mut src, &mut dst).unwrap();
 
@@ -157,7 +157,7 @@ fn concurrent_read_and_delete_file() {
 
     // Create the file by A
     {
-        let mut src = RngRead(rand::thread_rng()).take(size as u64);
+        let mut src = RngRead(rand::rng()).take(size as u64);
         let mut dst = File::create(a.root().join(file_name)).unwrap();
         io::copy(&mut src, &mut dst).unwrap();
     }
@@ -220,7 +220,7 @@ fn relay() {
 
     // Create the file by A
     {
-        let mut src = RngRead(rand::thread_rng()).take(size as u64);
+        let mut src = RngRead(rand::rng()).take(size as u64);
         let mut dst = File::create(a.root().join(file_name)).unwrap();
         io::copy(&mut src, &mut dst).unwrap();
     }
@@ -238,13 +238,15 @@ fn relay() {
 #[cfg(feature = "vfs")]
 #[test]
 fn concurrent_update() {
+    use rand::RngExt;
+
     let (a, b) = setup();
 
     let file_name = "test.txt";
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     // Create a file with initial content by A
-    let content_0a: Vec<u8> = (&mut rng).sample_iter(Standard).take(32).collect();
+    let content_0a: Vec<u8> = (&mut rng).sample_iter(StandardUniform).take(32).collect();
     fs::write(a.root().join(file_name), &content_0a).unwrap();
 
     // Wait until B sees it
@@ -262,13 +264,13 @@ fn concurrent_update() {
         .unwrap();
 
     // Write to it concurrently by both replicas
-    let content_1a: Vec<u8> = (&mut rng).sample_iter(Standard).take(64).collect();
+    let content_1a: Vec<u8> = (&mut rng).sample_iter(StandardUniform).take(64).collect();
     let handle_a = thread::spawn(move || {
         file_a.write_all(&content_1a).unwrap();
         (file_a, content_1a)
     });
 
-    let content_1b: Vec<u8> = (&mut rng).sample_iter(Standard).take(64).collect();
+    let content_1b: Vec<u8> = (&mut rng).sample_iter(StandardUniform).take(64).collect();
     let handle_b = thread::spawn(move || {
         file_b.write_all(&content_1b).unwrap();
         (file_b, content_1b)
@@ -381,7 +383,7 @@ fn mirror() {
 
     // Create the file by A
     {
-        let mut src = RngRead(rand::thread_rng()).take(size as u64);
+        let mut src = RngRead(rand::rng()).take(size as u64);
         let mut dst = File::create(a.root().join(file_name)).unwrap();
         io::copy(&mut src, &mut dst).unwrap();
     }

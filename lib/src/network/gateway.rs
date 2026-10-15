@@ -380,8 +380,6 @@ impl Stacks {
         let sender = stack.side_channel_maker.make().into_sender();
         let task = scoped_task::spawn(
             async move {
-                use rand::Rng;
-
                 tracing::trace!("Hole punching started");
 
                 // Using RAII to log the message even when the task is aborted.
@@ -397,7 +395,7 @@ impl Stacks {
 
                 let addr = addr.socket_addr();
                 loop {
-                    let duration = rand::thread_rng().gen_range(5_000..15_000);
+                    let duration = rand::random_range(5_000..15_000);
                     let duration = Duration::from_millis(duration);
 
                     // Sleep first because the `connect` function that is normally called right

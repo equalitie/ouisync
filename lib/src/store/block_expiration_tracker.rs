@@ -448,8 +448,8 @@ mod test {
     use crate::crypto::sign::Keypair;
     use crate::protocol::Block;
     use futures_util::future;
-    use rand::Rng;
-    use rand::distributions::Standard;
+    use rand::RngExt;
+    use rand::distr::StandardUniform;
     use rand::seq::SliceRandom;
     use tempfile::TempDir;
     use tokio::task;
@@ -547,7 +547,7 @@ mod test {
         let count = 100;
 
         let (_base_dir, store) = setup().await;
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         store
             .set_block_expiration(
@@ -565,7 +565,10 @@ mod test {
         let write_keys = write_keys.clone();
 
         // Create blocks
-        let blocks: Vec<Block> = (&mut rng).sample_iter(Standard).take(count).collect();
+        let blocks: Vec<Block> = (&mut rng)
+            .sample_iter(StandardUniform)
+            .take(count)
+            .collect();
 
         let mut tx = store.begin_write().await.unwrap();
         let mut changeset = Changeset::new();

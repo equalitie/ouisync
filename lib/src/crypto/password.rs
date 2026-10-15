@@ -1,6 +1,5 @@
 use argon2::password_hash;
 use ouisync_macros::api;
-use rand::{Rng, rngs::OsRng};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use std::{array::TryFromSliceError, fmt, sync::Arc};
 use subtle::ConstantTimeEq;
@@ -75,7 +74,7 @@ impl PasswordSalt {
     }
 
     pub fn random() -> Self {
-        OsRng.r#gen()
+        rand::random()
     }
 }
 

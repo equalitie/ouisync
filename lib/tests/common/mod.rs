@@ -23,7 +23,7 @@ use ouisync::{
     },
 };
 use ouisync_tracing_fmt::Formatter;
-use rand::Rng;
+use rand::{Rng, RngExt};
 use state_monitor::StateMonitor;
 use std::{
     fmt, io,
@@ -658,7 +658,7 @@ pub(crate) async fn read_in_chunks(file: &mut File, chunk_size: usize) -> Result
 
 pub(crate) fn random_bytes(size: usize) -> Vec<u8> {
     let mut content = vec![0; size];
-    rand::thread_rng().fill(&mut content[..]);
+    rand::rng().fill(&mut content[..]);
     content
 }
 

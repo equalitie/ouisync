@@ -1,6 +1,6 @@
 use rand::{
     Rng,
-    distributions::{Distribution, Standard},
+    distr::{Distribution, StandardUniform},
 };
 
 define_byte_array_wrapper! {
@@ -14,7 +14,7 @@ define_byte_array_wrapper! {
     pub struct DatabaseId([u8; 16 /* 128 bit */]);
 }
 
-impl Distribution<DatabaseId> for Standard {
+impl Distribution<DatabaseId> for StandardUniform {
     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> DatabaseId {
         DatabaseId(self.sample(rng))
     }

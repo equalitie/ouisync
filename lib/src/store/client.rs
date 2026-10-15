@@ -426,7 +426,7 @@ mod tests {
         version_vector::VersionVector,
     };
     use futures_util::{StreamExt, TryStreamExt};
-    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rand::{RngExt, SeedableRng, rngs::StdRng};
 
     mod future {
         pub use futures_util::future::join;
@@ -494,7 +494,7 @@ mod tests {
         let remote_id = PublicKey::random();
         let secrets = WriteSecrets::random();
 
-        let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
+        let snapshot = Snapshot::generate(&mut rand::rng(), 1);
         let proof = Proof::new(
             remote_id,
             VersionVector::first(remote_id),
@@ -535,7 +535,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_root_node_with_existing_hash() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let (_base_dir, pool) = db::create_temp().await.unwrap();
         let store = Store::new(pool);
@@ -545,8 +545,8 @@ mod tests {
         let remote_id = PublicKey::generate(&mut rng);
 
         // Create one block locally
-        let block: Block = rng.r#gen();
-        let locator = rng.r#gen();
+        let block: Block = rng.random();
+        let locator = rng.random();
 
         let mut tx = store.begin_write().await.unwrap();
         let mut changeset = Changeset::new();
@@ -598,7 +598,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_bumped_root_node() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let (_base_dir, pool) = db::create_temp().await.unwrap();
         let store = Store::new(pool);
@@ -657,6 +657,7 @@ mod tests {
     mod receive_and_create_root_node {
         use super::*;
         use crate::protocol::Bump;
+        use rand::RngExt;
         use tokio::task;
 
         #[tokio::test]
@@ -688,15 +689,15 @@ mod tests {
 
             let local_id = PublicKey::generate(&mut rng);
 
-            let locator_0 = rng.r#gen();
-            let block_id_0_0 = rng.r#gen();
-            let block_id_0_1 = rng.r#gen();
+            let locator_0 = rng.random();
+            let block_id_0_0 = rng.random();
+            let block_id_0_1 = rng.random();
 
-            let locator_1 = rng.r#gen();
-            let block_1: Block = rng.r#gen();
+            let locator_1 = rng.random();
+            let block_1: Block = rng.random();
 
-            let locator_2 = rng.r#gen();
-            let block_id_2 = rng.r#gen();
+            let locator_2 = rng.random();
+            let block_id_2 = rng.random();
 
             // Insert one present and two missing, so the root block presence is `Some`
             let mut tx = store.begin_write().await.unwrap();
@@ -813,7 +814,7 @@ mod tests {
         let secrets = WriteSecrets::random();
         let remote_id = PublicKey::random();
 
-        let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
+        let snapshot = Snapshot::generate(&mut rand::rng(), 1);
 
         let mut writer = store.begin_client_write().await.unwrap();
         writer
@@ -875,7 +876,7 @@ mod tests {
     async fn save_child_nodes_with_missing_root_parent() {
         let (_base_dir, pool) = db::create_temp().await.unwrap();
         let store = Store::new(pool);
-        let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
+        let snapshot = Snapshot::generate(&mut rand::rng(), 1);
 
         // Try to save the inner nodes
         let (hash, inner_nodes) = snapshot.inner_sets().next().unwrap();
@@ -929,7 +930,7 @@ mod tests {
         let store = Store::new(pool);
         let secrets = WriteSecrets::random();
         let branch_id = PublicKey::random();
-        let snapshot = Snapshot::generate(&mut rand::thread_rng(), 5);
+        let snapshot = Snapshot::generate(&mut rand::rng(), 5);
 
         SnapshotWriter::begin(&store, &snapshot)
             .await
@@ -960,7 +961,7 @@ mod tests {
     async fn save_orphaned_block() {
         let (_base_dir, pool) = db::create_temp().await.unwrap();
         let store = Store::new(pool);
-        let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
+        let snapshot = Snapshot::generate(&mut rand::rng(), 1);
 
         let mut writer = store.begin_client_write().await.unwrap();
         for block in snapshot.blocks().values() {
@@ -976,7 +977,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_incomplete_snapshot_by_removing_blocks() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let (_base_dir, pool) = db::create_temp().await.unwrap();
         let store = Store::new(pool);
         let secrets = WriteSecrets::generate(&mut rng);

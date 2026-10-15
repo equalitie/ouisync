@@ -21,7 +21,7 @@ use crate::{
 };
 use futures_util::{TryStreamExt, future};
 use metrics::NoopRecorder;
-use rand::{Rng, SeedableRng, distributions::Standard, rngs::StdRng, seq::SliceRandom};
+use rand::{RngExt, SeedableRng, distr::StandardUniform, rngs::StdRng, seq::IndexedRandom};
 use state_monitor::StateMonitor;
 use tempfile::TempDir;
 use test_strategy::proptest;
@@ -30,7 +30,7 @@ use test_strategy::proptest;
 async fn does_not_delete_old_snapshot_until_new_snapshot_is_complete() {
     let (_base_dir, vault, secrets) = setup().await;
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let remote_id = PublicKey::generate(&mut rng);
 
@@ -87,14 +87,14 @@ async fn prune_snapshots_insert_present() {
     let remote_id = PublicKey::generate(&mut rng);
 
     // snapshot 1
-    let mut blocks = vec![rng.r#gen()];
+    let mut blocks = vec![rng.random()];
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&vault, remote_id, &snapshot, &secrets.write_keys).await;
     receive_block(&vault, &blocks[0].1).await;
 
     // snapshot 2 (insert new block)
-    blocks.push(rng.r#gen());
+    blocks.push(rng.random());
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&vault, remote_id, &snapshot, &secrets.write_keys).await;
@@ -115,14 +115,14 @@ async fn prune_snapshots_insert_missing() {
     let remote_id = PublicKey::generate(&mut rng);
 
     // snapshot 1
-    let mut blocks = vec![rng.r#gen()];
+    let mut blocks = vec![rng.random()];
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     receive_block(&index, &blocks[0].1).await;
 
     // snapshot 2 (insert new block)
-    blocks.push(rng.r#gen());
+    blocks.push(rng.random());
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
@@ -145,14 +145,14 @@ async fn prune_snapshots_update_from_present_to_present() {
     let remote_id = PublicKey::generate(&mut rng);
 
     // snapshot 1
-    let mut blocks = [rng.r#gen()];
+    let mut blocks = [rng.random()];
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     receive_block(&index, &blocks[0].1).await;
 
     // snapshot 2 (update the first block)
-    blocks[0].1 = rng.r#gen();
+    blocks[0].1 = rng.random();
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
@@ -173,14 +173,14 @@ async fn prune_snapshots_update_from_present_to_missing() {
     let remote_id = PublicKey::generate(&mut rng);
 
     // snapshot 1
-    let mut blocks = [rng.r#gen()];
+    let mut blocks = [rng.random()];
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     receive_block(&index, &blocks[0].1).await;
 
     // snapshot 2 (update the first block)
-    blocks[0].1 = rng.r#gen();
+    blocks[0].1 = rng.random();
     let snapshot = Snapshot::from_present_blocks(blocks);
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
@@ -204,14 +204,14 @@ async fn prune_snapshots_update_from_missing_to_missing() {
     let remote_id = PublicKey::generate(&mut rng);
 
     // snapshot 1
-    let mut blocks = [rng.r#gen()];
+    let mut blocks = [rng.random()];
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     // don't receive the block
 
     // snapshot 2 (update the first block)
-    blocks[0].1 = rng.r#gen();
+    blocks[0].1 = rng.random();
     let snapshot = Snapshot::from_present_blocks(blocks);
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
@@ -235,14 +235,14 @@ async fn prune_snapshots_keep_missing_and_insert_missing() {
     let remote_id = PublicKey::generate(&mut rng);
 
     // snapshot 1
-    let mut blocks = vec![rng.r#gen()];
+    let mut blocks = vec![rng.random()];
     let snapshot = Snapshot::from_present_blocks(blocks.clone());
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
     // don't receive the block
 
     // snapshot 2 (insert new block)
-    blocks.push(rng.r#gen());
+    blocks.push(rng.random());
     let snapshot = Snapshot::from_present_blocks(blocks);
 
     receive_snapshot(&index, remote_id, &snapshot, &secrets.write_keys).await;
@@ -289,7 +289,7 @@ async fn block_ids_remote() {
     let (_base_dir, vault, secrets) = setup().await;
 
     let branch_id = PublicKey::random();
-    let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
+    let snapshot = Snapshot::generate(&mut rand::rng(), 1);
 
     SnapshotWriter::begin(vault.store(), &snapshot)
         .await
@@ -315,7 +315,7 @@ async fn block_ids_excludes_missing_blocks() {
     let (_base_dir, vault, secrets) = setup().await;
 
     let branch_id = PublicKey::random();
-    let snapshot = Snapshot::generate(&mut rand::thread_rng(), 1);
+    let snapshot = Snapshot::generate(&mut rand::rng(), 1);
 
     SnapshotWriter::begin(vault.store(), &snapshot)
         .await
@@ -340,7 +340,7 @@ async fn block_ids_excludes_blocks_from_incomplete_snapshots() {
 
     // Create snapshot with two leaf nodes but receive only one of them.
     let snapshot = loop {
-        let snapshot = Snapshot::generate(&mut rand::thread_rng(), 2);
+        let snapshot = Snapshot::generate(&mut rand::rng(), 2);
         if snapshot.leaf_sets().count() > 1 {
             break snapshot;
         }
@@ -441,7 +441,7 @@ async fn block_ids_pagination() {
     let (_base_dir, vault, secrets) = setup().await;
 
     let branch_id = PublicKey::random();
-    let snapshot = Snapshot::generate(&mut rand::thread_rng(), 3);
+    let snapshot = Snapshot::generate(&mut rand::rng(), 3);
 
     SnapshotWriter::begin(vault.store(), &snapshot)
         .await
@@ -487,12 +487,14 @@ async fn sync_progress_case(block_count: usize, branch_count: usize, rng_seed: u
 
     let (_base_dir, vault, secrets) = setup().await;
 
-    let all_blocks: Vec<(Hash, Block)> =
-        (&mut rng).sample_iter(Standard).take(block_count).collect();
+    let all_blocks: Vec<(Hash, Block)> = (&mut rng)
+        .sample_iter(StandardUniform)
+        .take(block_count)
+        .collect();
     let branches: Vec<(PublicKey, Snapshot)> = (0..branch_count)
         .map(|_| {
-            let block_count = rng.gen_range(0..block_count);
-            let blocks = all_blocks.choose_multiple(&mut rng, block_count).cloned();
+            let block_count = rng.random_range(0..block_count);
+            let blocks = all_blocks.sample(&mut rng, block_count).cloned();
             let snapshot = Snapshot::from_present_blocks(blocks);
             let branch_id = PublicKey::generate(&mut rng);
 
@@ -554,7 +556,7 @@ async fn sync_progress_case(block_count: usize, branch_count: usize, rng_seed: u
 }
 
 async fn setup() -> (TempDir, Vault, WriteSecrets) {
-    setup_with_rng(&mut StdRng::from_entropy()).await
+    setup_with_rng(&mut rand::make_rng::<StdRng>()).await
 }
 
 async fn setup_with_rng(rng: &mut StdRng) -> (TempDir, Vault, WriteSecrets) {

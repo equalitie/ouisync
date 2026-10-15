@@ -41,7 +41,7 @@ anyhow = "1.0.100"
 assert_matches = "1.5"
 async-recursion = "1.2.0"
 async-trait = "0.1.92"
-btdht = { git = "https://github.com/equalitie/btdht.git", rev = "ad423e21faeb6a4549397f8c6050cb8e4470b77e" }
+btdht = { git = "https://github.com/equalitie/btdht.git", rev = "aeabfcc77998f030bc36f73a1dff107e8d3c1afe" }
 bytes = "1.11.0"
 camino = "1.2.1"
 chrono = { version = "0.4.42", default-features = false, features = ["clock"] }
@@ -63,7 +63,7 @@ pem = "3.0.6"
 pin-project-lite = "0.2.16"
 portable-atomic = "1.15.0"
 proptest = "1.9.0"
-rand = "0.8.5"
+rand = "0.10.3"
 rcgen = "0.14.5"
 reqwest = { version = "0.12.25", default-features = false }
 rmp = "0.8.14"

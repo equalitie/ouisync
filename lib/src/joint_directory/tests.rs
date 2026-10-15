@@ -1171,7 +1171,7 @@ async fn remove_non_empty_subdirectory() {
 }
 
 async fn setup<const N: usize>() -> (TempDir, [Branch; N]) {
-    setup_with_rng::<N>(StdRng::from_entropy()).await
+    setup_with_rng::<N>(rand::make_rng()).await
 }
 
 // Useful for debugging non-deterministic failures.

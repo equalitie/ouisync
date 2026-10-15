@@ -1,7 +1,8 @@
 mod utils;
 
+use rand::RngExt;
+
 use self::utils::Bin;
-use rand::Rng;
 use std::{
     fs::{self, File},
     io::{Read, Write},
@@ -11,7 +12,7 @@ use std::{
 fn create_random_file(path: &Path) -> Vec<u8> {
     const TEST_FILE_SIZE: usize = 3 * 65536;
     let mut content = vec![0u8; TEST_FILE_SIZE];
-    rand::thread_rng().fill(&mut content[..]);
+    rand::rng().fill(&mut content[..]);
     let mut file = File::create(path).unwrap();
     file.write_all(&content).unwrap();
     content

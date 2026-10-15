@@ -802,7 +802,7 @@ mod tests {
     };
     use futures_util::TryStreamExt;
     use metrics::NoopRecorder;
-    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rand::{RngExt, SeedableRng, rngs::StdRng};
     use state_monitor::StateMonitor;
     use tempfile::TempDir;
     use tokio::time;
@@ -898,8 +898,8 @@ mod tests {
         let (_base_dir, mut rng, inner, mut request_rx, secrets) = setup(None).await;
         let remote_id = PublicKey::generate(&mut rng);
 
-        let block: Block = rng.r#gen();
-        let locator: Hash = rng.r#gen();
+        let block: Block = rng.random();
+        let locator: Hash = rng.random();
 
         let snapshot = Snapshot::from_blocks([(locator, BlockState::Missing(block.id))]);
         let proof = Proof::new(
@@ -965,7 +965,7 @@ mod tests {
         let mut rng = if let Some(seed) = seed {
             StdRng::seed_from_u64(seed)
         } else {
-            StdRng::from_entropy()
+            StdRng::from_rng(&mut rand::rng())
         };
 
         let secrets = WriteSecrets::generate(&mut rng);
