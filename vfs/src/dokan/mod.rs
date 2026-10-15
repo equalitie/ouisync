@@ -13,12 +13,14 @@ use dokan_sys::win32::{
     FILE_OVERWRITE, FILE_OVERWRITE_IF, FILE_SUPERSEDE,
 };
 use ouisync_lib::{File, JointDirectory, JointEntryRef, Repository, path};
-use portable_atomic::{AtomicU64, Ordering};
 use std::{
     collections::{HashMap, hash_map},
     fmt,
     io::SeekFrom,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::UNIX_EPOCH,
 };
 // TODO: We should have this in the `deadlock` crate.
