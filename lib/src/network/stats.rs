@@ -1,12 +1,12 @@
 use ouisync_macros::api;
 use pin_project_lite::pin_project;
+use portable_atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 use std::{
     io::{self, IoSlice},
     pin::Pin,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
     },
     task::{Context, Poll, ready},
     time::Instant,

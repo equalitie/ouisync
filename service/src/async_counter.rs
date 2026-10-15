@@ -1,10 +1,10 @@
 use std::{
     pin::Pin,
-    sync::atomic::{AtomicUsize, Ordering},
     task::{Context, Poll, ready},
 };
 
 use pin_project_lite::pin_project;
+use portable_atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Notify, futures::Notified};
 
 /// Atomic counter that allows asynchronous waiting until it becomes non-zero.

@@ -1,7 +1,7 @@
 use super::{PeerSource, PublicRuntimeId, connection::ConnectionId, peer_addr::PeerAddr};
 use crate::crypto::sign::PublicKey;
+use portable_atomic::{AtomicU64, Ordering};
 use state_monitor::{MonitoredValue, StateMonitor};
-use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{Span, field};
 
 /// State monitor node for monitoring a network connection.

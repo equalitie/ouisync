@@ -12,13 +12,11 @@ use crate::{
     protocol::{BlockId, MultiBlockPresence},
     repository::monitor::TrafficMonitor,
 };
+use portable_atomic::{AtomicUsize, Ordering};
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
     fmt, iter, mem,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::{

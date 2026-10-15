@@ -2,10 +2,10 @@ use btdht::InfoHash;
 use metrics::{
     Counter, Gauge, Histogram, Key, KeyName, Level, Metadata, Recorder, SharedString, Unit,
 };
+use portable_atomic::{AtomicU64, Ordering};
 use state_monitor::{MonitoredValue, StateMonitor};
 use std::{
     fmt,
-    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 use tokio::{

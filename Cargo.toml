@@ -61,6 +61,7 @@ metrics-util = { version = "0.20.1", default-features = false }
 num_enum = { version = "0.7.5", default-features = false }
 pem = "3.0.6"
 pin-project-lite = "0.2.16"
+portable-atomic = "1.15.0"
 proptest = "1.9.0"
 rand = "0.8.5"
 rcgen = "0.14.5"

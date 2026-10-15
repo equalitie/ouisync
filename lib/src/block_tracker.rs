@@ -1,8 +1,6 @@
 use crate::protocol::BlockId;
-use std::{
-    collections::{HashMap, HashSet, hash_map::Entry},
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use portable_atomic::{AtomicUsize, Ordering};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 use tokio::{sync::mpsc, task};
 use tracing::{Instrument, Span};
 

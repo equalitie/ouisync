@@ -11,12 +11,10 @@
 /// both `send` and `recv` are cancelled, the value is lost.
 pub(crate) mod rendezvous {
 
+    use portable_atomic::{AtomicU8, Ordering};
     use std::{
         fmt,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicU8, Ordering},
-        },
+        sync::{Arc, Mutex},
     };
     use tokio::sync::Notify;
 

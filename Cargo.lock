@@ -1010,6 +1010,7 @@ checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
 name = "deadlock"
 version = "0.10.1"
 dependencies = [
+ "portable-atomic",
  "tokio",
  "tracing",
 ]
@@ -2961,6 +2962,7 @@ dependencies = [
  "parse-size",
  "patchbay",
  "pin-project-lite",
+ "portable-atomic",
  "proptest",
  "rand 0.8.5",
  "ref-cast",
@@ -3058,6 +3060,7 @@ dependencies = [
  "num_enum",
  "ouisync-macros",
  "pin-project-lite",
+ "portable-atomic",
  "proptest",
  "quinn",
  "rand 0.8.5",
@@ -3135,6 +3138,7 @@ dependencies = [
  "paranoid-android",
  "pem",
  "pin-project-lite",
+ "portable-atomic",
  "rand 0.8.5",
  "rcgen",
  "reqwest",
@@ -3456,9 +3460,9 @@ dependencies = [
 
 [[package]]
 name = "portable-atomic"
-version = "1.13.1"
+version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49"
+checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
 name = "portable-atomic-util"
@@ -4275,6 +4279,7 @@ name = "shadow-runner"
 version = "0.10.1"
 dependencies = [
  "anyhow",
+ "portable-atomic",
  "rand 0.8.5",
  "serde_json",
  "tempfile",

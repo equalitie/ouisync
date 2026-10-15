@@ -1,9 +1,9 @@
 use bytes::{Buf, BufMut};
 use ouisync_macros::api;
+use portable_atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     mem,
-    sync::atomic::{AtomicU64, Ordering},
 };
 use thiserror::Error;
 

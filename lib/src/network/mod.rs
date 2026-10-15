@@ -80,6 +80,7 @@ use net::{
     quic,
     unified::{Connection, ConnectionError},
 };
+use portable_atomic::{AtomicBool, Ordering};
 use scoped_task::ScopedAbortHandle;
 use slab::Slab;
 use state_monitor::StateMonitor;
@@ -87,10 +88,7 @@ use std::{
     collections::HashSet,
     io, mem,
     net::{SocketAddr, SocketAddrV4, SocketAddrV6},
-    sync::{
-        Arc, Weak,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Weak},
 };
 use thiserror::Error;
 use tokio::{

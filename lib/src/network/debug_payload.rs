@@ -6,8 +6,8 @@ pub(crate) use dummy_data::*;
 
 #[cfg(feature = "analyze-protocol")]
 mod meaningful_data {
+    use portable_atomic::{AtomicU64, Ordering};
     use serde::{Deserialize, Serialize};
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
