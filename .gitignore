@@ -20,6 +20,12 @@ bindings/dart/darwin/OuisyncService.framework/
 bindings/dart/darwin/ios/OuisyncService.framework/
 bindings/swift/OuisyncLib/OuisyncLibFFI.xcframework
 
+# Same for logtee — reproducible via logtee/dart/darwin/build-framework.sh.
+logtee/dart/darwin/*.dylib
+logtee/dart/darwin/ios/*.dylib
+logtee/dart/darwin/Logtee.framework/
+logtee/dart/darwin/ios/Logtee.framework/
+
 # This is a symbolic link created by {windows,linux}/CMakeLists.txt scripts
 # because git often doesn't support symlinks by default (depends on which OS,
 # git version and .gitconfig).

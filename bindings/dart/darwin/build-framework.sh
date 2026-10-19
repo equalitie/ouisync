@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 #
-# Repackage a built libouisync_service.dylib into OuisyncService.framework so that
-# an iOS Archive passes App Store validation (loose .dylib files are rejected; a
-# .framework bundle is accepted). The framework binary's install name becomes
-# @rpath/OuisyncService.framework/OuisyncService, which is what the Dart side opens
-# via DynamicLibrary.open (see bindings/dart/lib/src/server/bindings.dart).
+# Repackage a built .dylib into a <name>.framework so that an iOS Archive passes App
+# Store validation (loose .dylib files are rejected; a .framework bundle is accepted).
+# The framework binary's install name becomes @rpath/<name>.framework/<name>, which is
+# what the Dart side opens via DynamicLibrary.open (see
+# bindings/dart/lib/src/server/bindings.dart for the OuisyncService case).
 #
-# Usage: build-framework.sh <in.dylib> <out-dir> <ios|macos>
+# Usage: build-framework.sh <in.dylib> <out-dir> <ios|macos> [name]
 #   ios   -> flat framework (binary at bundle root)          -> iOS device slice
 #   macos -> versioned framework (Versions/A/...)            -> macOS universal slice
+#   name  -> defaults to OuisyncService
 #
 set -euo pipefail
 
-DYLIB="$1"; OUT="$2"; PLATFORM="$3"
-NAME=OuisyncService
+DYLIB="$1"; OUT="$2"; PLATFORM="$3"; NAME="${4:-OuisyncService}"
 FW="$OUT/$NAME.framework"
 
 rm -rf "$FW"
@@ -42,7 +42,7 @@ fi
 install_name_tool -id "@rpath/$NAME.framework/$NAME" "$BIN"
 
 /usr/libexec/PlistBuddy \
-  -c "Add :CFBundleIdentifier string net.ouisync.OuisyncService" \
+  -c "Add :CFBundleIdentifier string net.ouisync.$NAME" \
   -c "Add :CFBundleName string $NAME" \
   -c "Add :CFBundleExecutable string $NAME" \
   -c "Add :CFBundlePackageType string FMWK" \
