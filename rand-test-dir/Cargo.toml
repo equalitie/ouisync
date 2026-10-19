@@ -1,0 +1,16 @@
+[package]
+name = "ouisync-rand-test-dir"
+description = "generator of directories with random content for ouisync tests"
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+rand = { workspace = true }
+
+[lints]
+workspace = true
