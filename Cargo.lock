@@ -2940,6 +2940,7 @@ dependencies = [
  "num_enum",
  "ouisync-macros",
  "ouisync-net",
+ "ouisync-rand-test-dir",
  "ouisync-tracing-fmt",
  "parse-size",
  "patchbay",

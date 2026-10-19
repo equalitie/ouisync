@@ -13,7 +13,7 @@ use rand::{
 };
 
 /// In-memory representation of a directory with its content.
-#[derive(Default, Eq, PartialEq, Debug)]
+#[derive(Default, Clone, Eq, PartialEq, Debug)]
 pub struct Directory {
     pub entries: BTreeMap<String, Entry>,
 }
@@ -22,8 +22,9 @@ impl Directory {
     /// Generate random directory with its content.
     pub fn generate(rng: &mut dyn Rng, options: GenerateOptions) -> Self {
         let mut dir = Self::default();
+        let num_files = rng.random_range(options.min_files..=options.max_files);
 
-        for _ in 0..options.num_files {
+        for _ in 0..num_files {
             let mut level = 0;
             let mut current_dir = &mut dir;
 
@@ -170,7 +171,8 @@ impl fmt::Display for Directory {
 /// Options for `Directory::generate`
 #[derive(Clone, Copy, Debug)]
 pub struct GenerateOptions {
-    pub num_files: usize,
+    pub min_files: usize,
+    pub max_files: usize,
     pub min_file_size: usize,
     pub max_file_size: usize,
     pub max_depth: usize,
@@ -181,7 +183,8 @@ pub struct GenerateOptions {
 impl Default for GenerateOptions {
     fn default() -> Self {
         Self {
-            num_files: 10,
+            min_files: 1,
+            max_files: 10,
             min_file_size: 8,
             max_file_size: 1024 * 1024,
             max_depth: 3,
@@ -239,7 +242,7 @@ fn join<'a>(iter: impl IntoIterator<Item = &'a str>) -> String {
     })
 }
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct File {
     size: usize,
     seed: u64,
@@ -250,9 +253,17 @@ impl File {
     pub fn reader(&self) -> impl Read {
         BufReader::new(RngReader(StdRng::seed_from_u64(self.seed)).take(self.size as u64))
     }
+
+    pub fn len(&self) -> usize {
+        self.size
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.size == 0
+    }
 }
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub enum Entry {
     Directory(Directory),
     File(File),
