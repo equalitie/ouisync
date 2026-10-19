@@ -6,6 +6,7 @@ mod macros;
 pub(crate) mod dht;
 pub(crate) mod dump;
 pub(crate) mod progress;
+pub(crate) mod swarm;
 pub(crate) mod sync_watch;
 mod wait_map;
 
