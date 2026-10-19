@@ -1,6 +1,7 @@
 use super::{Env, Proto, actor};
 use camino::{Utf8Path, Utf8PathBuf};
 use ouisync::{Error, Repository, StoreError};
+use rand::RngExt;
 use std::{
     cmp::Ordering,
     collections::HashSet,
@@ -16,7 +17,8 @@ use tokio::{
 use tracing::{Instrument, instrument};
 
 pub(crate) struct SyncSwarmCase {
-    pub num_peers: usize,
+    pub min_peers: usize,
+    pub max_peers: usize,
     pub num_repos: usize,
     pub min_files_per_repo: usize,
     pub max_files_per_repo: usize,
@@ -27,7 +29,8 @@ pub(crate) struct SyncSwarmCase {
 impl Default for SyncSwarmCase {
     fn default() -> Self {
         Self {
-            num_peers: 2,
+            min_peers: 2,
+            max_peers: 2,
             num_repos: 1,
             min_files_per_repo: 1,
             max_files_per_repo: 1,
@@ -38,9 +41,11 @@ impl Default for SyncSwarmCase {
 }
 
 impl SyncSwarmCase {
-    pub fn num_peers(self, value: usize) -> Self {
+    pub fn num_peers(self, value: impl RandomUsize) -> Self {
+        let (min, max) = value.into_range();
         Self {
-            num_peers: value,
+            min_peers: min,
+            max_peers: max,
             ..self
         }
     }
@@ -73,13 +78,16 @@ impl SyncSwarmCase {
     pub fn run(&self) {
         use ouisync_rand_test_dir as rtd;
 
-        assert!(self.num_peers > 1);
+        assert!(self.min_peers > 1);
+        assert!(self.min_peers <= self.max_peers);
         assert!(self.num_repos > 0);
 
         let mut env = Env::new();
-        let barrier = Arc::new(Barrier::new(self.num_peers));
-
         let mut rng = rand::rng();
+
+        let num_peers = rng.random_range(self.min_peers..=self.max_peers);
+        let barrier = Arc::new(Barrier::new(num_peers));
+
         let contents: Vec<_> = (0..self.num_repos)
             .map(|_| {
                 rtd::Directory::generate(
@@ -95,9 +103,8 @@ impl SyncSwarmCase {
             })
             .collect();
 
-        for actor_index in 0..self.num_peers {
+        for actor_index in 0..num_peers {
             env.actor(&format!("actor-{actor_index}"), {
-                let num_peers = self.num_peers;
                 let contents = contents.clone();
                 let barrier = barrier.clone();
 
@@ -160,9 +167,7 @@ impl SyncSwarmCase {
             });
         }
 
-        fn walk_files<'a>(
-            root: &'a rtd::Directory,
-        ) -> impl Iterator<Item = (Utf8PathBuf, &'a rtd::File)> {
+        fn walk_files(root: &rtd::Directory) -> impl Iterator<Item = (Utf8PathBuf, &rtd::File)> {
             root.walk()
                 .filter_map(|(path, entry)| match entry {
                     rtd::Entry::File(file) => Some((path, file)),
