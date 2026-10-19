@@ -1,7 +1,8 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, btree_map},
     fmt,
     io::{BufReader, Read},
+    iter,
 };
 
 use rand::{
@@ -19,7 +20,7 @@ pub struct Directory {
 
 impl Directory {
     /// Generate random directory with its content.
-    pub fn generate(rng: &mut dyn Rng, options: GenerationOptions) -> Self {
+    pub fn generate(rng: &mut dyn Rng, options: GenerateOptions) -> Self {
         let mut dir = Self::default();
 
         for _ in 0..options.num_files {
@@ -90,15 +91,23 @@ impl Directory {
         dir
     }
 
+    /// Builder-style method to add new entry to this directory.
     pub fn add(mut self, name: String, entry: Entry) -> Self {
         self.entries.insert(name, entry);
         self
     }
 
+    /// Returns an iterator that recursively iterates over all entries of this directory.
+    pub fn walk(&self) -> Walk<'_> {
+        Walk {
+            stack: vec![(self.entries.iter(), "")],
+        }
+    }
+
     fn random_name(
         &self,
         rng: &mut dyn Rng,
-        options: &GenerationOptions,
+        options: &GenerateOptions,
         max_extension_len: usize,
     ) -> String {
         let extension = if max_extension_len > 0 {
@@ -136,33 +145,31 @@ impl Directory {
 
 impl fmt::Display for Directory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fn format(f: &mut fmt::Formatter<'_>, dir: &Directory, level: usize) -> fmt::Result {
-            for (name, entry) in &dir.entries {
-                for _ in 0..2 * level {
-                    write!(f, " ")?;
-                }
+        for (path, entry) in self.walk() {
+            let level = path.chars().filter(|c| *c == '/').count();
+            let name = path.rsplit_once('/').map(|(_, name)| name).unwrap_or(&path);
 
-                match entry {
-                    Entry::File(File { size, .. }) => {
-                        writeln!(f, "📄 {name} ({})", DisplaySize(*size))?
-                    }
-                    Entry::Directory(dir) => {
-                        writeln!(f, "📁 {name}")?;
-                        format(f, dir, level + 1)?;
-                    }
-                }
+            for _ in 0..2 * level {
+                write!(f, " ")?;
             }
 
-            Ok(())
+            match entry {
+                Entry::File(File { size, .. }) => {
+                    writeln!(f, "📄 {name} ({})", DisplaySize(*size))?
+                }
+                Entry::Directory(_) => {
+                    writeln!(f, "📁 {name}")?;
+                }
+            }
         }
 
-        format(f, self, 0)
+        Ok(())
     }
 }
 
 /// Options for `Directory::generate`
 #[derive(Clone, Copy, Debug)]
-pub struct GenerationOptions {
+pub struct GenerateOptions {
     pub num_files: usize,
     pub min_file_size: usize,
     pub max_file_size: usize,
@@ -171,7 +178,7 @@ pub struct GenerationOptions {
     pub max_name_len: usize,
 }
 
-impl Default for GenerationOptions {
+impl Default for GenerateOptions {
     fn default() -> Self {
         Self {
             num_files: 10,
@@ -182,6 +189,54 @@ impl Default for GenerationOptions {
             max_name_len: 16,
         }
     }
+}
+
+/// Iterator returned by [`Directory::walk`].
+pub struct Walk<'a> {
+    stack: Vec<(btree_map::Iter<'a, String, Entry>, &'a str)>,
+}
+
+impl<'a> Iterator for Walk<'a> {
+    type Item = (String, &'a Entry);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let (entries, _) = self.stack.last_mut()?;
+            match entries.next() {
+                Some((name, entry @ Entry::File(_))) => {
+                    let path = join(
+                        self.stack
+                            .iter()
+                            .map(|(_, name)| *name)
+                            .chain(iter::once(name.as_str())),
+                    );
+                    return Some((path, entry));
+                }
+                Some((name, entry @ Entry::Directory(Directory { entries }))) => {
+                    self.stack.push((entries.iter(), name));
+                    let path = join(self.stack.iter().map(|(_, name)| *name));
+                    return Some((path, entry));
+                }
+                None => {
+                    self.stack.pop();
+                }
+            };
+        }
+    }
+}
+
+fn join<'a>(iter: impl IntoIterator<Item = &'a str>) -> String {
+    iter.into_iter().fold(String::new(), |mut m, e| {
+        if m.is_empty() {
+            m.reserve(e.len());
+        } else {
+            m.reserve(e.len() + 1);
+            m.push('/');
+        }
+
+        m.push_str(e);
+        m
+    })
 }
 
 #[derive(Eq, PartialEq, Debug)]
@@ -268,6 +323,12 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn display() {
+        let dir = Directory::generate(&mut rand::rng(), GenerateOptions::default());
+        println!("{dir}");
     }
 
     fn read_all(file: &File, chunk_size: usize) -> Vec<u8> {
