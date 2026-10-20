@@ -375,7 +375,7 @@ impl quinn::AsyncUdpSocket for CustomUdpSocket {
     ) -> Poll<io::Result<usize>> {
         loop {
             ready!(self.io.poll_recv_ready(cx))?;
-            if let Ok(res) = self.io.try_io(Interest::READABLE, || {
+            match self.io.try_io(Interest::READABLE, || {
                 let res = self.state.recv((&self.io).into(), bufs, metas);
 
                 if let Ok(msg_count) = res {
@@ -384,7 +384,18 @@ impl quinn::AsyncUdpSocket for CustomUdpSocket {
 
                 res
             }) {
-                return Poll::Ready(Ok(res));
+                Ok(res) => return Poll::Ready(Ok(res)),
+                // `WouldBlock` means the readiness we just observed was stale (the socket isn't
+                // actually readable yet) - `try_io` already cleared it, so looping back to
+                // `poll_recv_ready` is correct: it'll wait for the next real readiness event.
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                // Any other error (e.g. the network interface going down while the app is
+                // backgrounded) is a real failure, not a spurious wakeup. `try_io` doesn't clear
+                // readiness for these, so looping back to `poll_recv_ready` would immediately
+                // observe the socket as "ready" again and re-enter `recv` synchronously,
+                // spinning this task at 100% CPU forever instead of ever yielding. Propagate it
+                // instead so the caller can handle/recreate the connection.
+                Err(e) => return Poll::Ready(Err(e)),
             }
         }
     }
