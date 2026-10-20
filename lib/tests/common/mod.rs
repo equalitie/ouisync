@@ -438,7 +438,7 @@ where
 pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) -> Option<Payload> {
     match time::timeout(test_timeout(), rx.recv()).await {
         Ok(event) => {
-            debug!(?event);
+            trace!(?event);
 
             match event {
                 Ok(event) => Some(event.payload),
@@ -512,7 +512,7 @@ pub(crate) async fn check_file_version_content(
             error @ (Error::Store(StoreError::BlockNotFound)
             | Error::Store(StoreError::LocatorNotFound)),
         ) => {
-            warn!(path, ?error, "read failed");
+            trace!(path, ?error, "read failed");
             return false;
         }
         Err(error) => {
@@ -522,7 +522,7 @@ pub(crate) async fn check_file_version_content(
     };
 
     if actual_content == expected_content {
-        debug!(path, "content matches");
+        trace!(path, "content matches");
         true
     } else {
         warn!(path, "content does not match");
@@ -535,7 +535,7 @@ pub(crate) async fn open_file_version(
     path: &str,
     branch_id: Option<&PublicKey>,
 ) -> Option<File> {
-    debug!(path, "opening");
+    trace!(path, "opening");
 
     let result = if let Some(branch_id) = branch_id {
         repo.open_file_version(path, branch_id).await
@@ -555,7 +555,7 @@ pub(crate) async fn open_file_version(
             | Error::Store(StoreError::BlockNotFound)
             | Error::Store(StoreError::LocatorNotFound)),
         ) => {
-            warn!(path, ?branch_id, ?error, "open failed");
+            trace!(path, ?branch_id, ?error, "open failed");
             return None;
         }
         Err(error) => {
@@ -564,7 +564,7 @@ pub(crate) async fn open_file_version(
         }
     };
 
-    debug!(path, branch.id = ?file.branch().id(), "opened");
+    trace!(path, branch.id = ?file.branch().id(), "opened");
 
     Some(file)
 }

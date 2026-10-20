@@ -115,6 +115,16 @@ fn sync_many_peers_one_repo_large() {
 }
 
 #[test]
+fn sync_random_swarm() {
+    SyncSwarmCase::default()
+        .num_peers(2..=8)
+        .num_repos(1)
+        .num_files_per_repo(1..=10)
+        .file_size(SMALL_SIZE..=LARGE_SIZE)
+        .run()
+}
+
+#[test]
 fn sync_directory_with_file() {
     sync_dump_case(
         dump::Directory::new().add("food", dump::Directory::new().add("pizza.jpg", vec![])),

@@ -141,7 +141,7 @@ impl JointDirectory {
     }
 
     /// Looks up a specific version of a file.
-    #[instrument(skip(self), err(Debug))]
+    #[instrument(skip(self))]
     pub fn lookup_version<'a>(
         &'a self,
         name: &'a str,

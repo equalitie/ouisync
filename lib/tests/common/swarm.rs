@@ -1,6 +1,6 @@
 use super::{Env, Proto, actor};
 use camino::{Utf8Path, Utf8PathBuf};
-use ouisync::{Error, Repository, StoreError};
+use ouisync::{Error, Repository, StorageSize, StoreError};
 use rand::RngExt;
 use std::{
     cmp::Ordering,
@@ -83,8 +83,8 @@ impl SyncSwarmCase {
         assert!(self.num_repos > 0);
 
         let mut env = Env::new();
-        let mut rng = rand::rng();
 
+        let mut rng = rand::rng();
         let num_peers = rng.random_range(self.min_peers..=self.max_peers);
         let barrier = Arc::new(Barrier::new(num_peers));
 
@@ -102,6 +102,23 @@ impl SyncSwarmCase {
                 )
             })
             .collect();
+
+        info!(
+            num_peers,
+            num_repos = contents.len(),
+            max_files_per_repo = contents
+                .iter()
+                .map(|dir| walk_files(dir).count())
+                .max()
+                .unwrap_or(0),
+            max_file_size = %StorageSize::from_bytes(
+                contents
+                    .iter()
+                    .filter_map(|dir| walk_files(dir).map(|(_, file)| file.len()).max())
+                    .max()
+                    .unwrap_or(0) as u64
+            )
+        );
 
         for actor_index in 0..num_peers {
             env.actor(&format!("actor-{actor_index}"), {
@@ -139,11 +156,10 @@ impl SyncSwarmCase {
                             .step_by(num_peers)
                         {
                             async {
-                                let path = Utf8Path::new(&path);
                                 if let Some(parent) = path.parent() {
                                     repo.create_directory(parent).await.unwrap();
                                 }
-                                let mut file = repo.create_file(path).await.unwrap();
+                                let mut file = repo.create_file(&path).await.unwrap();
                                 write(test_file, &mut file).await;
                                 file.flush().await.unwrap();
                             }
@@ -221,7 +237,7 @@ impl SyncSwarmCase {
                 loop {
                     let n = match actual.read(&mut actual_buffer).await {
                         Ok(0) => {
-                            debug!(%path, "content matches");
+                            trace!(%path, "content matches");
                             break true;
                         }
                         Ok(n) => n,
@@ -233,7 +249,7 @@ impl SyncSwarmCase {
                             error @ (Error::Store(StoreError::BlockNotFound)
                             | Error::Store(StoreError::LocatorNotFound)),
                         ) => {
-                            warn!(%path, ?error, "read failed");
+                            trace!(%path, ?error, "read failed");
                             break false;
                         }
                         Err(error) => {
