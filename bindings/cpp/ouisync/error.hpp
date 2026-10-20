@@ -3,7 +3,7 @@
 #include <boost/system/system_error.hpp>
 #include <ouisync/data.hpp>
 #include <ouisync/lib_api.hpp>
-
+#include <exception>
 namespace ouisync::error {
 
 /**

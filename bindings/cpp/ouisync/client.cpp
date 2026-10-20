@@ -430,7 +430,7 @@ static
 LocalEndpoint read_local_endpoint(const boost::filesystem::path& config_dir_path) {
     boost::filesystem::path config_path = config_dir_path / "local_endpoint.conf";
     std::ifstream config_file;
-    config_file.open(config_path);
+    config_file.open(config_path.string());
 
     if (!config_file.is_open()) {
         throw_error(error::connect, "Could not open file " + config_path.string());

@@ -72,7 +72,7 @@ FetchContent_MakeAvailable(msgpack)
 FetchContent_Declare(
     Corrosion
     GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
-    GIT_TAG v0.5.2
+    GIT_TAG v0.6.0
 )
 FetchContent_MakeAvailable(Corrosion)
 
@@ -95,9 +95,18 @@ corrosion_import_crate(
     MANIFEST_PATH ${OUISYNC_SRC_ROOT}/Cargo.toml
     # Can also create a dynamic library if crate type is set to `cdylib`.
     CRATE_TYPES staticlib
+    # Note: the target created has `_` instead of `-`
     CRATES ouisync-service
     FEATURES ${OUISYNC_CARGO_FEATURES}
 )
+
+if (ANDROID AND ANDROID_LLVM_TRIPLE)
+    # When building for Android, this helps linking with C/C++ based libraries.
+    # In particular the `-llog` library required by `if-watch`.
+    corrosion_add_target_rustflags(ouisync_service
+        "-Clink-arg=--target=${ANDROID_LLVM_TRIPLE}"
+    )
+endif()
 
 # The `cpp_ouisync_common` library is mainly needed for the client and service
 # libraries to share the same error categories, which are static globals. If
