@@ -16,7 +16,10 @@ use std::{
     io,
     net::SocketAddr,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     task::{Context, Poll},
 };
 use tokio::sync::{
@@ -37,6 +40,12 @@ const DISABLE_SEGMENTATION_OFFLOAD: bool = false;
 //------------------------------------------------------------------------------
 pub struct Connector {
     endpoint: quinn::Endpoint,
+    // Set by the underlying `CustomUdpSocket` when it hits a fatal (non-`WouldBlock`) recv
+    // error, e.g. the network interface going down while the app is backgrounded. Once that
+    // happens, quinn's endpoint driver treats the socket as unusable and nothing in quinn itself
+    // ever rebinds it, so callers must check this and recreate the whole stack (socket +
+    // endpoint) to recover - see `Gateway`/`Stacks` in ouisync-app's network layer.
+    socket_died: Arc<AtomicBool>,
 }
 
 impl Connector {
@@ -58,6 +67,12 @@ impl Connector {
     // return error)
     pub fn close(&self) {
         self.endpoint.close(quinn::VarInt::from_u32(0), &[]);
+    }
+
+    /// Whether the underlying UDP socket has hit a fatal error and stopped working. The
+    /// endpoint/connector need to be recreated (via a fresh call to `configure`) to recover.
+    pub fn is_dead(&self) -> bool {
+        self.socket_died.load(Ordering::Acquire)
     }
 }
 
@@ -158,6 +173,8 @@ pub fn configure(
     let custom_socket = Arc::new(CustomUdpSocket::bind(bind_addr, options)?);
     let side_channel_maker = custom_socket.clone().side_channel_maker();
 
+    let socket_died = custom_socket.died.clone();
+
     let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
         quinn::EndpointConfig::default(),
         Some(server_config),
@@ -171,6 +188,7 @@ pub fn configure(
 
     let connector = Connector {
         endpoint: endpoint.clone(),
+        socket_died,
     };
     let acceptor = Acceptor {
         endpoint,
@@ -332,6 +350,7 @@ struct CustomUdpSocket {
     io: tokio::net::UdpSocket,
     state: quinn::udp::UdpSocketState,
     side_channel_tx: broadcast::Sender<Packet>,
+    died: Arc<AtomicBool>,
 }
 
 impl CustomUdpSocket {
@@ -345,6 +364,7 @@ impl CustomUdpSocket {
             io: tokio::net::UdpSocket::from_std(socket)?,
             state,
             side_channel_tx: broadcast::channel(MAX_SIDE_CHANNEL_PENDING_PACKETS).0,
+            died: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -374,7 +394,11 @@ impl quinn::AsyncUdpSocket for CustomUdpSocket {
         metas: &mut [quinn::udp::RecvMeta],
     ) -> Poll<io::Result<usize>> {
         loop {
-            ready!(self.io.poll_recv_ready(cx))?;
+            if let Err(e) = ready!(self.io.poll_recv_ready(cx)) {
+                self.died.store(true, Ordering::Release);
+                return Poll::Ready(Err(e));
+            }
+
             match self.io.try_io(Interest::READABLE, || {
                 let res = self.state.recv((&self.io).into(), bufs, metas);
 
@@ -394,8 +418,13 @@ impl quinn::AsyncUdpSocket for CustomUdpSocket {
                 // readiness for these, so looping back to `poll_recv_ready` would immediately
                 // observe the socket as "ready" again and re-enter `recv` synchronously,
                 // spinning this task at 100% CPU forever instead of ever yielding. Propagate it
-                // instead so the caller can handle/recreate the connection.
-                Err(e) => return Poll::Ready(Err(e)),
+                // instead so the caller can handle/recreate the connection. Mark the socket dead
+                // so the owner knows this endpoint needs to be rebuilt - quinn never does this on
+                // its own once its driver sees a fatal error.
+                Err(e) => {
+                    self.died.store(true, Ordering::Release);
+                    return Poll::Ready(Err(e));
+                }
             }
         }
     }
