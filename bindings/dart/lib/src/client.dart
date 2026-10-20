@@ -27,6 +27,10 @@ class Client {
   var _nextMessageId = 0;
   final _responses = <int, Completer<Object?>>{};
   final _notifications = <int, StreamSink<Object?>>{};
+  // The request that established each entry in `_notifications`, kept around so a
+  // subscription can be transparently replayed against a new connection after the
+  // underlying socket is lost (e.g. iOS tearing down sockets while backgrounded).
+  final _requests = <int, Request>{};
 
   Client._(this._connector);
 
@@ -176,6 +180,7 @@ class Client {
         if (message.payload is ResponseNone) {
           // Stream closed by the service.
           final sink = _notifications.remove(message.id);
+          _requests.remove(message.id);
           if (sink != null) {
             sink.close();
           }
@@ -221,9 +226,8 @@ class Client {
       completer.completeError(error, st);
     }
 
-    for (final sink in _notifications.takeValues()) {
-      sink.addError(error, st);
-    }
+    _state = _Disconnected();
+    _resubscribeAll();
   }
 
   void _receiveDone() {
@@ -231,11 +235,30 @@ class Client {
       completer.completeError(SocketException.closed());
     }
 
-    for (final sink in _notifications.takeValues()) {
-      unawaited(sink.close());
-    }
-
     _state = _Disconnected();
+    _resubscribeAll();
+  }
+
+  // Losing the connection (e.g. the OS tearing down sockets while the app is backgrounded)
+  // must not permanently kill already-active subscriptions: replay each one against the new
+  // connection instead of erroring out its sink, so streams keep working transparently once
+  // reconnected. `_onSubscriptionListen` re-registers the sink in `_notifications` as part of
+  // resending the subscribe request, so clear the map first to avoid it looking already
+  // subscribed.
+  void _resubscribeAll() {
+    final toResubscribe = Map.of(_notifications);
+    _notifications.clear();
+
+    for (final entry in toResubscribe.entries) {
+      final request = _requests[entry.key];
+      if (request != null) {
+        unawaited(_onSubscriptionListen(entry.key, request, entry.value));
+      } else {
+        // Should not happen (every entry in `_notifications` has a matching `_requests`
+        // entry), but don't leak the sink if it ever does.
+        entry.value.addError(StateError('lost subscription request'));
+      }
+    }
   }
 
   Future<void> _onSubscriptionListen(
@@ -244,17 +267,20 @@ class Client {
     StreamSink<Object?> sink,
   ) async {
     _notifications[id] = sink;
+    _requests[id] = request;
 
     try {
       await _invokeWithMessageId(id, request);
     } catch (e, st) {
       _notifications.remove(id);
+      _requests.remove(id);
       sink.addError(e, st);
     }
   }
 
   Future<void> _onSubscriptionCancel(int id) async {
     _notifications.remove(id);
+    _requests.remove(id);
 
     while (true) {
       final state = _state;
