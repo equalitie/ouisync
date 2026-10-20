@@ -349,16 +349,41 @@ class _Connector {
 
   Future<(Socket, Stream<Uint8List>)> connect() async {
     var delay = minDelay;
+    var attempt = 0;
 
     while (true) {
+      attempt += 1;
       try {
-        final socket = await Socket.connect(InternetAddress.loopbackIPv4, port);
+        final socket = await Socket.connect(
+          InternetAddress.loopbackIPv4,
+          port,
+        ).timeout(const Duration(seconds: 5));
         final stream = socket.asBroadcastStream();
 
         await _authenticate(stream, socket);
 
+        // ignore: avoid_print
+        print(
+          'ouisync.Client: connected to 127.0.0.1:$port on attempt $attempt',
+        );
         return (socket, stream);
-      } on SocketException {
+      } on SocketException catch (e) {
+        // ignore: avoid_print
+        print(
+          'ouisync.Client: connect attempt $attempt to 127.0.0.1:$port '
+          'failed: $e, retrying in $delay',
+        );
+        delay = _minDuration(delay * 2, maxDelay);
+        await Future.delayed(delay);
+      } catch (e) {
+        // Anything other than SocketException (e.g. a timeout, or `_authenticate` failing for
+        // some non-socket reason) was previously left uncaught here, silently breaking the
+        // retry loop instead of retrying like every other connection failure does.
+        // ignore: avoid_print
+        print(
+          'ouisync.Client: connect attempt $attempt to 127.0.0.1:$port '
+          'failed with unexpected error: $e, retrying in $delay',
+        );
         delay = _minDuration(delay * 2, maxDelay);
         await Future.delayed(delay);
       }
