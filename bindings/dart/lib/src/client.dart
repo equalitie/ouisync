@@ -69,6 +69,19 @@ class Client {
     return controller.stream.cast();
   }
 
+  /// Forcibly drops the current connection (if any) and reconnects, replaying any currently
+  /// active subscriptions against the fresh connection. The connection already does this
+  /// automatically when it detects it was lost (see `_receiveError`/`_receiveDone`); this is a
+  /// manual escape hatch for callers that suspect the connection is wedged in some way that
+  /// wasn't detected on its own (e.g. a long stretch of silence after the app resumes from the
+  /// background) and want to force a clean reconnect without waiting for the next failed call.
+  Future<void> reset() async {
+    // ignore: avoid_print
+    print('ouisync.Client: reset() requested');
+    await _disconnect();
+    _resubscribeAll();
+  }
+
   Future<void> close() async {
     while (true) {
       final state = _state;
@@ -249,6 +262,12 @@ class Client {
     final toResubscribe = Map.of(_notifications);
     _notifications.clear();
 
+    // ignore: avoid_print
+    print(
+      'ouisync.Client: connection lost, resubscribing ${toResubscribe.length} '
+      'active subscription(s): ${toResubscribe.keys.toList()}',
+    );
+
     for (final entry in toResubscribe.entries) {
       final request = _requests[entry.key];
       if (request != null) {
@@ -271,9 +290,13 @@ class Client {
 
     try {
       await _invokeWithMessageId(id, request);
+      // ignore: avoid_print
+      print('ouisync.Client: subscription $id (re)established: $request');
     } catch (e, st) {
       _notifications.remove(id);
       _requests.remove(id);
+      // ignore: avoid_print
+      print('ouisync.Client: subscription $id failed to (re)establish: $e');
       sink.addError(e, st);
     }
   }
