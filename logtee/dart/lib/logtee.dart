@@ -2,6 +2,7 @@ import 'dart:ffi';
 import 'dart:io';
 
 import 'package:ffi/ffi.dart';
+import 'package:path/path.dart' show join;
 
 class Logtee {
   Pointer<Void> _handle = nullptr;
@@ -51,20 +52,37 @@ class _Bindings {
 }
 
 DynamicLibrary _defaultLib() {
-  // the default library name depends on the operating system
-  String name() {
-    final base = 'logtee';
+  final env = Platform.environment;
 
-    if (Platform.isLinux || Platform.isAndroid) {
-      return 'lib$base.so';
-    } else if (Platform.isWindows) {
-      return '$base.dll';
-    } else if (Platform.isIOS || Platform.isMacOS) {
-      return 'lib$base.dylib';
-    } else {
-      throw Exception('unsupported platform ${Platform.operatingSystem}');
-    }
+  if (env.containsKey('LOGTEE_LIB')) {
+    // user provided library path
+    return DynamicLibrary.open(env['LOGTEE_LIB']!);
   }
 
-  return DynamicLibrary.open(name());
+  if (Platform.isMacOS && env.containsKey('FLUTTER_TEST')) {
+    // guess the location of the framework built by darwin/build-framework.sh
+    return DynamicLibrary.open(
+      join('ouisync', 'logtee', 'dart', 'darwin', 'Logtee.framework', 'Logtee'),
+    );
+  }
+
+  if (Platform.isIOS || Platform.isMacOS) {
+    // In the packaged app the native core is embedded as Logtee.framework (a loose
+    // .dylib is rejected by App Store validation). dyld resolves this @rpath-relative
+    // path to the framework binary under the app's Frameworks dir. See
+    // bindings/dart/lib/src/server/bindings.dart for the analogous OuisyncService case.
+    return DynamicLibrary.open('Logtee.framework/Logtee');
+  }
+
+  // the default library name depends on the operating system
+  final String name;
+  if (Platform.isLinux || Platform.isAndroid) {
+    name = 'liblogtee.so';
+  } else if (Platform.isWindows) {
+    name = 'logtee.dll';
+  } else {
+    throw Exception('unsupported platform ${Platform.operatingSystem}');
+  }
+
+  return DynamicLibrary.open(name);
 }

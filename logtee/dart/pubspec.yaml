@@ -10,6 +10,7 @@ dependencies:
     sdk: flutter
   # plugin_platform_interface: ^2.0.2
   ffi: ^2.1.4
+  path: ^1.8.0
 
 dev_dependencies:
   flutter_test:
@@ -41,8 +42,9 @@ flutter:
         ffiPlugin: true
       windows:
         ffiPlugin: true
-      # TODO: add ios and macos support
-      # ios:
-      #   ffiPlugin: true
-      # macos:
-      #   ffiPlugin: true
+      ios:
+        ffiPlugin: true
+        sharedDarwinSource: true
+      macos:
+        ffiPlugin: true
+        sharedDarwinSource: true
