@@ -46,7 +46,8 @@ fn main() -> Result<()> {
     } else {
         rand::random()
     };
-    println!("SEED: {seed}");
+
+    eprintln!("SEED: {seed}");
 
     let (temp_dir, data_dir) = if let Ok(data_dir) = env::var("SHADOW_DATA") {
         let data_dir = PathBuf::from(data_dir);
