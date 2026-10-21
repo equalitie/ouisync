@@ -12,7 +12,7 @@ use clap::Parser;
 use common::{DEFAULT_REPO, Env, Proto, actor, progress::ProgressReporter, sync_watch};
 use metrics::{Counter, Gauge, Recorder};
 use ouisync::{Access, AccessMode, File, Network, Repository, Stats};
-use rand::{Rng, SeedableRng, distributions::Standard, rngs::StdRng};
+use rand::{RngCore, SeedableRng, rngs::StdRng};
 use std::{
     fmt,
     fs::OpenOptions,
@@ -114,7 +114,9 @@ fn main() -> ExitCode {
             let network = actor::create_network(proto).await;
 
             let recorder = actor::get_default_recorder();
-            let progress_monitor = ProgressMonitor::new(&recorder);
+            let progress_monitor = progress_reporter
+                .as_ref()
+                .map(|_| ProgressMonitor::new(&recorder));
             let throughput_monitor = ThroughputMonitor::new(&recorder);
 
             // Create the repo
@@ -164,10 +166,18 @@ fn main() -> ExitCode {
                 }
             };
 
+            let run_progress_monitor = async {
+                if let Some(progress_monitor) = progress_monitor {
+                    progress_monitor.run(&repo).await
+                } else {
+                    future::pending().await
+                }
+            };
+
             select! {
                 _ = run_sync => (),
                 _ = run_progress_reporter => (),
-                _ = progress_monitor.run(&repo) => (),
+                _ = run_progress_monitor => (),
                 _ = throughput_monitor.run(&network) => (),
             }
 
@@ -339,12 +349,8 @@ impl RandomChunks {
         let chunk_size = CHUNK_SIZE.min(self.remaining);
         self.remaining -= chunk_size;
 
-        chunk.clear();
-        chunk.extend(
-            (&mut self.rng)
-                .sample_iter::<u8, _>(Standard)
-                .take(chunk_size),
-        );
+        chunk.resize(chunk_size, 0);
+        self.rng.fill_bytes(&mut chunk[..]);
 
         true
     }
