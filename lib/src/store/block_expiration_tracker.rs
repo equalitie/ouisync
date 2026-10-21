@@ -411,7 +411,7 @@ async fn set_as_missing_if_expired(
     let mut branches: HashSet<PublicKey> = HashSet::default();
 
     for block_id in &block_ids {
-        let parent_hashes: Vec<_> = leaf_node::set_missing_if_expired(&mut tx, block_id)
+        let parent_hashes: HashSet<_> = leaf_node::set_missing_if_expired(&mut tx, block_id)
             .try_collect()
             .await?;
 

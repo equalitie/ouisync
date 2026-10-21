@@ -27,7 +27,7 @@ pub(crate) struct ClientWriter {
     db: db::WriteTransaction,
     block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
     quota: Option<StorageSize>,
-    summary_updates: Vec<Hash>,
+    summary_updates: HashSet<Hash>,
     new_blocks: Vec<BlockId>,
     block_id_cache: BlockIdCache,
     block_id_cache_updates: Vec<(Hash, BlockId)>,
@@ -45,7 +45,7 @@ impl ClientWriter {
             db,
             block_expiration_tracker,
             quota,
-            summary_updates: Vec::new(),
+            summary_updates: HashSet::new(),
             new_blocks: Vec::new(),
             block_id_cache,
             block_id_cache_updates: Vec::new(),
@@ -76,7 +76,7 @@ impl ClientWriter {
             )
             .await?;
 
-            self.summary_updates.push(node.proof.hash);
+            self.summary_updates.insert(node.proof.hash);
         }
 
         Ok(status)
@@ -120,7 +120,7 @@ impl ClientWriter {
         inner_node::inherit_summaries(&mut self.db, &mut nodes).await?;
 
         if inner_node::save_all(&mut self.db, &nodes, &parent_hash).await? > 0 {
-            self.summary_updates.push(parent_hash);
+            self.summary_updates.insert(parent_hash);
         }
 
         Ok(statuses)
@@ -175,7 +175,7 @@ impl ClientWriter {
         }
 
         if leaf_node::save_all(&mut self.db, &nodes.into_missing(), &parent_hash).await? > 0 {
-            self.summary_updates.push(parent_hash);
+            self.summary_updates.insert(parent_hash);
         }
 
         Ok(LeafNodesStatus { new_block_offers })
@@ -187,7 +187,7 @@ impl ClientWriter {
             let mut updates = leaf_node::set_present(&mut self.db, &block.id);
 
             while let Some(update) = updates.try_next().await? {
-                self.summary_updates.push(update.parent);
+                self.summary_updates.insert(update.parent);
                 self.block_id_cache_updates
                     .push((update.encoded_locator, block.id));
                 updated = true;
@@ -256,9 +256,6 @@ impl ClientWriter {
     }
 
     async fn finalize_snapshots(&mut self) -> Result<FinalizeStatus, Error> {
-        self.summary_updates.sort();
-        self.summary_updates.dedup();
-
         let states =
             index::update_summaries(&mut self.db, mem::take(&mut self.summary_updates)).await?;
 
