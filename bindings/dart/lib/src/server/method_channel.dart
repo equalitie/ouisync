@@ -17,7 +17,8 @@ class MethodChannelServer extends Server {
   }
 
   @override
-  Future<void> initLog() => _channel.invokeMethod('initLog');
+  Future<void> initLog({String? logFilePath}) =>
+      _channel.invokeMethod('initLog');
 
   @override
   Future<void> start() => _channel.invokeMethod<void>('start', {

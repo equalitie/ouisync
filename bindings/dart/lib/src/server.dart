@@ -24,8 +24,10 @@ abstract class Server {
     }
   }
 
-  /// Initializes logging in the underlying Ouisync service.
-  Future<void> initLog();
+  /// Initializes logging in the underlying Ouisync service. If [logFilePath] is given, log
+  /// events are also appended to that file (in addition to the platform's usual output, e.g.
+  /// logcat on Android). Has no effect on Android, which already logs to logcat directly.
+  Future<void> initLog({String? logFilePath});
 
   /// Starts the server. After this function completes the server is ready to accept client
   /// connections.

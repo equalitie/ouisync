@@ -31,13 +31,18 @@ typedef _StopServiceC = Void Function(
 typedef InitLog = void Function();
 typedef _InitLogC = Void Function();
 
+typedef InitLogToFile = void Function(Pointer<Char>);
+typedef _InitLogToFileC = Void Function(Pointer<Char>);
+
 class Bindings {
   Bindings(DynamicLibrary library)
       : startService = library
             .lookupFunction<_StartServiceC, StartService>('start_service'),
         stopService =
             library.lookupFunction<_StopServiceC, StopService>('stop_service'),
-        initLog = library.lookupFunction<_InitLogC, InitLog>('init_log');
+        initLog = library.lookupFunction<_InitLogC, InitLog>('init_log'),
+        initLogToFile = library.lookupFunction<_InitLogToFileC, InitLogToFile>(
+            'init_log_to_file');
 
   /// Bidings instance that uses the default library.
   static Bindings instance = Bindings(_defaultLib());
@@ -45,6 +50,7 @@ class Bindings {
   final StartService startService;
   final StopService stopService;
   final InitLog initLog;
+  final InitLogToFile initLogToFile;
 }
 
 DynamicLibrary _defaultLib() {
