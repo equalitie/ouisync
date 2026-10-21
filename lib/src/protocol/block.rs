@@ -102,8 +102,8 @@ impl fmt::Debug for Block {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct BlockContent(Box<[u8]>);
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct BlockContent(#[serde(with = "serde_bytes")] Box<[u8]>);
 
 impl BlockContent {
     pub fn new() -> Self {
@@ -219,5 +219,26 @@ mod test_utils {
             (any::<BlockContent>(), any::<BlockNonce>().no_shrink())
                 .prop_map(|(content, nonce)| Self::new(content, nonce))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_content_serialize_deserialize() {
+        let mut orig = BlockContent::new();
+        orig.write(
+            0,
+            "hello world | 哈囉，世界 | こんにちは、世界 | مرحبا يا عالم | שלום עולם".as_bytes(),
+        );
+
+        let serialized_actual = bincode::serialize(&orig).unwrap();
+        let serialized_expected = include_bytes!("test_data/block_content.bincode");
+        assert_eq!(serialized_actual, serialized_expected);
+
+        let deserialized: BlockContent = bincode::deserialize(serialized_expected).unwrap();
+        assert_eq!(deserialized, orig);
     }
 }
