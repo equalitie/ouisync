@@ -1,6 +1,9 @@
 //! Operations on the whole index (or its subset) as opposed to individual nodes.
 
-use std::collections::HashMap;
+use std::{
+    collections::{HashMap, HashSet},
+    mem,
+};
 
 use super::{error::Error, inner_node, root_node};
 use crate::{crypto::Hash, db, future::TryStreamExt, protocol::NodeState};
@@ -24,26 +27,33 @@ pub(super) async fn parent_exists(conn: &mut db::Connection, hash: &Hash) -> Res
 /// Returns the affected snapshots and their states.
 pub(super) async fn update_summaries(
     tx: &mut db::WriteTransaction,
-    mut nodes: Vec<Hash>,
+    nodes: HashSet<Hash>,
 ) -> Result<HashMap<Hash, NodeState>, Error> {
+    let mut curr = nodes;
+    let mut next = HashSet::new();
+
     let mut states = HashMap::default();
 
-    while let Some(hash) = nodes.pop() {
-        let summary = inner_node::compute_summary(tx, &hash).await?;
-        let old_len = nodes.len();
+    while !curr.is_empty() {
+        for hash in curr.drain() {
+            let summary = inner_node::compute_summary(tx, &hash).await?;
+            let old_len = next.len();
 
-        // First try inner nodes ...
-        inner_node::update_summaries(tx, &hash, &summary)
-            .try_collect_into(&mut nodes)
-            .await?;
+            // First try inner nodes ...
+            inner_node::update_summaries(tx, &hash, &summary)
+                .try_collect_into(&mut next)
+                .await?;
 
-        if nodes.len() == old_len {
-            // ... no hits. Let's try root nodes.
-            let state = root_node::update_summaries(tx, &hash, summary).await?;
-            let summary = summary.with_state(state);
+            if next.len() == old_len {
+                // ... no hits. Let's try root nodes.
+                let state = root_node::update_summaries(tx, &hash, summary).await?;
+                let summary = summary.with_state(state);
 
-            states.insert(hash, summary.state);
+                states.insert(hash, summary.state);
+            }
         }
+
+        mem::swap(&mut curr, &mut next);
     }
 
     Ok(states)
@@ -356,7 +366,7 @@ mod tests {
         pool.close().await.unwrap();
 
         async fn update_summaries_and_approve(tx: &mut db::WriteTransaction, hash: Hash) {
-            for (hash, state) in update_summaries(tx, vec![hash]).await.unwrap() {
+            for (hash, state) in update_summaries(tx, [hash].into()).await.unwrap() {
                 match state {
                     NodeState::Complete => {
                         root_node::approve(tx, &hash).try_consume().await.unwrap();
@@ -401,7 +411,7 @@ mod tests {
         .unwrap();
 
         if snapshot.leaf_count() == 0 {
-            update_summaries(&mut tx, vec![root_node.proof.hash])
+            update_summaries(&mut tx, [root_node.proof.hash].into())
                 .await
                 .unwrap();
         }
@@ -416,7 +426,9 @@ mod tests {
             leaf_node::save_all(&mut tx, &nodes.clone().into_missing(), parent_hash)
                 .await
                 .unwrap();
-            update_summaries(&mut tx, vec![*parent_hash]).await.unwrap();
+            update_summaries(&mut tx, [*parent_hash].into())
+                .await
+                .unwrap();
         }
 
         // Check that initially all blocks are missing
