@@ -100,4 +100,42 @@ void main() {
       await server.stop();
     }
   });
+
+  test('reports the service as unresponsive when nothing is listening '
+      'anymore', () async {
+    final configPath = '${temp.path}/config';
+
+    final server = Server.create(configPath: configPath);
+    await server.start();
+
+    final session = await Session.create(configPath: configPath);
+
+    try {
+      // An active subscription is what drives reconnect attempts once the connection drops -
+      // an idle client only reconnects lazily on its next call.
+      final subscription = session.rootStateMonitor.changes.listen((_) {});
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      // Unlike the "subscription survives..." test above, don't bring the service back up right
+      // away: this simulates the native service process/thread dying outright (observed after
+      // some iOS background/foreground cycles) rather than just having its socket torn down, so
+      // every reconnect attempt keeps getting refused until something actively restarts it.
+      await server.stop();
+
+      await expectLater(
+        session.serviceUnresponsive.first.timeout(const Duration(seconds: 10)),
+        completes,
+      );
+
+      // Bring the service back so the client's in-flight reconnect attempt can succeed; without
+      // this, `session.close()` below would hang forever waiting for a reconnect that can never
+      // complete.
+      await server.start();
+
+      await subscription.cancel();
+    } finally {
+      await session.close();
+      await server.stop();
+    }
+  });
 }

@@ -29,6 +29,16 @@ class Session extends api.Session {
   /// active subscriptions. See `Client.reset`.
   Future<void> resetConnection() => client.reset();
 
+  /// Fires when the connection to the local service has been refused for several consecutive
+  /// attempts in a row, suggesting the native service process itself is gone (not just that its
+  /// sockets were torn down) and needs to be restarted rather than just reconnected to. See
+  /// `Client.unresponsive`.
+  Stream<void> get serviceUnresponsive => client.unresponsive;
+
+  /// Fires each time the connection to the local service is re-established after having been
+  /// lost, regardless of why. See `Client.reconnected`.
+  Stream<void> get reconnected => client.reconnected;
+
   /// Try to gracefully close connections to peers then close the session.
   Future<void> close() => client.close();
 }

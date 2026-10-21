@@ -21,6 +21,9 @@ import 'message_codec.dart';
 
 class Client {
   final _Connector _connector;
+  final _unresponsiveController = StreamController<void>.broadcast();
+  final _reconnectedController = StreamController<void>.broadcast();
+  var _everConnected = false;
 
   _SocketState _state = const _Disconnected();
 
@@ -42,15 +45,36 @@ class Client {
     final (port, authKey) =
         await _readLocalEndpoint('$configPath/local_endpoint.conf');
 
+    late final Client client;
     final connector = _Connector(
       port: port,
       authKey: authKey,
       minDelay: minReconnectDelay,
       maxDelay: maxReconnectDelay,
+      onUnresponsive: () => client._unresponsiveController.add(null),
     );
 
-    return Client._(connector);
+    client = Client._(connector);
+    return client;
   }
+
+  /// Fires whenever the connection to the local service has failed to (re)establish for several
+  /// consecutive attempts in a row. A `ConnectionRefused` at this point means there's nothing
+  /// listening on the service's port at all (as opposed to e.g. it being merely slow to respond),
+  /// which can happen if the native service process/thread died outright (observed after some
+  /// iOS background/foreground cycles) rather than just having its sockets torn down - in which
+  /// case no amount of retrying the same connection will ever succeed; the service itself needs
+  /// to be restarted. See `Session.serviceUnresponsive`.
+  Stream<void> get unresponsive => _unresponsiveController.stream;
+
+  /// Fires each time the connection to the local service is (re)established after having been
+  /// lost. Note this says nothing about whether the service process itself is the same one as
+  /// before (see `unresponsive`/`Session.serviceUnresponsive`) - after e.g. a full service
+  /// restart, in-memory state built up against the old process (such as a repository's cached
+  /// directory listing) can be stale even though every RPC call keeps working fine, since nothing
+  /// about the RPC protocol itself indicates that. Callers that keep such state should treat this
+  /// as a signal to refresh it, rather than relying solely on change notifications.
+  Stream<void> get reconnected => _reconnectedController.stream;
 
   Future<Response> invoke(Request request) async {
     final id = _nextMessageId++;
@@ -91,6 +115,8 @@ class Client {
           await state.future;
         case _Disconnected():
           _state = _Closed();
+          await _unresponsiveController.close();
+          await _reconnectedController.close();
           return;
         case _Connected():
           final completer = Completer();
@@ -101,6 +127,8 @@ class Client {
 
           _state = _Closed();
           completer.complete();
+          await _unresponsiveController.close();
+          await _reconnectedController.close();
           return;
         case _Closed():
           return;
@@ -147,6 +175,11 @@ class Client {
 
           _state = _Connected(socket, subscription);
           completer.complete();
+
+          if (_everConnected) {
+            _reconnectedController.add(null);
+          }
+          _everConnected = true;
         case _Connected():
           return state.socket;
         case _Closed():
@@ -339,12 +372,18 @@ class _Connector {
   final List<int> authKey;
   final Duration minDelay;
   final Duration maxDelay;
+  final void Function()? onUnresponsive;
+
+  // Number of consecutive failed attempts after which we consider the service likely gone
+  // rather than just slow, and report it via `onUnresponsive` (once per stretch of failures).
+  static const _unresponsiveThreshold = 5;
 
   const _Connector({
     required this.port,
     required this.authKey,
     this.minDelay = const Duration(milliseconds: 50),
     this.maxDelay = const Duration(seconds: 1),
+    this.onUnresponsive,
   });
 
   Future<(Socket, Stream<Uint8List>)> connect() async {
@@ -373,6 +412,9 @@ class _Connector {
           'ouisync.Client: connect attempt $attempt to 127.0.0.1:$port '
           'failed: $e, retrying in $delay',
         );
+        if (attempt == _unresponsiveThreshold) {
+          onUnresponsive?.call();
+        }
         delay = _minDuration(delay * 2, maxDelay);
         await Future.delayed(delay);
       } catch (e) {
@@ -384,6 +426,9 @@ class _Connector {
           'ouisync.Client: connect attempt $attempt to 127.0.0.1:$port '
           'failed with unexpected error: $e, retrying in $delay',
         );
+        if (attempt == _unresponsiveThreshold) {
+          onUnresponsive?.call();
+        }
         delay = _minDuration(delay * 2, maxDelay);
         await Future.delayed(delay);
       }
