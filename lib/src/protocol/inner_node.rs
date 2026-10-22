@@ -31,6 +31,10 @@ impl InnerNode {
             ..self
         }
     }
+
+    pub fn with_summary(self, summary: Summary) -> Self {
+        Self { summary, ..self }
+    }
 }
 
 impl Hashable for InnerNode {

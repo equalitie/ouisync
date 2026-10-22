@@ -51,12 +51,15 @@ impl<'a> SnapshotWriter<'a> {
     }
 
     pub async fn save_inner_nodes(mut self) -> Self {
-        for (_, nodes) in self.snapshot.inner_sets() {
-            self.writer
-                .save_inner_nodes(nodes.clone().into())
-                .await
-                .unwrap();
-        }
+        self.writer
+            .save_inner_nodes(
+                self.snapshot
+                    .inner_sets()
+                    .map(|(_, nodes)| nodes.clone().into())
+                    .collect(),
+            )
+            .await
+            .unwrap();
 
         self
     }

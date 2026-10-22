@@ -20,7 +20,11 @@ use crate::{
     },
     repository,
 };
-use std::{collections::HashSet, mem, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    mem,
+    sync::Arc,
+};
 
 /// Store operations for the client side of the sync protocol.
 pub(crate) struct ClientWriter {
@@ -82,48 +86,118 @@ impl ClientWriter {
         Ok(status)
     }
 
+    // Precondition: `node_sets` must be topologically sorted, that is, for any two node sets `M`,
+    // `N` from `node_sets` if the parent hash of `M` is present in `N`, then `N` must be sorted
+    // before `M`.
+    //
+    // Returns a map where each entry corresponds to one set from `node_sets` where the key is the
+    // parent hash of the node set and value is a vec of statuses, one for each non-orphan,
+    // non-empty node of the node set.
     pub async fn save_inner_nodes(
         &mut self,
-        nodes: CacheHash<InnerNodes>,
-    ) -> Result<Vec<InnerNodeStatus>, Error> {
-        let parent_hash = nodes.hash();
+        node_sets: Vec<CacheHash<InnerNodes>>,
+    ) -> Result<HashMap<Hash, Vec<InnerNodeStatus>>, Error> {
+        // TODO: assert the precondition holds (consider using `debug_assert`).
 
-        if !index::parent_exists(&mut self.db, &parent_hash).await? {
-            tracing::warn!("parent node not found");
-            return Ok(Vec::new());
-        }
+        // Hashes that correspond either to nodes that are already stored or to nodes from
+        // `node_sets` whose parent hashes are valid. Used later to filter out orphaned nodes.
+        let mut valid_hashes = HashSet::new();
+        for nodes in &node_sets {
+            let parent_hash = nodes.hash();
 
-        let mut statuses = Vec::with_capacity(nodes.len());
-        let nodes = nodes.into_inner();
-
-        for (_, remote_node) in &nodes {
-            // Ignore empty nodes (the peer shouldn't have sent us one anyway)
-            if remote_node.is_empty() {
-                continue;
-            }
-
-            let local_node = inner_node::load(&mut self.db, &remote_node.hash).await?;
-            let local_node_summary = local_node
-                .map(|node| node.summary)
-                .unwrap_or(Summary::INCOMPLETE);
-
-            if local_node_summary.is_outdated(&remote_node.summary) {
-                statuses.push(InnerNodeStatus {
-                    hash: remote_node.hash,
-                    local_block_presence: local_node_summary.block_presence,
-                    remote_block_presence: remote_node.summary.block_presence,
-                });
+            if valid_hashes.contains(&parent_hash) {
+                valid_hashes.extend(nodes.iter().map(|(_, node)| node.hash));
+            } else if index::parent_exists(&mut self.db, &parent_hash).await? {
+                valid_hashes.insert(parent_hash);
+                valid_hashes.extend(nodes.iter().map(|(_, node)| node.hash));
+            } else {
+                tracing::warn!("parent node not found: {parent_hash:?}");
             }
         }
 
-        let mut nodes = nodes.into_incomplete();
-        inner_node::inherit_summaries(&mut self.db, &mut nodes).await?;
+        // Load existing nodes with the same hashes
+        let hashes: Vec<_> = node_sets
+            .iter()
+            .flat_map(|nodes| nodes.iter().map(|(_, node)| node.hash))
+            .collect();
+        let local_nodes = inner_node::load(&mut self.db, &hashes).await?;
 
-        if inner_node::save_all(&mut self.db, &nodes, &parent_hash).await? > 0 {
+        // Compute statuses
+        let status_sets = node_sets
+            .iter()
+            .map(|nodes| {
+                let statuses = if valid_hashes.contains(&nodes.hash()) {
+                    nodes
+                        .iter()
+                        // Ignore empty nodes (the peer shouldn't have sent them anyway)
+                        .filter(|(_, node)| !node.is_empty())
+                        .filter_map(|(_, remote_node)| {
+                            let local_node_summary = local_nodes
+                                .get(&remote_node.hash)
+                                .map(|node| node.summary)
+                                .unwrap_or(Summary::INCOMPLETE);
+
+                            if local_node_summary.is_outdated(&remote_node.summary) {
+                                Some(InnerNodeStatus {
+                                    hash: remote_node.hash,
+                                    local_block_presence: local_node_summary.block_presence,
+                                    remote_block_presence: remote_node.summary.block_presence,
+                                })
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                } else {
+                    // We need to return statuses for every node set that was passed into this
+                    // function, including the orphaned ones. Return empty statuses in that case.
+                    Vec::new()
+                };
+
+                (nodes.hash(), statuses)
+            })
+            .collect();
+
+        // Save the nodes to the store
+        let nodes: Vec<_> = node_sets
+            .iter()
+            .filter(|nodes| valid_hashes.contains(&nodes.hash()))
+            .flat_map(|nodes| {
+                let parent_hash = nodes.hash();
+                let local_nodes = &local_nodes;
+
+                nodes
+                    .iter()
+                    // Ignore empty nodes (the peer shouldn't have sent them anyway)
+                    .filter(|(_, node)| !node.is_empty())
+                    .map(move |(bucket, node)| {
+                        // Inherit the summary from the already stored node with the same hash, if any,
+                        // otherwise use `INCOMPLETE`.
+                        //
+                        // Note this is hack/workaround due to the database schema currently not being
+                        // fully normalized. That is, when there is a node that has more than one
+                        // parent, we actually represent it as multiple records, each with distinct
+                        // parent_hash. The summaries of those records need to be identical (because
+                        // they conceptually represent a single node) so we need to do this to copy them
+                        // manually. Ideally, we should change the db schema to be normalized, which in
+                        // this case would mean to have only one record per node and to represent the
+                        // parent-child relation using a separate db table (many-to-many relation).
+                        let summary = local_nodes
+                            .get(&node.hash)
+                            .map(|node| node.summary)
+                            .unwrap_or(Summary::INCOMPLETE);
+
+                        (parent_hash, bucket, node.with_summary(summary))
+                    })
+            })
+            .collect();
+        let affected_parent_hashes = inner_node::save_many(&mut self.db, &nodes).await?;
+
+        for parent_hash in affected_parent_hashes {
             self.summary_updates.insert(parent_hash);
         }
 
-        Ok(statuses)
+        Ok(status_sets)
     }
 
     pub async fn save_leaf_nodes(
@@ -828,24 +902,31 @@ mod tests {
             .unwrap();
         writer.commit().await.unwrap();
 
-        for (hash, inner_nodes) in snapshot.inner_sets() {
+        {
             let mut writer = store.begin_client_write().await.unwrap();
             writer
-                .save_inner_nodes(inner_nodes.clone().into())
+                .save_inner_nodes(
+                    snapshot
+                        .inner_sets()
+                        .map(|(_, nodes)| nodes.clone().into())
+                        .collect(),
+                )
                 .await
                 .unwrap();
             writer.commit().await.unwrap();
 
-            assert!(
-                !store
-                    .acquire_read()
-                    .await
-                    .unwrap()
-                    .load_inner_nodes(hash)
-                    .await
-                    .unwrap()
-                    .is_empty()
-            );
+            for (hash, _) in snapshot.inner_sets() {
+                assert!(
+                    !store
+                        .acquire_read()
+                        .await
+                        .unwrap()
+                        .load_inner_nodes(hash)
+                        .await
+                        .unwrap()
+                        .is_empty()
+                );
+            }
         }
 
         for (hash, leaf_nodes) in snapshot.leaf_sets() {
@@ -876,24 +957,30 @@ mod tests {
         let snapshot = Snapshot::generate(&mut rand::rng(), 1);
 
         // Try to save the inner nodes
-        let (hash, inner_nodes) = snapshot.inner_sets().next().unwrap();
         let mut writer = store.begin_client_write().await.unwrap();
-        let statuses = writer
-            .save_inner_nodes(inner_nodes.clone().into())
+        let status_sets = writer
+            .save_inner_nodes(
+                snapshot
+                    .inner_sets()
+                    .map(|(_, nodes)| nodes.clone().into())
+                    .collect(),
+            )
             .await
             .unwrap();
-        assert!(statuses.is_empty());
+        assert!(status_sets.values().all(|statuses| statuses.is_empty()));
         writer.commit().await.unwrap();
 
         // The orphaned inner nodes were not written to the db.
-        let inner_nodes = store
-            .acquire_read()
-            .await
-            .unwrap()
-            .load_inner_nodes(hash)
-            .await
-            .unwrap();
-        assert!(inner_nodes.is_empty());
+        for (hash, _) in snapshot.inner_sets() {
+            let inner_nodes = store
+                .acquire_read()
+                .await
+                .unwrap()
+                .load_inner_nodes(hash)
+                .await
+                .unwrap();
+            assert!(inner_nodes.is_empty());
+        }
 
         // Try to save the leaf nodes
         let (hash, leaf_nodes) = snapshot.leaf_sets().next().unwrap();

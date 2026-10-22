@@ -22,7 +22,11 @@ use crate::{
     repository::{Vault, monitor::TrafficMonitor},
     store::{ClientReaderMut, ClientWriter},
 };
-use std::{collections::HashSet, iter, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    iter,
+    time::Instant,
+};
 use tokio::{select, sync::mpsc};
 use tracing::Level;
 
@@ -154,8 +158,6 @@ impl Inner {
 
         loop {
             let start = Instant::now();
-
-            blocks.clear();
 
             for response in rx.recv_iter().await {
                 count += 1;
@@ -316,13 +318,13 @@ impl Inner {
                 Ok(proof) => proof,
                 Err(ProofError) => {
                     tracing::trace!("Invalid proof");
-                    return Ok(());
+                    continue;
                 }
             };
 
             // Ignore branches with empty version vectors because they have no content yet.
             if proof.version_vector.is_empty() {
-                return Ok(());
+                continue;
             }
 
             let hash = proof.hash;
@@ -357,18 +359,30 @@ impl Inner {
         writer: &mut ClientWriter,
         responses: &mut Vec<InnerNodesResponse>,
     ) -> Result<()> {
+        let mut node_sets = Vec::with_capacity(responses.len());
+        // TODO: do we still need this?
+        let mut debug_payloads = HashMap::with_capacity(responses.len());
+
         for response in responses.drain(..) {
-            let hash = response.nodes.hash();
-            let statuses = writer.save_inner_nodes(response.nodes).await?;
+            debug_payloads.insert(response.nodes.hash(), response.debug);
+            node_sets.push(response.nodes);
+        }
+
+        let status_sets = writer.save_inner_nodes(node_sets).await?;
+
+        for (parent_hash, statuses) in status_sets {
+            // `unwrap` is ok because there is an entry in `debug_payloads` for each parent_hash in
+            // `node_sets` (by construction).
+            let debug_payload = debug_payloads.get(&parent_hash).unwrap();
 
             self.request_tracker.success(
-                MessageKey::ChildNodes(hash),
+                MessageKey::ChildNodes(parent_hash),
                 statuses
                     .into_iter()
                     .map(|status| {
                         CandidateRequest::new(Request::ChildNodes(
                             status.hash,
-                            response.debug.follow_up(),
+                            debug_payload.follow_up(),
                         ))
                         .variant(RequestVariant::new(
                             status.local_block_presence,
@@ -421,7 +435,7 @@ impl Inner {
     ) -> Result<()> {
         for response in responses.drain(..) {
             let Some(offer_state) = reader.load_block_offer_state(&response.block_id).await? else {
-                return Ok(());
+                continue;
             };
 
             // IMPORTANT: Make sure the request tracker is processed before the block tracker to ensure
