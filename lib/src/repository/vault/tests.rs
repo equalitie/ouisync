@@ -360,10 +360,15 @@ async fn block_ids_excludes_blocks_from_incomplete_snapshots() {
         .save_root_node(proof, &MultiBlockPresence::None)
         .await
         .unwrap();
-
-    for (_, nodes) in snapshot.inner_sets() {
-        writer.save_inner_nodes(nodes.clone().into()).await.unwrap();
-    }
+    writer
+        .save_inner_nodes(
+            snapshot
+                .inner_sets()
+                .map(|(_, nodes)| nodes.clone().into())
+                .collect(),
+        )
+        .await
+        .unwrap();
 
     for (_, nodes) in snapshot.leaf_sets().take(1) {
         writer.save_leaf_nodes(nodes.clone().into()).await.unwrap();
