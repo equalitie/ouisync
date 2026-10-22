@@ -21,12 +21,19 @@ import 'message_codec.dart';
 
 class Client {
   final _Connector _connector;
+  final _unresponsiveController = StreamController<void>.broadcast();
+  final _reconnectedController = StreamController<void>.broadcast();
+  var _everConnected = false;
 
   _SocketState _state = const _Disconnected();
 
   var _nextMessageId = 0;
   final _responses = <int, Completer<Object?>>{};
   final _notifications = <int, StreamSink<Object?>>{};
+  // The request that established each entry in `_notifications`, kept around so a
+  // subscription can be transparently replayed against a new connection after the
+  // underlying socket is lost (e.g. iOS tearing down sockets while backgrounded).
+  final _requests = <int, Request>{};
 
   Client._(this._connector);
 
@@ -38,15 +45,36 @@ class Client {
     final (port, authKey) =
         await _readLocalEndpoint('$configPath/local_endpoint.conf');
 
+    late final Client client;
     final connector = _Connector(
       port: port,
       authKey: authKey,
       minDelay: minReconnectDelay,
       maxDelay: maxReconnectDelay,
+      onUnresponsive: () => client._unresponsiveController.add(null),
     );
 
-    return Client._(connector);
+    client = Client._(connector);
+    return client;
   }
+
+  /// Fires whenever the connection to the local service has failed to (re)establish for several
+  /// consecutive attempts in a row. A `ConnectionRefused` at this point means there's nothing
+  /// listening on the service's port at all (as opposed to e.g. it being merely slow to respond),
+  /// which can happen if the native service process/thread died outright (observed after some
+  /// iOS background/foreground cycles) rather than just having its sockets torn down - in which
+  /// case no amount of retrying the same connection will ever succeed; the service itself needs
+  /// to be restarted. See `Session.serviceUnresponsive`.
+  Stream<void> get unresponsive => _unresponsiveController.stream;
+
+  /// Fires each time the connection to the local service is (re)established after having been
+  /// lost. Note this says nothing about whether the service process itself is the same one as
+  /// before (see `unresponsive`/`Session.serviceUnresponsive`) - after e.g. a full service
+  /// restart, in-memory state built up against the old process (such as a repository's cached
+  /// directory listing) can be stale even though every RPC call keeps working fine, since nothing
+  /// about the RPC protocol itself indicates that. Callers that keep such state should treat this
+  /// as a signal to refresh it, rather than relying solely on change notifications.
+  Stream<void> get reconnected => _reconnectedController.stream;
 
   Future<Response> invoke(Request request) async {
     final id = _nextMessageId++;
@@ -65,6 +93,19 @@ class Client {
     return controller.stream.cast();
   }
 
+  /// Forcibly drops the current connection (if any) and reconnects, replaying any currently
+  /// active subscriptions against the fresh connection. The connection already does this
+  /// automatically when it detects it was lost (see `_receiveError`/`_receiveDone`); this is a
+  /// manual escape hatch for callers that suspect the connection is wedged in some way that
+  /// wasn't detected on its own (e.g. a long stretch of silence after the app resumes from the
+  /// background) and want to force a clean reconnect without waiting for the next failed call.
+  Future<void> reset() async {
+    // ignore: avoid_print
+    print('ouisync.Client: reset() requested');
+    await _disconnect();
+    _resubscribeAll();
+  }
+
   Future<void> close() async {
     while (true) {
       final state = _state;
@@ -74,6 +115,8 @@ class Client {
           await state.future;
         case _Disconnected():
           _state = _Closed();
+          await _unresponsiveController.close();
+          await _reconnectedController.close();
           return;
         case _Connected():
           final completer = Completer();
@@ -84,6 +127,8 @@ class Client {
 
           _state = _Closed();
           completer.complete();
+          await _unresponsiveController.close();
+          await _reconnectedController.close();
           return;
         case _Closed():
           return;
@@ -130,6 +175,11 @@ class Client {
 
           _state = _Connected(socket, subscription);
           completer.complete();
+
+          if (_everConnected) {
+            _reconnectedController.add(null);
+          }
+          _everConnected = true;
         case _Connected():
           return state.socket;
         case _Closed():
@@ -176,6 +226,7 @@ class Client {
         if (message.payload is ResponseNone) {
           // Stream closed by the service.
           final sink = _notifications.remove(message.id);
+          _requests.remove(message.id);
           if (sink != null) {
             sink.close();
           }
@@ -221,9 +272,8 @@ class Client {
       completer.completeError(error, st);
     }
 
-    for (final sink in _notifications.takeValues()) {
-      sink.addError(error, st);
-    }
+    _state = _Disconnected();
+    _resubscribeAll();
   }
 
   void _receiveDone() {
@@ -231,11 +281,36 @@ class Client {
       completer.completeError(SocketException.closed());
     }
 
-    for (final sink in _notifications.takeValues()) {
-      unawaited(sink.close());
-    }
-
     _state = _Disconnected();
+    _resubscribeAll();
+  }
+
+  // Losing the connection (e.g. the OS tearing down sockets while the app is backgrounded)
+  // must not permanently kill already-active subscriptions: replay each one against the new
+  // connection instead of erroring out its sink, so streams keep working transparently once
+  // reconnected. `_onSubscriptionListen` re-registers the sink in `_notifications` as part of
+  // resending the subscribe request, so clear the map first to avoid it looking already
+  // subscribed.
+  void _resubscribeAll() {
+    final toResubscribe = Map.of(_notifications);
+    _notifications.clear();
+
+    // ignore: avoid_print
+    print(
+      'ouisync.Client: connection lost, resubscribing ${toResubscribe.length} '
+      'active subscription(s): ${toResubscribe.keys.toList()}',
+    );
+
+    for (final entry in toResubscribe.entries) {
+      final request = _requests[entry.key];
+      if (request != null) {
+        unawaited(_onSubscriptionListen(entry.key, request, entry.value));
+      } else {
+        // Should not happen (every entry in `_notifications` has a matching `_requests`
+        // entry), but don't leak the sink if it ever does.
+        entry.value.addError(StateError('lost subscription request'));
+      }
+    }
   }
 
   Future<void> _onSubscriptionListen(
@@ -244,17 +319,24 @@ class Client {
     StreamSink<Object?> sink,
   ) async {
     _notifications[id] = sink;
+    _requests[id] = request;
 
     try {
       await _invokeWithMessageId(id, request);
+      // ignore: avoid_print
+      print('ouisync.Client: subscription $id (re)established: $request');
     } catch (e, st) {
       _notifications.remove(id);
+      _requests.remove(id);
+      // ignore: avoid_print
+      print('ouisync.Client: subscription $id failed to (re)establish: $e');
       sink.addError(e, st);
     }
   }
 
   Future<void> _onSubscriptionCancel(int id) async {
     _notifications.remove(id);
+    _requests.remove(id);
 
     while (true) {
       final state = _state;
@@ -290,26 +372,63 @@ class _Connector {
   final List<int> authKey;
   final Duration minDelay;
   final Duration maxDelay;
+  final void Function()? onUnresponsive;
+
+  // Number of consecutive failed attempts after which we consider the service likely gone
+  // rather than just slow, and report it via `onUnresponsive` (once per stretch of failures).
+  static const _unresponsiveThreshold = 5;
 
   const _Connector({
     required this.port,
     required this.authKey,
     this.minDelay = const Duration(milliseconds: 50),
     this.maxDelay = const Duration(seconds: 1),
+    this.onUnresponsive,
   });
 
   Future<(Socket, Stream<Uint8List>)> connect() async {
     var delay = minDelay;
+    var attempt = 0;
 
     while (true) {
+      attempt += 1;
       try {
-        final socket = await Socket.connect(InternetAddress.loopbackIPv4, port);
+        final socket = await Socket.connect(
+          InternetAddress.loopbackIPv4,
+          port,
+        ).timeout(const Duration(seconds: 5));
         final stream = socket.asBroadcastStream();
 
         await _authenticate(stream, socket);
 
+        // ignore: avoid_print
+        print(
+          'ouisync.Client: connected to 127.0.0.1:$port on attempt $attempt',
+        );
         return (socket, stream);
-      } on SocketException {
+      } on SocketException catch (e) {
+        // ignore: avoid_print
+        print(
+          'ouisync.Client: connect attempt $attempt to 127.0.0.1:$port '
+          'failed: $e, retrying in $delay',
+        );
+        if (attempt == _unresponsiveThreshold) {
+          onUnresponsive?.call();
+        }
+        delay = _minDuration(delay * 2, maxDelay);
+        await Future.delayed(delay);
+      } catch (e) {
+        // Anything other than SocketException (e.g. a timeout, or `_authenticate` failing for
+        // some non-socket reason) was previously left uncaught here, silently breaking the
+        // retry loop instead of retrying like every other connection failure does.
+        // ignore: avoid_print
+        print(
+          'ouisync.Client: connect attempt $attempt to 127.0.0.1:$port '
+          'failed with unexpected error: $e, retrying in $delay',
+        );
+        if (attempt == _unresponsiveThreshold) {
+          onUnresponsive?.call();
+        }
         delay = _minDuration(delay * 2, maxDelay);
         await Future.delayed(delay);
       }

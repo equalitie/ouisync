@@ -1,5 +1,6 @@
 use std::{
     ffi::{CStr, CString, c_char, c_void},
+    path::PathBuf,
     pin::pin,
     thread,
 };
@@ -207,7 +208,25 @@ fn run(
 /// Initialize logging. Should be called before `service_start`.
 #[unsafe(no_mangle)]
 pub extern "C" fn init_log() {
-    logger::init(LogFormat::Human, LogColor::Auto);
+    logger::init(LogFormat::Human, LogColor::Auto, None);
+}
+
+/// Like [init_log], but additionally appends log events to the file at `log_file`. Useful on
+/// platforms (iOS/macOS) where the process' stdout isn't otherwise captured anywhere reliable
+/// once the app is backgrounded.
+///
+/// # Safety
+///
+/// - `log_file` must be safe to pass to [std::ffi::CStr::from_ptr].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn init_log_to_file(log_file: *const c_char) {
+    let log_file = PathBuf::from(
+        unsafe { CStr::from_ptr(log_file) }
+            .to_string_lossy()
+            .into_owned(),
+    );
+
+    logger::init(LogFormat::Human, LogColor::Auto, Some(&log_file));
 }
 
 #[cfg(test)]
