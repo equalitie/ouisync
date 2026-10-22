@@ -24,7 +24,7 @@ use crate::{
 };
 use std::{collections::HashSet, iter, time::Instant};
 use tokio::{select, sync::mpsc};
-use tracing::{Level, instrument};
+use tracing::Level;
 
 mod future {
     pub(super) use futures_util::future::try_join;
@@ -133,27 +133,34 @@ impl Inner {
             monitor: &self.vault.monitor.traffic,
         };
 
-        // Responses that need write access to the db or responses that need only read access but
-        // that depend on any previous writable responses.
-        let mut writable = Vec::with_capacity(RESPONSE_BATCH_SIZE);
-
-        // Responses that need only read access to the db and that don't depend on any writable
-        // responses.
-        let mut readable = Vec::with_capacity(RESPONSE_BATCH_SIZE);
+        let mut root_nodes = Vec::with_capacity(RESPONSE_BATCH_SIZE);
+        let mut inner_nodes = Vec::with_capacity(RESPONSE_BATCH_SIZE);
+        let mut leaf_nodes = Vec::with_capacity(RESPONSE_BATCH_SIZE);
+        let mut blocks = Vec::with_capacity(RESPONSE_BATCH_SIZE);
+        // `BlockOffer` responses that don't depend on any previous `LeadNode` response. Processing
+        // these requires only read access to the store.
+        let mut independent_block_offers = Vec::with_capacity(RESPONSE_BATCH_SIZE);
+        // `BlockOffer` responses that depend on any previous `LeadNode` response. These must be
+        // processed together with the depending leaf nodes and so require write access to the
+        // store.
+        let mut dependent_block_offers = Vec::with_capacity(RESPONSE_BATCH_SIZE);
 
         // Number of responses received in this batch.
         let mut count = 0u32;
 
         // Blocks referenced from received `LeafNode` responses in this batch. This is used to
-        // deremine if any subsequent `BlockOffer` response depends on any of them.
+        // determine if any subsequent `BlockOffer` response depends on any of them.
         let mut block_references = HashSet::new();
 
         loop {
             let start = Instant::now();
 
+            blocks.clear();
+
             for response in rx.recv_iter().await {
                 count += 1;
 
+                // Sort responses by type
                 match response {
                     PreparedResponse::RootNode {
                         proof,
@@ -161,7 +168,7 @@ impl Inner {
                         cookie,
                         debug,
                     } => {
-                        writable.push(WritableResponse::RootNode {
+                        root_nodes.push(RootNodeResponse {
                             proof,
                             block_presence,
                             cookie,
@@ -169,23 +176,23 @@ impl Inner {
                         });
                     }
                     PreparedResponse::InnerNodes(nodes, debug) => {
-                        writable.push(WritableResponse::InnerNodes(nodes, debug));
+                        inner_nodes.push(InnerNodesResponse { nodes, debug });
                     }
                     PreparedResponse::LeafNodes(nodes, debug) => {
                         for node in &*nodes {
                             block_references.insert(node.block_id);
                         }
 
-                        writable.push(WritableResponse::LeafNodes(nodes, debug));
+                        leaf_nodes.push(LeafNodesResponse { nodes, debug });
                     }
                     PreparedResponse::Block(block, debug) => {
-                        writable.push(WritableResponse::Block(block, debug));
+                        blocks.push(BlockResponse { block, debug });
                     }
                     PreparedResponse::BlockOffer(block_id, debug) => {
                         if block_references.contains(&block_id) {
-                            writable.push(WritableResponse::BlockOffer(block_id, debug));
+                            dependent_block_offers.push(BlockOfferResponse { block_id, debug });
                         } else {
-                            readable.push(ReadableResponse::BlockOffer(block_id, debug));
+                            independent_block_offers.push(BlockOfferResponse { block_id, debug });
                         }
                     }
                     PreparedResponse::RootNodeError {
@@ -215,7 +222,14 @@ impl Inner {
                     }
                 }
 
-                if writable.len() + readable.len() >= RESPONSE_BATCH_SIZE {
+                if root_nodes.len()
+                    + inner_nodes.len()
+                    + leaf_nodes.len()
+                    + blocks.len()
+                    + independent_block_offers.len()
+                    + dependent_block_offers.len()
+                    >= RESPONSE_BATCH_SIZE
+                {
                     break;
                 }
             }
@@ -229,8 +243,14 @@ impl Inner {
                 ScopedProcessingRecorder::new(&self.vault.monitor.traffic, start, count);
 
             future::try_join(
-                self.handle_writable_responses(&mut writable),
-                self.handle_readable_responses(&mut readable),
+                self.handle_writable_responses(
+                    &mut root_nodes,
+                    &mut inner_nodes,
+                    &mut leaf_nodes,
+                    &mut blocks,
+                    &mut dependent_block_offers,
+                ),
+                self.handle_readable_responses(&mut independent_block_offers),
             )
             .await?;
 
@@ -241,230 +261,197 @@ impl Inner {
         Ok(())
     }
 
-    async fn handle_writable_responses(&self, batch: &mut Vec<WritableResponse>) -> Result<()> {
-        if batch.is_empty() {
+    async fn handle_writable_responses(
+        &self,
+        root_nodes: &mut Vec<RootNodeResponse>,
+        inner_nodes: &mut Vec<InnerNodesResponse>,
+        leaf_nodes: &mut Vec<LeafNodesResponse>,
+        blocks: &mut Vec<BlockResponse>,
+        block_offers: &mut Vec<BlockOfferResponse>,
+    ) -> Result<()> {
+        if root_nodes.is_empty()
+            && inner_nodes.is_empty()
+            && leaf_nodes.is_empty()
+            && blocks.is_empty()
+            && block_offers.is_empty()
+        {
             return Ok(());
         }
 
         let mut writer = self.vault.store().begin_client_write().await?;
 
-        for response in batch.drain(..) {
-            match response {
-                WritableResponse::RootNode {
-                    proof,
-                    block_presence,
-                    cookie,
-                    debug,
-                } => {
-                    self.handle_root_node(&mut writer, proof, block_presence, cookie, debug)
-                        .await?;
-                }
-                WritableResponse::InnerNodes(nodes, debug) => {
-                    self.handle_inner_nodes(&mut writer, nodes, debug).await?;
-                }
-                WritableResponse::LeafNodes(nodes, debug) => {
-                    self.handle_leaf_nodes(&mut writer, nodes, debug).await?;
-                }
-                WritableResponse::Block(block, debug) => {
-                    self.handle_block(&mut writer, block, debug).await?;
-                }
-                WritableResponse::BlockOffer(block_id, debug) => {
-                    self.handle_block_offer(writer.as_reader_mut(), block_id, debug)
-                        .await?;
-                }
-            }
-        }
-
+        self.handle_root_nodes(&mut writer, root_nodes).await?;
+        self.handle_inner_nodes(&mut writer, inner_nodes).await?;
+        self.handle_leaf_nodes(&mut writer, leaf_nodes).await?;
+        self.handle_blocks(&mut writer, blocks).await?;
+        self.handle_block_offers(writer.as_reader_mut(), block_offers)
+            .await?;
         self.commit_responses(writer).await?;
 
         Ok(())
     }
 
-    async fn handle_readable_responses(&self, batch: &mut Vec<ReadableResponse>) -> Result<()> {
-        if batch.is_empty() {
+    async fn handle_readable_responses(
+        &self,
+        block_offers: &mut Vec<BlockOfferResponse>,
+    ) -> Result<()> {
+        if block_offers.is_empty() {
             return Ok(());
         }
 
         let mut reader = self.vault.store().begin_client_read().await?;
-
-        for response in batch.drain(..) {
-            match response {
-                ReadableResponse::BlockOffer(block_id, debug) => {
-                    self.handle_block_offer(reader.as_mut(), block_id, debug)
-                        .await?;
-                }
-            }
-        }
+        self.handle_block_offers(reader.as_mut(), block_offers)
+            .await?;
 
         Ok(())
     }
 
-    #[instrument(
-        skip_all,
-        fields(
-            writer_id = ?proof.writer_id,
-            vv = ?proof.version_vector,
-            hash = ?proof.hash,
-            ?block_presence,
-            cookie = cookie,
-            ?debug_payload,
-        ),
-        err(Debug)
-    )]
-    async fn handle_root_node(
+    async fn handle_root_nodes(
         &self,
         writer: &mut ClientWriter,
-        proof: UntrustedProof,
-        block_presence: MultiBlockPresence,
-        cookie: u64,
-        debug_payload: DebugResponse,
+        responses: &mut Vec<RootNodeResponse>,
     ) -> Result<()> {
-        let proof = match proof.verify(self.vault.repository_id()) {
-            Ok(proof) => proof,
-            Err(ProofError) => {
-                tracing::trace!("Invalid proof");
+        for response in responses.drain(..) {
+            let proof = match response.proof.verify(self.vault.repository_id()) {
+                Ok(proof) => proof,
+                Err(ProofError) => {
+                    tracing::trace!("Invalid proof");
+                    return Ok(());
+                }
+            };
+
+            // Ignore branches with empty version vectors because they have no content yet.
+            if proof.version_vector.is_empty() {
                 return Ok(());
             }
-        };
 
-        // Ignore branches with empty version vectors because they have no content yet.
-        if proof.version_vector.is_empty() {
-            return Ok(());
+            let hash = proof.hash;
+            let writer_id = proof.writer_id;
+            let status = writer
+                .save_root_node(proof, &response.block_presence)
+                .await?;
+
+            tracing::debug!(?hash, ?writer_id, "Received root node - {status}");
+
+            self.request_tracker.success(
+                MessageKey::RootNode(writer_id, response.cookie),
+                status
+                    .request_children()
+                    .map(|local_block_presence| {
+                        CandidateRequest::new(Request::ChildNodes(hash, response.debug.follow_up()))
+                            .variant(RequestVariant::new(
+                                local_block_presence,
+                                response.block_presence,
+                            ))
+                    })
+                    .into_iter()
+                    .collect(),
+            );
         }
-
-        let hash = proof.hash;
-        let writer_id = proof.writer_id;
-        let status = writer.save_root_node(proof, &block_presence).await?;
-
-        tracing::debug!("Received root node - {status}");
-
-        self.request_tracker.success(
-            MessageKey::RootNode(writer_id, cookie),
-            status
-                .request_children()
-                .map(|local_block_presence| {
-                    CandidateRequest::new(Request::ChildNodes(hash, debug_payload.follow_up()))
-                        .variant(RequestVariant::new(local_block_presence, block_presence))
-                })
-                .into_iter()
-                .collect(),
-        );
 
         Ok(())
     }
 
-    #[instrument(skip_all, fields(hash = ?nodes.hash(), ?debug_payload), err(Debug))]
     async fn handle_inner_nodes(
         &self,
         writer: &mut ClientWriter,
-        nodes: CacheHash<InnerNodes>,
-        debug_payload: DebugResponse,
+        responses: &mut Vec<InnerNodesResponse>,
     ) -> Result<()> {
-        let hash = nodes.hash();
-        let total = nodes.len();
-        let statuses = writer.save_inner_nodes(nodes).await?;
+        for response in responses.drain(..) {
+            let hash = response.nodes.hash();
+            let statuses = writer.save_inner_nodes(response.nodes).await?;
 
-        tracing::trace!("Received {}/{} inner nodes", statuses.len(), total);
-
-        self.request_tracker.success(
-            MessageKey::ChildNodes(hash),
-            statuses
-                .into_iter()
-                .map(|status| {
-                    CandidateRequest::new(Request::ChildNodes(
-                        status.hash,
-                        debug_payload.follow_up(),
-                    ))
-                    .variant(RequestVariant::new(
-                        status.local_block_presence,
-                        status.remote_block_presence,
-                    ))
-                })
-                .collect(),
-        );
-
-        Ok(())
-    }
-
-    #[instrument(skip_all, fields(hash = ?nodes.hash(), ?debug_payload), err(Debug))]
-    async fn handle_leaf_nodes(
-        &self,
-        writer: &mut ClientWriter,
-        nodes: CacheHash<LeafNodes>,
-        debug_payload: DebugResponse,
-    ) -> Result<()> {
-        let hash = nodes.hash();
-        let total = nodes.len();
-        let status = writer.save_leaf_nodes(nodes).await?;
-
-        tracing::trace!(
-            "Received {}/{} leaf nodes",
-            status.new_block_offers.len(),
-            total
-        );
-
-        // IMPORTANT: Make sure the request tracker is processed before the block tracker to ensure
-        // the request is first inserted and only then resumed.
-
-        self.request_tracker.success(
-            MessageKey::ChildNodes(hash),
-            status
-                .new_block_offers
-                .iter()
-                .map(|(block_id, _)| {
-                    CandidateRequest::new(Request::Block(*block_id, debug_payload.follow_up()))
-                        .suspended()
-                })
-                .collect(),
-        );
-
-        for (block_id, offer_state) in status.new_block_offers {
-            self.block_tracker.offer(block_id, offer_state);
+            self.request_tracker.success(
+                MessageKey::ChildNodes(hash),
+                statuses
+                    .into_iter()
+                    .map(|status| {
+                        CandidateRequest::new(Request::ChildNodes(
+                            status.hash,
+                            response.debug.follow_up(),
+                        ))
+                        .variant(RequestVariant::new(
+                            status.local_block_presence,
+                            status.remote_block_presence,
+                        ))
+                    })
+                    .collect(),
+            );
         }
 
         Ok(())
     }
 
-    #[instrument(skip_all, fields(id = ?block_id, ?debug_payload), err(Debug))]
-    async fn handle_block_offer(
+    async fn handle_leaf_nodes(
         &self,
-        mut reader: ClientReaderMut<'_>,
-        block_id: BlockId,
-        debug_payload: DebugResponse,
+        writer: &mut ClientWriter,
+        responses: &mut Vec<LeafNodesResponse>,
     ) -> Result<()> {
-        let offer_state = reader.load_block_offer_state(&block_id).await?;
+        for response in responses.drain(..) {
+            let hash = response.nodes.hash();
+            let status = writer.save_leaf_nodes(response.nodes).await?;
 
-        tracing::trace!(?offer_state, "Received block offer");
+            // IMPORTANT: Make sure the request tracker is processed before the block tracker to ensure
+            // the request is first inserted and only then resumed.
 
-        let Some(offer_state) = offer_state else {
-            return Ok(());
-        };
+            self.request_tracker.success(
+                MessageKey::ChildNodes(hash),
+                status
+                    .new_block_offers
+                    .iter()
+                    .map(|(block_id, _)| {
+                        CandidateRequest::new(Request::Block(*block_id, response.debug.follow_up()))
+                            .suspended()
+                    })
+                    .collect(),
+            );
 
-        // IMPORTANT: Make sure the request tracker is processed before the block tracker to ensure
-        // the request is first inserted and only then resumed.
-
-        self.request_tracker.initial(
-            CandidateRequest::new(Request::Block(block_id, debug_payload.follow_up())).suspended(),
-        );
-
-        self.block_tracker.offer(block_id, offer_state);
+            for (block_id, offer_state) in status.new_block_offers {
+                self.block_tracker.offer(block_id, offer_state);
+            }
+        }
 
         Ok(())
     }
 
-    #[instrument(skip_all, fields(id = ?block.id, ?debug_payload), err(Debug))]
-    async fn handle_block(
+    async fn handle_block_offers(
+        &self,
+        mut reader: ClientReaderMut<'_>,
+        responses: &mut Vec<BlockOfferResponse>,
+    ) -> Result<()> {
+        for response in responses.drain(..) {
+            let Some(offer_state) = reader.load_block_offer_state(&response.block_id).await? else {
+                return Ok(());
+            };
+
+            // IMPORTANT: Make sure the request tracker is processed before the block tracker to ensure
+            // the request is first inserted and only then resumed.
+
+            self.request_tracker.initial(
+                CandidateRequest::new(Request::Block(
+                    response.block_id,
+                    response.debug.follow_up(),
+                ))
+                .suspended(),
+            );
+
+            self.block_tracker.offer(response.block_id, offer_state);
+        }
+
+        Ok(())
+    }
+
+    async fn handle_blocks(
         &self,
         writer: &mut ClientWriter,
-        block: Block,
-        debug_payload: DebugResponse,
+        responses: &mut Vec<BlockResponse>,
     ) -> Result<()> {
-        writer.save_block(&block).await?;
+        for response in responses.drain(..) {
+            writer.save_block(&response.block).await?;
 
-        tracing::trace!("Received block");
-
-        self.request_tracker
-            .success(MessageKey::Block(block.id), vec![]);
+            self.request_tracker
+                .success(MessageKey::Block(response.block.id), vec![]);
+        }
 
         Ok(())
     }
@@ -683,21 +670,32 @@ impl From<Response> for PreparedResponse {
     }
 }
 
-enum WritableResponse {
-    RootNode {
-        proof: UntrustedProof,
-        block_presence: MultiBlockPresence,
-        cookie: u64,
-        debug: DebugResponse,
-    },
-    InnerNodes(CacheHash<InnerNodes>, DebugResponse),
-    LeafNodes(CacheHash<LeafNodes>, DebugResponse),
-    Block(Block, DebugResponse),
-    BlockOffer(BlockId, DebugResponse),
+struct RootNodeResponse {
+    proof: UntrustedProof,
+    block_presence: MultiBlockPresence,
+    cookie: u64,
+    debug: DebugResponse,
 }
 
-enum ReadableResponse {
-    BlockOffer(BlockId, DebugResponse),
+struct InnerNodesResponse {
+    nodes: CacheHash<InnerNodes>,
+    debug: DebugResponse,
+}
+
+struct LeafNodesResponse {
+    nodes: CacheHash<LeafNodes>,
+    debug: DebugResponse,
+}
+
+struct BlockResponse {
+    block: Block,
+    #[expect(unused)]
+    debug: DebugResponse,
+}
+
+struct BlockOfferResponse {
+    block_id: BlockId,
+    debug: DebugResponse,
 }
 
 struct PreparedResponseSender<'a> {
