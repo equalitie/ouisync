@@ -1,11 +1,14 @@
+use std::collections::HashSet;
+
 use super::error::Error;
 use crate::{
     crypto::Hash,
-    db,
+    db::{self, MAX_BIND_PARAMS},
+    future::TryStreamExt as _,
     protocol::{BlockId, LeafNode, LeafNodes, SingleBlockPresence},
 };
-use futures_util::{Stream, TryStreamExt};
-use sqlx::{FromRow, Row, sqlite::SqliteRow};
+use futures_util::{Stream, TryStreamExt as _};
+use sqlx::{FromRow, QueryBuilder, Row, sqlite::SqliteRow};
 
 #[cfg(test)]
 use {super::inner_node, crate::protocol::INNER_LAYER_COUNT, async_recursion::async_recursion};
@@ -75,6 +78,55 @@ pub(super) async fn load_block_presence(
     )
 }
 
+/// Filter block ids that are referenced from leaf nodes marked as missing or that are not
+/// referenced from any leaf nodes.
+pub(super) async fn filter_missing(
+    conn: &mut db::Connection,
+    block_ids: &[BlockId],
+) -> Result<Vec<BlockId>, Error> {
+    let mut output = Vec::with_capacity(block_ids.len());
+
+    for block_ids_chunk in block_ids.chunks(MAX_BIND_PARAMS - 1) {
+        let mut builder = QueryBuilder::new("WITH input(block_id) AS (VALUES ");
+
+        let mut separated = builder.separated(", ");
+        for block_id in block_ids_chunk {
+            separated.push("(");
+            separated.push_bind_unseparated(block_id);
+            separated.push_unseparated(")");
+        }
+
+        builder.push(
+            ")
+             SELECT block_id
+             FROM input
+             WHERE EXISTS (
+                 SELECT 0
+                 FROM snapshot_leaf_nodes
+                 WHERE block_id = input.block_id AND block_presence = ",
+        );
+        builder.push_bind(SingleBlockPresence::Missing);
+        builder.push(
+            ")
+             OR NOT EXISTS (
+                 SELECT 0
+                 FROM snapshot_leaf_nodes
+                 WHERE block_id = input.block_id
+             )",
+        );
+
+        builder
+            .build()
+            .persistent(false)
+            .fetch(&mut *conn)
+            .map_ok(|row| row.get::<BlockId, _>(0))
+            .try_collect_into(&mut output)
+            .await?;
+    }
+
+    Ok(output)
+}
+
 /// Saves the node to the db unless it already exists.
 pub(super) async fn save(
     tx: &mut db::WriteTransaction,
@@ -110,6 +162,47 @@ pub(super) async fn save_all(
     }
 
     Ok(updated)
+}
+
+/// Save multiple nodes to the store. Takes slice of (parent_hash, node) and returns a set
+/// of parent node hashes whose children were updated.
+pub(super) async fn save_many(
+    tx: &mut db::WriteTransaction,
+    nodes: &[(Hash, LeafNode)],
+) -> Result<HashSet<Hash>, Error> {
+    if nodes.is_empty() {
+        return Ok(HashSet::new());
+    }
+
+    let mut output = HashSet::new();
+
+    // `MAX_BIND_PARAMS / 4` because we bind 4 parameters per record
+    for nodes_chunk in nodes.chunks(MAX_BIND_PARAMS / 4) {
+        QueryBuilder::new(
+            "INSERT INTO snapshot_leaf_nodes (
+                parent,
+                locator,
+                block_id,
+                block_presence
+             ) ",
+        )
+        .push_values(nodes_chunk, |mut builder, (parent_hash, node)| {
+            builder
+                .push_bind(parent_hash)
+                .push_bind(&node.locator)
+                .push_bind(&node.block_id)
+                .push_bind(node.block_presence);
+        })
+        .push(" ON CONFLICT (parent, locator, block_id) DO NOTHING RETURNING parent")
+        .build()
+        .persistent(false)
+        .fetch(&mut *tx)
+        .map_ok(|row| row.get::<Hash, _>(0))
+        .try_collect_into(&mut output)
+        .await?;
+    }
+
+    Ok(output)
 }
 
 /// Marks all leaf nodes that point to the specified block as present (not missing). Returns
@@ -399,6 +492,43 @@ mod tests {
                 .unwrap(),
             [],
         )
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn filter_missing_returns_missing_and_unreferenced() {
+        let (_base_dir, pool) = setup().await;
+
+        let parent = rand::random();
+        let present_id = rand::random();
+        let missing_id = rand::random();
+        let unreferenced_id = rand::random();
+
+        let mut tx = pool.begin_write().await.unwrap();
+
+        save(
+            &mut tx,
+            &LeafNode::present(rand::random(), present_id),
+            &parent,
+        )
+        .await
+        .unwrap();
+        save(
+            &mut tx,
+            &LeafNode::missing(rand::random(), missing_id),
+            &parent,
+        )
+        .await
+        .unwrap();
+
+        let mut actual = filter_missing(&mut tx, &[present_id, missing_id, unreferenced_id])
+            .await
+            .unwrap();
+        actual.sort();
+
+        let mut expected = vec![missing_id, unreferenced_id];
+        expected.sort();
+
+        assert_eq!(actual, expected);
     }
 
     async fn setup() -> (TempDir, db::Pool) {

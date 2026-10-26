@@ -375,7 +375,7 @@ impl Inner {
             node_sets.push(response.nodes);
         }
 
-        let status_sets = writer.save_inner_nodes(node_sets).await?;
+        let status_sets = writer.save_inner_nodes(&node_sets).await?;
 
         for (parent_hash, statuses) in status_sets {
             // `unwrap` is ok because there is an entry in `debug_payloads` for each parent_hash in
@@ -409,20 +409,30 @@ impl Inner {
         writer: &mut ClientWriter,
         responses: &mut Vec<LeafNodesResponse>,
     ) -> Result<()> {
+        let mut node_sets = Vec::with_capacity(responses.len());
+        let mut debug_payloads = HashMap::with_capacity(responses.len());
+
         for response in responses.drain(..) {
-            let hash = response.nodes.hash();
-            let status = writer.save_leaf_nodes(response.nodes).await?;
+            debug_payloads.insert(response.nodes.hash(), response.debug);
+            node_sets.push(response.nodes);
+        }
+
+        let statuses = writer.save_leaf_nodes(&node_sets).await?;
+
+        for (parent_hash, status) in statuses {
+            // `unwrap` is ok because there is an entry in `debug_payloads` for each parent_hash in
+            // `node_sets` (by construction).
+            let debug_payload = debug_payloads.get(&parent_hash).unwrap();
 
             // IMPORTANT: Make sure the request tracker is processed before the block tracker to ensure
             // the request is first inserted and only then resumed.
-
             self.request_tracker.success(
-                MessageKey::ChildNodes(hash),
+                MessageKey::ChildNodes(parent_hash),
                 status
                     .new_block_offers
                     .iter()
                     .map(|(block_id, _)| {
-                        CandidateRequest::new(Request::Block(*block_id, response.debug.follow_up()))
+                        CandidateRequest::new(Request::Block(*block_id, debug_payload.follow_up()))
                             .suspended()
                     })
                     .collect(),

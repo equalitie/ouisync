@@ -23,7 +23,7 @@ use crate::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    mem,
+    mem, slice,
     sync::Arc,
 };
 
@@ -96,14 +96,15 @@ impl ClientWriter {
     // non-empty node of the node set.
     pub async fn save_inner_nodes(
         &mut self,
-        node_sets: Vec<CacheHash<InnerNodes>>,
+        node_sets: &[CacheHash<InnerNodes>],
     ) -> Result<HashMap<Hash, Vec<InnerNodeStatus>>, Error> {
         // TODO: assert the precondition holds (consider using `debug_assert`).
 
         // Hashes that correspond either to nodes that are already stored or to nodes from
         // `node_sets` whose parent hashes are valid. Used later to filter out orphaned nodes.
+        // TODO: optimize this to use only one db query
         let mut valid_hashes = HashSet::new();
-        for nodes in &node_sets {
+        for nodes in node_sets {
             let parent_hash = nodes.hash();
 
             if valid_hashes.contains(&parent_hash) {
@@ -193,67 +194,93 @@ impl ClientWriter {
             })
             .collect();
         let affected_parent_hashes = inner_node::save(&mut self.db, &nodes).await?;
-
-        for parent_hash in affected_parent_hashes {
-            self.summary_updates.insert(parent_hash);
-        }
+        self.summary_updates.extend(affected_parent_hashes);
 
         Ok(status_sets)
     }
 
     pub async fn save_leaf_nodes(
         &mut self,
-        nodes: CacheHash<LeafNodes>,
-    ) -> Result<LeafNodesStatus, Error> {
-        let parent_hash = nodes.hash();
+        node_sets: &[CacheHash<LeafNodes>],
+    ) -> Result<HashMap<Hash, LeafNodesStatus>, Error> {
+        let node_count = node_sets.iter().map(|nodes| nodes.len()).sum();
+        let parent_hashes: Vec<_> = node_sets.iter().map(|nodes| nodes.hash()).collect();
+        let valid_parent_hashes =
+            index::filter_existing_parents(&mut self.db, &parent_hashes).await?;
 
-        if !index::parent_exists(&mut self.db, &parent_hash).await? {
-            tracing::warn!("parent node not found");
-            return Ok(LeafNodesStatus::default());
+        // Non-orphaned nodes
+        let mut valid_nodes = Vec::with_capacity(node_count);
+        // Block ids that are marked as present or expired in the incoming nodes.
+        let mut present_or_expired_block_ids = Vec::with_capacity(node_count);
+
+        for nodes in node_sets {
+            let parent_hash = nodes.hash();
+
+            if !valid_parent_hashes.contains(&parent_hash) {
+                tracing::warn!("parent node not found");
+                continue;
+            }
+
+            valid_nodes.extend(nodes.iter().map(|node| (parent_hash, node.into_missing())));
+            present_or_expired_block_ids.extend(
+                nodes
+                    .iter()
+                    .filter(|node| {
+                        matches!(
+                            node.block_presence,
+                            SingleBlockPresence::Present | SingleBlockPresence::Expired
+                        )
+                    })
+                    .map(|node| &node.block_id),
+            );
         }
 
-        let nodes = nodes.into_inner();
-        let mut new_block_offers = Vec::new();
+        // Block ids that are present or expired remotely but missing locally.
+        let missing_block_ids =
+            leaf_node::filter_missing(&mut self.db, &present_or_expired_block_ids).await?;
 
-        for node in &nodes {
-            // Create the block offer only if the block is `Missing` locally and `Present` or
-            // `Expired` remotely.
-            //
-            // If the block is `Expired` locally we *don't* want to register the offer yet. We only
-            // register if after the block's been switched to `Missing` (by either requiring it
-            // locally or by someone else requesting it from us). On the other hand, if the block
-            // is `Expired` remotely we *do* want to create the offer because that causes the
-            // remote peer to switch the block to `Missing` and request it from other peers.
-            match node.block_presence {
-                SingleBlockPresence::Present | SingleBlockPresence::Expired => {
-                    match leaf_node::load_block_presence(&mut self.db, &node.block_id).await? {
-                        Some(SingleBlockPresence::Missing) | None => {
-                            // Missing, expired or not yet stored locally
-                            let node_state = if self.quota.is_some() {
-                                // OPTIMIZE: the state is the same for all the nodes in `nodes`, so
-                                // it only needs to be loaded once.
-                                root_node::load_node_state_of_missing(&mut self.db, &node.block_id)
-                                    .await?
-                            } else {
-                                NodeState::Approved
-                            };
+        // Root node states corresponding to the missing blocks.
+        let node_states = if self.quota.is_some() {
+            root_node::load_node_states_of_missing(&mut self.db, &missing_block_ids).await?
+        } else {
+            missing_block_ids
+                .iter()
+                .map(|block_id| (*block_id, NodeState::Approved))
+                .collect()
+        };
 
-                            if let Some(offer_state) = block_offer_state(node_state) {
-                                new_block_offers.push((node.block_id, offer_state));
-                            }
-                        }
-                        Some(SingleBlockPresence::Present | SingleBlockPresence::Expired) => (),
-                    }
+        let affected_parent_hashes = leaf_node::save_many(&mut self.db, &valid_nodes).await?;
+        self.summary_updates.extend(affected_parent_hashes);
+
+        let statuses = node_sets
+            .iter()
+            .map(|nodes| {
+                if !valid_parent_hashes.contains(&nodes.hash()) {
+                    return (nodes.hash(), LeafNodesStatus::default());
                 }
-                SingleBlockPresence::Missing => (),
-            };
-        }
 
-        if leaf_node::save_all(&mut self.db, &nodes.into_missing(), &parent_hash).await? > 0 {
-            self.summary_updates.insert(parent_hash);
-        }
+                // Create the block offer only if the block is `Missing` locally and `Present` or
+                // `Expired` remotely.
+                //
+                // If the block is `Expired` locally we *don't* want to register the offer yet. We
+                // only register if after the block's been switched to `Missing` (by either
+                // requiring it locally or by someone else requesting it from us). On the other
+                // hand, if the block is `Expired` remotely we *do* want to create the offer because
+                // that causes the remote peer to switch the block to `Missing` and request it from
+                // other peers.
+                let new_block_offers = nodes
+                    .iter()
+                    .filter_map(|node| {
+                        let node_state = node_states.get(&node.block_id)?;
+                        let offer_state = block_offer_state(*node_state)?;
+                        Some((node.block_id, offer_state))
+                    })
+                    .collect();
 
-        Ok(LeafNodesStatus { new_block_offers })
+                (nodes.hash(), LeafNodesStatus { new_block_offers })
+            })
+            .collect();
+        Ok(statuses)
     }
 
     pub async fn save_block(&mut self, block: &Block) -> Result<(), Error> {
@@ -440,7 +467,12 @@ impl ClientReaderMut<'_> {
         block_id: &BlockId,
     ) -> Result<Option<BlockOfferState>, Error> {
         if self.quota.is_some() {
-            let node_state = root_node::load_node_state_of_missing(self.db, block_id).await?;
+            let node_state =
+                root_node::load_node_states_of_missing(self.db, slice::from_ref(block_id))
+                    .await?
+                    .into_values()
+                    .next()
+                    .unwrap_or(NodeState::Rejected);
             Ok(block_offer_state(node_state))
         } else {
             match leaf_node::load_block_presence(self.db, block_id).await? {
@@ -916,10 +948,10 @@ mod tests {
             let mut writer = store.begin_client_write().await.unwrap();
             writer
                 .save_inner_nodes(
-                    snapshot
+                    &snapshot
                         .inner_sets()
                         .map(|(_, nodes)| nodes.clone().into())
-                        .collect(),
+                        .collect::<Vec<_>>(),
                 )
                 .await
                 .unwrap();
@@ -939,24 +971,31 @@ mod tests {
             }
         }
 
-        for (hash, leaf_nodes) in snapshot.leaf_sets() {
+        {
             let mut writer = store.begin_client_write().await.unwrap();
             writer
-                .save_leaf_nodes(leaf_nodes.clone().into())
+                .save_leaf_nodes(
+                    &snapshot
+                        .leaf_sets()
+                        .map(|(_, nodes)| nodes.clone().into())
+                        .collect::<Vec<_>>(),
+                )
                 .await
                 .unwrap();
             writer.commit().await.unwrap();
 
-            assert!(
-                !store
-                    .acquire_read()
-                    .await
-                    .unwrap()
-                    .load_leaf_nodes(hash)
-                    .await
-                    .unwrap()
-                    .is_empty()
-            );
+            for (hash, _) in snapshot.leaf_sets() {
+                assert!(
+                    !store
+                        .acquire_read()
+                        .await
+                        .unwrap()
+                        .load_leaf_nodes(hash)
+                        .await
+                        .unwrap()
+                        .is_empty()
+                );
+            }
         }
     }
 
@@ -970,10 +1009,10 @@ mod tests {
         let mut writer = store.begin_client_write().await.unwrap();
         let status_sets = writer
             .save_inner_nodes(
-                snapshot
+                &snapshot
                     .inner_sets()
                     .map(|(_, nodes)| nodes.clone().into())
-                    .collect(),
+                    .collect::<Vec<_>>(),
             )
             .await
             .unwrap();
@@ -993,27 +1032,37 @@ mod tests {
         }
 
         // Try to save the leaf nodes
-        let (hash, leaf_nodes) = snapshot.leaf_sets().next().unwrap();
         let mut writer = store.begin_client_write().await.unwrap();
 
-        let status = writer
-            .save_leaf_nodes(leaf_nodes.clone().into())
+        let leaf_node_statuses = writer
+            .save_leaf_nodes(
+                &snapshot
+                    .leaf_sets()
+                    .map(|(_, nodes)| nodes.clone().into())
+                    .collect::<Vec<_>>(),
+            )
             .await
             .unwrap();
-        assert!(status.new_block_offers.is_empty());
+        assert!(
+            leaf_node_statuses
+                .values()
+                .all(|status| status.new_block_offers.is_empty())
+        );
 
         let status = writer.commit().await.unwrap();
         assert!(status.approved_branches.is_empty());
 
         // The orphaned leaf nodes were not written to the db.
-        let leaf_nodes = store
-            .acquire_read()
-            .await
-            .unwrap()
-            .load_leaf_nodes(hash)
-            .await
-            .unwrap();
-        assert!(leaf_nodes.is_empty());
+        for hash in leaf_node_statuses.keys() {
+            let leaf_nodes = store
+                .acquire_read()
+                .await
+                .unwrap()
+                .load_leaf_nodes(hash)
+                .await
+                .unwrap();
+            assert!(leaf_nodes.is_empty());
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1088,18 +1137,18 @@ mod tests {
             .save_inner_nodes()
             .await;
 
-        // Skip the leaf nodes that point to the block to be removed.
-        for (_, nodes) in snapshot.leaf_sets() {
-            if nodes.iter().any(|node| node.block_id == block_to_remove) {
-                continue;
-            }
-
-            writer
-                .client_writer()
-                .save_leaf_nodes(nodes.clone().into())
-                .await
-                .unwrap();
-        }
+        writer
+            .client_writer()
+            .save_leaf_nodes(
+                &snapshot
+                    .leaf_sets()
+                    // Skip the leaf nodes that point to the block to be removed.
+                    .filter(|(_, nodes)| !nodes.iter().any(|node| node.block_id == block_to_remove))
+                    .map(|(_, nodes)| nodes.clone().into())
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .unwrap();
 
         writer.commit().await;
 
