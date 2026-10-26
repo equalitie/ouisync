@@ -43,7 +43,8 @@ use tracing::metadata::LevelFilter;
 use tracing::{Instrument, Span, instrument};
 use tracing_subscriber::{
     EnvFilter, Layer,
-    fmt::{MakeWriter, TestWriter, time::SystemTime},
+    filter::filter_fn,
+    fmt::{MakeWriter, TestWriter, format::FmtSpan, time::SystemTime},
     layer::SubscriberExt,
     util::SubscriberInitExt,
 };
@@ -683,15 +684,36 @@ pub(crate) fn init_log_with_writer<W>(writer: W)
 where
     W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
 {
-    let result = tracing_subscriber::fmt()
+    let log_layer = tracing_subscriber::fmt::layer()
         .event_format(Formatter::default().with_timer(SystemTime))
         .with_writer(writer)
-        .with_env_filter(
+        .with_filter(
             tracing_subscriber::EnvFilter::builder()
                 // Only show the logs if explicitly enabled with the `RUST_LOG` env variable.
                 .with_default_directive(LevelFilter::OFF.into())
                 .from_env_lossy(),
-        )
+        );
+
+    // Span timings for wait-time analysis. Enabled with `SPAN_TRACE=path/to/spans.jsonl`.
+    let span_layer = std::env::var_os("SPAN_TRACE").map(|path| {
+        let file = std::fs::File::create(path).unwrap();
+
+        tracing_subscriber::fmt::layer()
+            .json()
+            .flatten_event(true)
+            .with_current_span(true)
+            .with_level(false)
+            .with_span_list(true)
+            .with_span_events(FmtSpan::CLOSE)
+            .with_writer(std::sync::Mutex::new(file))
+            .with_filter(filter_fn(|meta| {
+                meta.target() == "perf" || meta.name() == "actor"
+            }))
+    });
+
+    tracing_subscriber::registry()
+        .with(log_layer)
+        .with(span_layer)
         // `Err` here just means the logger is already initialized, it's OK to ignore it.
         .try_init()
         .ok();
