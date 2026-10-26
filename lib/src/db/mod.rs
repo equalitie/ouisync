@@ -35,6 +35,11 @@ const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const WARN_AFTER_CONNECTION_LIFETIME: Duration = Duration::from_secs(30);
 
+// Maximum number of parameters that can be bound to a single statement. This is the value of the
+// [`SQLITE_LIMIT_VARIABLE_NUMBER`](https://sqlite.org/c3ref/c_limit_attached.html#sqlitelimitvariablenumber)
+// limit.
+pub(crate) const MAX_BIND_PARAMS: usize = 32766;
+
 pub use self::connection::Connection;
 
 /// Database connection pool.
@@ -545,5 +550,28 @@ mod tests {
         assert_eq!(encode_u64(u64::MAX / 2), i64::MAX);
         assert_eq!(encode_u64(u64::MAX / 2 + 1), i64::MIN);
         assert_eq!(encode_u64(u64::MAX), -1);
+    }
+
+    #[tokio::test]
+    async fn max_bind_params() {
+        let mut conn = SqliteConnectOptions::new()
+            .filename(":memory:")
+            .connect()
+            .await
+            .unwrap();
+        let mut handle = conn.lock_handle().await.unwrap();
+
+        // SAFETY: we need to use raw sqlite api because sqlx doesn't expose this functionality. The
+        // raw API requires unsafe. We use valid sqlite connection handle so this should actually be
+        // safe.
+        let actual = unsafe {
+            libsqlite3_sys::sqlite3_limit(
+                handle.as_raw_handle().as_ptr(),
+                libsqlite3_sys::SQLITE_LIMIT_VARIABLE_NUMBER,
+                -1,
+            )
+        };
+
+        assert_eq!(actual as usize, MAX_BIND_PARAMS);
     }
 }
