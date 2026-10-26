@@ -37,14 +37,13 @@ pub(super) async fn update_summaries(
     while !curr.is_empty() {
         for hash in curr.drain() {
             let summary = inner_node::compute_summary(tx, &hash).await?;
-            let old_len = next.len();
 
             // First try inner nodes ...
-            inner_node::update_summaries(tx, &hash, &summary)
+            let count = inner_node::update_summaries(tx, &hash, &summary)
                 .try_collect_into(&mut next)
                 .await?;
 
-            if next.len() == old_len {
+            if count == 0 {
                 // ... no hits. Let's try root nodes.
                 let state = root_node::update_summaries(tx, &hash, summary).await?;
                 let summary = summary.with_state(state);

@@ -12,11 +12,16 @@ use std::{
 pub(crate) trait TryStreamExt: TryStream {
     /// Attempts to collect all successful results of this stream into the specified collection.
     /// Similar to `try_collect` but uses existing collection.
+    /// Returns the number of items collected.
     fn try_collect_into<D>(self, dst: &mut D) -> TryCollectInto<'_, Self, D>
     where
         Self: Sized,
     {
-        TryCollectInto { stream: self, dst }
+        TryCollectInto {
+            stream: self,
+            dst,
+            count: 0,
+        }
     }
 
     /// Consumes the whole stream, discarding the items.
@@ -38,7 +43,8 @@ pin_project! {
     pub(crate) struct TryCollectInto<'a, S, D> {
         #[pin]
         stream: S,
-        dst: &'a mut D
+        dst: &'a mut D,
+        count: usize,
     }
 }
 
@@ -47,16 +53,17 @@ where
     S: TryStream,
     D: Extend<S::Ok>,
 {
-    type Output = Result<(), S::Error>;
+    type Output = Result<usize, S::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
 
         while let Some(item) = ready!(this.stream.as_mut().try_poll_next(cx)?) {
             this.dst.extend(iter::once(item));
+            *this.count = this.count.saturating_add(1);
         }
 
-        Poll::Ready(Ok(()))
+        Poll::Ready(Ok(*this.count))
     }
 }
 
