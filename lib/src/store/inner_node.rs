@@ -96,7 +96,7 @@ pub(super) async fn load(
 
 /// Save multiple nodes to the store. Takes slice of (parent_hash, bucket, node) and returns a set
 /// of parent node hashes whose children were updated.
-pub(super) async fn save_many(
+pub(super) async fn save(
     tx: &mut db::WriteTransaction,
     nodes: &[(Hash, u8, InnerNode)],
 ) -> Result<HashSet<Hash>, Error> {
@@ -217,7 +217,7 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node = InnerNode::new(hash, Summary::INCOMPLETE);
-        save_many(&mut tx, &[(parent, bucket, node)]).await.unwrap();
+        save(&mut tx, &[(parent, bucket, node)]).await.unwrap();
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();
 
@@ -241,14 +241,10 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node0 = InnerNode::new(hash, Summary::INCOMPLETE);
-        save_many(&mut tx, &[(parent, bucket, node0)])
-            .await
-            .unwrap();
+        save(&mut tx, &[(parent, bucket, node0)]).await.unwrap();
 
         let node1 = InnerNode::new(hash, Summary::INCOMPLETE);
-        save_many(&mut tx, &[(parent, bucket, node1)])
-            .await
-            .unwrap();
+        save(&mut tx, &[(parent, bucket, node1)]).await.unwrap();
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();
 
@@ -278,12 +274,10 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node0 = InnerNode::new(hash0, Summary::INCOMPLETE);
-        save_many(&mut tx, &[(parent, bucket, node0)])
-            .await
-            .unwrap();
+        save(&mut tx, &[(parent, bucket, node0)]).await.unwrap();
 
         let node1 = InnerNode::new(hash1, Summary::INCOMPLETE);
-        assert_matches!(save_many(&mut tx, &[(parent, bucket, node1)]).await, Err(_)); // TODO: match concrete error type
+        assert_matches!(save(&mut tx, &[(parent, bucket, node1)]).await, Err(_)); // TODO: match concrete error type
     }
 
     async fn setup() -> (TempDir, db::Pool) {

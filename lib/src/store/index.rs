@@ -208,7 +208,7 @@ mod tests {
         let hash = inners.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        inner_node::save_many(
+        inner_node::save(
             &mut tx,
             &inners
                 .iter()
@@ -264,7 +264,7 @@ mod tests {
         let hash = inners.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        inner_node::save_many(
+        inner_node::save(
             &mut tx,
             &inners
                 .iter()
@@ -300,7 +300,7 @@ mod tests {
         let hash = inners.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        inner_node::save_many(
+        inner_node::save(
             &mut tx,
             &inners
                 .iter()
@@ -356,7 +356,7 @@ mod tests {
         // breadth-first.
 
         for (parent_hash, nodes) in snapshot.inner_sets() {
-            inner_node::save_many(
+            inner_node::save(
                 &mut tx,
                 &nodes
                     .clone()
@@ -448,7 +448,7 @@ mod tests {
         }
 
         for (parent_hash, nodes) in snapshot.inner_sets() {
-            inner_node::save_many(
+            inner_node::save(
                 &mut tx,
                 &nodes
                     .clone()
