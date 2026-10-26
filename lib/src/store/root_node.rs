@@ -1,7 +1,7 @@
 use super::error::Error;
 use crate::{
     crypto::{Hash, sign::PublicKey},
-    db,
+    db::{self, MAX_BIND_PARAMS},
     debug::DebugPrinter,
     protocol::{
         BlockId, MultiBlockPresence, NodeState, Proof, RootNode, RootNodeFilter, RootNodeKind,
@@ -10,8 +10,8 @@ use crate::{
     version_vector::VersionVector,
 };
 use futures_util::{Stream, StreamExt, TryStreamExt};
-use sqlx::{FromRow, Row, sqlite::SqliteRow};
-use std::{cmp::Ordering, fmt, future};
+use sqlx::{FromRow, QueryBuilder, Row, sqlite::SqliteRow};
+use std::{cmp::Ordering, collections::HashMap, fmt, future};
 
 /// Status of receiving a root node
 #[derive(PartialEq, Eq, Debug)]
@@ -332,50 +332,81 @@ pub(super) fn load_all_by_hash<'a>(
     .err_into()
 }
 
-/// Loads the "best" `NodeState` of all the root nodes that reference the given missing block. If
-/// the block is not referenced from any root node or if it's not missing, falls back to returning
-/// `Rejected`.
-pub(super) async fn load_node_state_of_missing(
+/// For each provided block id that is missing, return the "best" `NodeState` of all root nodes that
+/// reference it. Blocks that are not referenced from any root node of that are not missing are
+/// excluded from the returned map.
+pub(super) async fn load_node_states_of_missing(
     conn: &mut db::Connection,
-    block_id: &BlockId,
-) -> Result<NodeState, Error> {
+    block_ids: &[BlockId],
+) -> Result<HashMap<BlockId, NodeState>, Error> {
+    let mut output = HashMap::with_capacity(block_ids.len());
+
+    if block_ids.is_empty() {
+        return Ok(output);
+    }
+
+    for block_ids_chunk in block_ids.chunks(MAX_BIND_PARAMS - 1) {
+        let mut builder = QueryBuilder::new(
+            "WITH RECURSIVE
+                 child_nodes(block_id, parent) AS (
+                     SELECT block_id, parent
+                         FROM snapshot_leaf_nodes
+                         WHERE block_presence = ",
+        );
+        builder.push_bind(SingleBlockPresence::Missing);
+        builder.push(" AND block_id IN (");
+
+        let mut separated = builder.separated(", ");
+        for block_id in block_ids_chunk {
+            separated.push_bind(block_id);
+        }
+
+        builder.push(
+            ")
+                     UNION
+                     SELECT c.block_id, i.parent
+                         FROM snapshot_inner_nodes i INNER JOIN child_nodes c
+                         WHERE i.hash = c.parent
+                 )
+             SELECT c.block_id, r.state
+                 FROM snapshot_root_nodes r INNER JOIN child_nodes c
+                 WHERE r.hash = c.parent",
+        );
+
+        builder
+            .build()
+            .persistent(block_ids.len() == 1)
+            .fetch(&mut *conn)
+            .map_ok(|row| (row.get::<BlockId, _>(0), row.get::<NodeState, _>(1)))
+            .try_for_each(|(block_id, new)| {
+                output
+                    .entry(block_id)
+                    .and_modify(|old| *old = best_node_state(*old, new))
+                    .or_insert(new);
+
+                future::ready(Ok(()))
+            })
+            .await?;
+    }
+
+    Ok(output)
+}
+
+/// Combines two node states, picking the "best" one (`Approved` > `Complete` > `Incomplete` >
+/// `Rejected`).
+fn best_node_state(old: NodeState, new: NodeState) -> NodeState {
     use NodeState as S;
 
-    sqlx::query(
-        "WITH RECURSIVE
-             inner_nodes(parent) AS (
-                 SELECT parent
-                     FROM snapshot_leaf_nodes
-                     WHERE block_id = ? AND block_presence = ?
-                 UNION ALL
-                 SELECT i.parent
-                     FROM snapshot_inner_nodes i INNER JOIN inner_nodes c
-                     WHERE i.hash = c.parent
-             )
-         SELECT state
-             FROM snapshot_root_nodes r INNER JOIN inner_nodes c
-             WHERE r.hash = c.parent",
-    )
-    .bind(block_id)
-    .bind(SingleBlockPresence::Missing)
-    .fetch(conn)
-    .map_ok(|row| row.get(0))
-    .err_into()
-    .try_fold(S::Rejected, |old, new| {
-        let new = match (old, new) {
-            (S::Incomplete | S::Complete | S::Approved | S::Rejected, S::Approved)
-            | (S::Approved, S::Incomplete | S::Complete | S::Rejected) => S::Approved,
-            (S::Incomplete | S::Complete | S::Rejected, S::Complete)
-            | (S::Complete, S::Incomplete | S::Rejected) => S::Complete,
-            (S::Incomplete | S::Rejected, S::Incomplete) | (S::Incomplete, S::Rejected) => {
-                S::Incomplete
-            }
-            (S::Rejected, S::Rejected) => S::Rejected,
-        };
-
-        future::ready(Ok(new))
-    })
-    .await
+    match (old, new) {
+        (S::Incomplete | S::Complete | S::Approved | S::Rejected, S::Approved)
+        | (S::Approved, S::Incomplete | S::Complete | S::Rejected) => S::Approved,
+        (S::Incomplete | S::Complete | S::Rejected, S::Complete)
+        | (S::Complete, S::Incomplete | S::Rejected) => S::Complete,
+        (S::Incomplete | S::Rejected, S::Incomplete) | (S::Incomplete, S::Rejected) => {
+            S::Incomplete
+        }
+        (S::Rejected, S::Rejected) => S::Rejected,
+    }
 }
 
 /// Removes the given root node including all its descendants that are not referenced from any

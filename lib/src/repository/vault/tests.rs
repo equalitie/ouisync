@@ -355,25 +355,29 @@ async fn block_ids_excludes_blocks_from_incomplete_snapshots() {
     );
 
     let mut writer = vault.store().begin_client_write().await.unwrap();
-
     writer
         .save_root_node(proof, &MultiBlockPresence::None)
         .await
         .unwrap();
     writer
         .save_inner_nodes(
-            snapshot
+            &snapshot
                 .inner_sets()
                 .map(|(_, nodes)| nodes.clone().into())
-                .collect(),
+                .collect::<Vec<_>>(),
         )
         .await
         .unwrap();
-
-    for (_, nodes) in snapshot.leaf_sets().take(1) {
-        writer.save_leaf_nodes(nodes.clone().into()).await.unwrap();
-    }
-
+    writer
+        .save_leaf_nodes(
+            &snapshot
+                .leaf_sets()
+                .take(1)
+                .map(|(_, nodes)| nodes.clone().into())
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
     writer.commit().await.unwrap();
 
     let actual = vault.store().block_ids(u32::MAX).next().await.unwrap();

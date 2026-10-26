@@ -249,12 +249,6 @@ pub(crate) struct CacheHash<T> {
     hash: Hash,
 }
 
-impl<T> CacheHash<T> {
-    pub fn into_inner(self) -> T {
-        self.owner
-    }
-}
-
 impl<T> Deref for CacheHash<T> {
     type Target = T;
 

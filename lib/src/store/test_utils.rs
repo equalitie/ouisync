@@ -53,10 +53,11 @@ impl<'a> SnapshotWriter<'a> {
     pub async fn save_inner_nodes(mut self) -> Self {
         self.writer
             .save_inner_nodes(
-                self.snapshot
+                &self
+                    .snapshot
                     .inner_sets()
                     .map(|(_, nodes)| nodes.clone().into())
-                    .collect(),
+                    .collect::<Vec<_>>(),
             )
             .await
             .unwrap();
@@ -65,13 +66,16 @@ impl<'a> SnapshotWriter<'a> {
     }
 
     pub async fn save_leaf_nodes(mut self) -> Self {
-        for (_, nodes) in self.snapshot.leaf_sets() {
-            self.writer
-                .save_leaf_nodes(nodes.clone().into())
-                .await
-                .unwrap();
-        }
-
+        self.writer
+            .save_leaf_nodes(
+                &self
+                    .snapshot
+                    .leaf_sets()
+                    .map(|(_, nodes)| nodes.clone().into())
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .unwrap();
         self
     }
 

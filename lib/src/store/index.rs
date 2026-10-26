@@ -6,8 +6,14 @@ use std::{
 };
 
 use super::{error::Error, inner_node, root_node};
-use crate::{crypto::Hash, db, future::TryStreamExt, protocol::NodeState};
-use sqlx::Row;
+use crate::{
+    crypto::Hash,
+    db::{self, MAX_BIND_PARAMS},
+    future::TryStreamExt as _,
+    protocol::NodeState,
+};
+use futures_util::TryStreamExt as _;
+use sqlx::{QueryBuilder, Row};
 
 /// Does a parent node (root or inner) with the given hash exist?
 pub(super) async fn parent_exists(conn: &mut db::Connection, hash: &Hash) -> Result<bool, Error> {
@@ -21,6 +27,39 @@ pub(super) async fn parent_exists(conn: &mut db::Connection, hash: &Hash) -> Res
     .fetch_one(conn)
     .await?
     .get(0))
+}
+
+/// Filter node hashes corresponding to existing root or inner nodes.
+pub(super) async fn filter_existing_parents(
+    conn: &mut db::Connection,
+    hashes: &[Hash],
+) -> Result<HashSet<Hash>, Error> {
+    let mut output = HashSet::with_capacity(hashes.len());
+
+    for hash_chunk in hashes.chunks(MAX_BIND_PARAMS) {
+        let mut builder = QueryBuilder::new(
+            "SELECT hash FROM (
+                 SELECT hash FROM snapshot_root_nodes
+                 UNION ALL
+                 SELECT hash FROM snapshot_inner_nodes
+             ) WHERE hash in (",
+        );
+
+        let mut separated = builder.separated(", ");
+        for hash in hash_chunk {
+            separated.push_bind(hash);
+        }
+        builder.push(")");
+        builder
+            .build()
+            .persistent(false)
+            .fetch(&mut *conn)
+            .map_ok(|row| row.get::<Hash, _>(0))
+            .try_collect_into(&mut output)
+            .await?;
+    }
+
+    Ok(output)
 }
 
 /// Update summary of the nodes with the specified hashes and all their ancestor nodes.
@@ -62,7 +101,6 @@ pub(super) async fn update_summaries(
 mod tests {
     use super::super::{inner_node, leaf_node, root_node};
     use super::*;
-    use crate::future::TryStreamExt as _;
     use crate::store::block;
     use crate::{
         crypto::{

@@ -110,11 +110,11 @@ pub(super) async fn save(
     for nodes_chunk in nodes.chunks(MAX_BIND_PARAMS / 5) {
         QueryBuilder::new(
             "INSERT INTO snapshot_inner_nodes (
-             parent,
-             bucket,
-             hash,
-             state,
-             block_presence
+                parent,
+                bucket,
+                hash,
+                state,
+                block_presence
              ) ",
         )
         .push_values(nodes_chunk, |mut builder, (parent_hash, bucket, node)| {
