@@ -83,6 +83,7 @@ clap = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
 ctor = "1.0.0"
 hdrhistogram = { version = "7.5.4", default-features = false, features = ["sync"] }
+libsqlite3-sys = "0.30.1"
 metrics_ext = { path = "../metrics_ext" }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
 proptest = { workspace = true }

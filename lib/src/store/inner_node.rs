@@ -1,7 +1,7 @@
 use super::{error::Error, leaf_node};
 use crate::{
     crypto::Hash,
-    db,
+    db::{self, MAX_BIND_PARAMS},
     future::TryStreamExt as _,
     protocol::{EMPTY_INNER_HASH, EMPTY_LEAF_HASH, InnerNode, InnerNodes, LeafNodes, Summary},
 };
@@ -64,7 +64,7 @@ pub(super) async fn load(
 
     let mut output = HashMap::new();
 
-    for hashes_chunk in hashes.chunks(30000) {
+    for hashes_chunk in hashes.chunks(MAX_BIND_PARAMS) {
         let mut builder = QueryBuilder::new(
             "SELECT hash, state, block_presence
              FROM snapshot_inner_nodes
@@ -155,7 +155,8 @@ pub(super) async fn save_many(
 
     let mut output = HashSet::new();
 
-    for nodes_chunk in nodes.chunks(6000) {
+    // `MAX_BIND_PARAMS / 5` because we bind 5 parameters per record
+    for nodes_chunk in nodes.chunks(MAX_BIND_PARAMS / 5) {
         QueryBuilder::new(
             "INSERT INTO snapshot_inner_nodes (
              parent,
