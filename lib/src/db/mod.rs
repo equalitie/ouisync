@@ -8,7 +8,7 @@ mod migrations;
 pub use id::DatabaseId;
 pub use migrations::SCHEMA_VERSION;
 
-use tracing::Span;
+use tracing::{Instrument, Span};
 
 use deadlock::ExpectShortLifetime;
 use ref_cast::RefCast;
@@ -102,13 +102,16 @@ impl Pool {
     /// Acquire a read-only database connection.
     #[track_caller]
     pub fn acquire(&self) -> impl Future<Output = Result<PoolConnection, sqlx::Error>> + '_ {
-        PoolConnection::acquire(&self.reads, Location::caller())
+        PoolConnection::acquire(
+            &self.reads,
+            ExpectShortLifetime::new_in(WARN_AFTER_CONNECTION_LIFETIME, Location::caller()),
+        )
     }
 
     /// Begin a read-only transaction. See [`ReadTransaction`] for more details.
     #[track_caller]
     pub fn begin_read(&self) -> impl Future<Output = Result<ReadTransaction, sqlx::Error>> + '_ {
-        ReadTransaction::begin(&self.reads, Location::caller())
+        ReadTransaction::begin(&self.reads, TransactionKind::Read, Location::caller())
     }
 
     /// Begin a write transaction. See [`WriteTransaction`] for more details.
@@ -118,7 +121,8 @@ impl Pool {
 
         async move {
             Ok(WriteTransaction {
-                inner: ReadTransaction::begin(&self.write, location).await?,
+                inner: ReadTransaction::begin(&self.write, TransactionKind::Write, location)
+                    .await?,
             })
         }
     }
@@ -144,10 +148,9 @@ impl PoolConnection {
     // Internal
     async fn acquire(
         pool: &SqlitePool,
-        location: &'static Location<'static>,
+        track_lifetime: ExpectShortLifetime,
     ) -> Result<Self, sqlx::Error> {
         let inner = pool.acquire().await?;
-        let track_lifetime = ExpectShortLifetime::new_in(WARN_AFTER_CONNECTION_LIFETIME, location);
 
         Ok(Self {
             inner,
@@ -170,6 +173,24 @@ impl DerefMut for PoolConnection {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub(crate) struct TransactionId(usize);
+
+impl TransactionId {
+    fn next() -> Self {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl fmt::Display for TransactionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Transaction that allows only reading.
 ///
 /// This is useful if one wants to make sure the observed database content doesn't change for the
@@ -180,28 +201,49 @@ impl DerefMut for PoolConnection {
 pub struct ReadTransaction {
     inner: PoolConnection,
     closed: bool,
+    id: TransactionId,
+    _span: Span,
 }
 
 impl ReadTransaction {
     // Internal
     async fn begin(
         pool: &SqlitePool,
+        kind: TransactionKind,
         location: &'static Location<'static>,
     ) -> Result<Self, sqlx::Error> {
-        let mut inner = PoolConnection::acquire(pool, location).await?;
-        SqliteTransactionManager::begin(&mut inner.inner, None).await?;
+        let id = TransactionId::next();
+        // Create this outside of the "begin" span to prevent keeping it open after its async block
+        // ends.
+        let track_lifetime = ExpectShortLifetime::new_in(WARN_AFTER_CONNECTION_LIFETIME, location);
+
+        let inner = async {
+            let mut inner = PoolConnection::acquire(pool, track_lifetime).await?;
+            SqliteTransactionManager::begin(&mut inner.inner, None).await?;
+            Ok::<_, sqlx::Error>(inner)
+        }
+        .instrument(tracing::info_span!(target: "perf", "begin", %id, ?kind, %location))
+        .await?;
 
         Ok(Self {
             inner,
             closed: false,
+            id,
+            _span: tracing::info_span!(target: "perf", "transaction", %id, ?kind, %location),
         })
     }
 
     // Internal
     async fn commit(mut self) -> Result<Committed, sqlx::Error> {
-        SqliteTransactionManager::commit(&mut self.inner.inner).await?;
+        SqliteTransactionManager::commit(&mut self.inner.inner)
+            .instrument(tracing::info_span!(target: "perf", "commit", id = %self.id))
+            .await?;
         self.closed = true;
         Ok(Committed(self))
+    }
+
+    pub(crate) fn id(&self) -> TransactionId {
+        self.id
     }
 }
 
@@ -340,6 +382,12 @@ impl std::fmt::Debug for WriteTransaction {
 }
 
 impl_executor_by_deref!(WriteTransaction);
+
+#[derive(Clone, Copy, Debug)]
+enum TransactionKind {
+    Read,
+    Write,
+}
 
 #[derive(Debug, Error)]
 pub enum Error {

@@ -28,7 +28,7 @@ use std::{
     time::Instant,
 };
 use tokio::{select, sync::mpsc};
-use tracing::Level;
+use tracing::{Instrument, Level, instrument};
 
 mod future {
     pub(super) use futures_util::future::try_join;
@@ -281,16 +281,21 @@ impl Inner {
         }
 
         let mut writer = self.vault.store().begin_client_write().await?;
+        let tx_id = writer.id();
 
-        self.handle_root_nodes(&mut writer, root_nodes).await?;
-        self.handle_inner_nodes(&mut writer, inner_nodes).await?;
-        self.handle_leaf_nodes(&mut writer, leaf_nodes).await?;
-        self.handle_blocks(&mut writer, blocks).await?;
-        self.handle_block_offers(writer.as_reader_mut(), block_offers)
-            .await?;
-        self.commit_responses(writer).await?;
+        async {
+            self.handle_root_nodes(&mut writer, root_nodes).await?;
+            self.handle_inner_nodes(&mut writer, inner_nodes).await?;
+            self.handle_leaf_nodes(&mut writer, leaf_nodes).await?;
+            self.handle_blocks(&mut writer, blocks).await?;
+            self.handle_block_offers(writer.as_reader_mut(), block_offers)
+                .await?;
+            self.commit_responses(writer).await?;
 
-        Ok(())
+            Ok(())
+        }
+        .instrument(tracing::info_span!(target: "perf", "handle_writable_responses", %tx_id))
+        .await
     }
 
     async fn handle_readable_responses(
@@ -308,6 +313,7 @@ impl Inner {
         Ok(())
     }
 
+    #[instrument(target = "perf", skip_all, fields(tx_id = %writer.id()))]
     async fn handle_root_nodes(
         &self,
         writer: &mut ClientWriter,
@@ -354,6 +360,7 @@ impl Inner {
         Ok(())
     }
 
+    #[instrument(target = "perf", skip_all, fields(tx_id = %writer.id()))]
     async fn handle_inner_nodes(
         &self,
         writer: &mut ClientWriter,
@@ -396,6 +403,7 @@ impl Inner {
         Ok(())
     }
 
+    #[instrument(target = "perf", skip_all, fields(tx_id = %writer.id()))]
     async fn handle_leaf_nodes(
         &self,
         writer: &mut ClientWriter,
@@ -428,6 +436,7 @@ impl Inner {
         Ok(())
     }
 
+    #[instrument(target = "perf", skip_all, fields(tx_id = %reader.id()))]
     async fn handle_block_offers(
         &self,
         mut reader: ClientReaderMut<'_>,
@@ -455,6 +464,7 @@ impl Inner {
         Ok(())
     }
 
+    #[instrument(target = "perf", skip_all, fields(tx_id = %writer.id()))]
     async fn handle_blocks(
         &self,
         writer: &mut ClientWriter,
@@ -470,6 +480,7 @@ impl Inner {
         Ok(())
     }
 
+    #[instrument(target = "perf", skip_all, fields(tx_id = %writer.id()))]
     async fn commit_responses(&self, writer: ClientWriter) -> Result<()> {
         let status = writer
             .commit_and_then({

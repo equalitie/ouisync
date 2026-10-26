@@ -1,4 +1,5 @@
 use futures_util::TryStreamExt as _;
+use tracing::instrument;
 
 use super::{
     Error, block,
@@ -12,7 +13,7 @@ use crate::{
     StorageSize,
     block_tracker::BlockOfferState,
     crypto::{CacheHash, Hash, Hashable, sign::PublicKey},
-    db,
+    db::{self, TransactionId},
     future::TryStreamExt as _,
     protocol::{
         Block, BlockId, InnerNodes, LeafNodes, MultiBlockPresence, NodeState, Proof,
@@ -329,6 +330,11 @@ impl ClientWriter {
         self.commit_and_then(|status| status).await
     }
 
+    pub(crate) fn id(&self) -> TransactionId {
+        self.db.id()
+    }
+
+    #[instrument(target = "perf", skip_all, fields(tx_id = %self.id()))]
     async fn finalize_snapshots(&mut self) -> Result<FinalizeStatus, Error> {
         let states =
             index::update_summaries(&mut self.db, mem::take(&mut self.summary_updates)).await?;
@@ -444,6 +450,10 @@ impl ClientReaderMut<'_> {
                 Some(SingleBlockPresence::Present) | None => Ok(None),
             }
         }
+    }
+
+    pub fn id(&self) -> TransactionId {
+        self.db.id()
     }
 }
 
