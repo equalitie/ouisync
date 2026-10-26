@@ -199,7 +199,7 @@ impl Patch {
                             .map(|(bucket, node)| (parent_hash, bucket, *node)),
                     );
 
-                    inner_node::save_many(tx.db(), &inner_nodes).await?;
+                    inner_node::save(tx.db(), &inner_nodes).await?;
 
                     for (bucket, node) in &nodes {
                         stack.push((node.hash, key.child(bucket)));

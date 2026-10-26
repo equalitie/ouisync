@@ -192,7 +192,7 @@ impl ClientWriter {
                     })
             })
             .collect();
-        let affected_parent_hashes = inner_node::save_many(&mut self.db, &nodes).await?;
+        let affected_parent_hashes = inner_node::save(&mut self.db, &nodes).await?;
 
         for parent_hash in affected_parent_hashes {
             self.summary_updates.insert(parent_hash);
