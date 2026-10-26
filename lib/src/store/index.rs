@@ -208,7 +208,15 @@ mod tests {
         let hash = inners.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        inner_node::save_all(&mut tx, &inners, &hash).await.unwrap();
+        inner_node::save_many(
+            &mut tx,
+            &inners
+                .iter()
+                .map(|(bucket, node)| (hash, bucket, *node))
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
         let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
         tx.commit().await.unwrap();
 
@@ -256,7 +264,15 @@ mod tests {
         let hash = inners.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        inner_node::save_all(&mut tx, &inners, &hash).await.unwrap();
+        inner_node::save_many(
+            &mut tx,
+            &inners
+                .iter()
+                .map(|(bucket, node)| (hash, bucket, *node))
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
         let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
         tx.commit().await.unwrap();
 
@@ -284,7 +300,15 @@ mod tests {
         let hash = inners.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        inner_node::save_all(&mut tx, &inners, &hash).await.unwrap();
+        inner_node::save_many(
+            &mut tx,
+            &inners
+                .iter()
+                .map(|(bucket, node)| (hash, bucket, *node))
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
         let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
         tx.commit().await.unwrap();
 
@@ -332,9 +356,17 @@ mod tests {
         // breadth-first.
 
         for (parent_hash, nodes) in snapshot.inner_sets() {
-            inner_node::save_all(&mut tx, &nodes.clone().into_incomplete(), parent_hash)
-                .await
-                .unwrap();
+            inner_node::save_many(
+                &mut tx,
+                &nodes
+                    .clone()
+                    .into_incomplete()
+                    .into_iter()
+                    .map(|(bucket, node)| (*parent_hash, bucket, node))
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .unwrap();
 
             update_summaries_and_approve(&mut tx, *parent_hash).await;
 
@@ -416,9 +448,17 @@ mod tests {
         }
 
         for (parent_hash, nodes) in snapshot.inner_sets() {
-            inner_node::save_all(&mut tx, &nodes.clone().into_incomplete(), parent_hash)
-                .await
-                .unwrap();
+            inner_node::save_many(
+                &mut tx,
+                &nodes
+                    .clone()
+                    .into_incomplete()
+                    .into_iter()
+                    .map(|(bucket, node)| (*parent_hash, bucket, node))
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .unwrap();
         }
 
         for (parent_hash, nodes) in snapshot.leaf_sets() {

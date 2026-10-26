@@ -94,55 +94,6 @@ pub(super) async fn load(
     Ok(output)
 }
 
-/// Saves this inner node into the db unless it already exists.
-pub(super) async fn save(
-    tx: &mut db::WriteTransaction,
-    node: &InnerNode,
-    parent: &Hash,
-    bucket: u8,
-) -> Result<bool, Error> {
-    debug_assert_ne!(node.hash, *EMPTY_INNER_HASH);
-    debug_assert_ne!(node.hash, *EMPTY_LEAF_HASH);
-
-    let result = sqlx::query(
-        "INSERT INTO snapshot_inner_nodes (
-             parent,
-             bucket,
-             hash,
-             state,
-             block_presence
-         )
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT (parent, bucket) DO NOTHING",
-    )
-    .bind(parent)
-    .bind(bucket)
-    .bind(&node.hash)
-    .bind(node.summary.state)
-    .bind(&node.summary.block_presence)
-    .execute(tx)
-    .await?;
-
-    Ok(result.rows_affected() > 0)
-}
-
-/// Atomically saves all nodes in this map to the db.
-pub(super) async fn save_all(
-    tx: &mut db::WriteTransaction,
-    nodes: &InnerNodes,
-    parent: &Hash,
-) -> Result<usize, Error> {
-    let mut updated = 0;
-
-    for (bucket, node) in nodes {
-        if save(tx, node, parent, bucket).await? {
-            updated += 1;
-        }
-    }
-
-    Ok(updated)
-}
-
 /// Save multiple nodes to the store. Takes slice of (parent_hash, bucket, node) and returns a set
 /// of parent node hashes whose children were updated.
 pub(super) async fn save_many(
@@ -266,7 +217,7 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node = InnerNode::new(hash, Summary::INCOMPLETE);
-        save(&mut tx, &node, &parent, bucket).await.unwrap();
+        save_many(&mut tx, &[(parent, bucket, node)]).await.unwrap();
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();
 
@@ -290,10 +241,14 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node0 = InnerNode::new(hash, Summary::INCOMPLETE);
-        save(&mut tx, &node0, &parent, bucket).await.unwrap();
+        save_many(&mut tx, &[(parent, bucket, node0)])
+            .await
+            .unwrap();
 
         let node1 = InnerNode::new(hash, Summary::INCOMPLETE);
-        save(&mut tx, &node1, &parent, bucket).await.unwrap();
+        save_many(&mut tx, &[(parent, bucket, node1)])
+            .await
+            .unwrap();
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();
 
@@ -323,10 +278,12 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node0 = InnerNode::new(hash0, Summary::INCOMPLETE);
-        save(&mut tx, &node0, &parent, bucket).await.unwrap();
+        save_many(&mut tx, &[(parent, bucket, node0)])
+            .await
+            .unwrap();
 
         let node1 = InnerNode::new(hash1, Summary::INCOMPLETE);
-        assert_matches!(save(&mut tx, &node1, &parent, bucket).await, Err(_)); // TODO: match concrete error type
+        assert_matches!(save_many(&mut tx, &[(parent, bucket, node1)]).await, Err(_)); // TODO: match concrete error type
     }
 
     async fn setup() -> (TempDir, db::Pool) {
