@@ -127,43 +127,6 @@ pub(super) async fn filter_missing(
     Ok(output)
 }
 
-/// Saves the node to the db unless it already exists.
-pub(super) async fn save(
-    tx: &mut db::WriteTransaction,
-    node: &LeafNode,
-    parent: &Hash,
-) -> Result<bool, Error> {
-    let result = sqlx::query(
-        "INSERT INTO snapshot_leaf_nodes (parent, locator, block_id, block_presence)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT (parent, locator, block_id) DO NOTHING",
-    )
-    .bind(parent)
-    .bind(&node.locator)
-    .bind(&node.block_id)
-    .bind(node.block_presence)
-    .execute(tx)
-    .await?;
-
-    Ok(result.rows_affected() > 0)
-}
-
-pub(super) async fn save_all(
-    tx: &mut db::WriteTransaction,
-    nodes: &LeafNodes,
-    parent: &Hash,
-) -> Result<usize, Error> {
-    let mut updated = 0;
-
-    for node in nodes {
-        if save(tx, node, parent).await? {
-            updated += 1;
-        }
-    }
-
-    Ok(updated)
-}
-
 /// Save multiple nodes to the store. Takes slice of (parent_hash, node) and returns a set
 /// of parent node hashes whose children were updated.
 pub(super) async fn save_many(
@@ -341,7 +304,7 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node = LeafNode::present(encoded_locator, block_id);
-        save(&mut tx, &node, &parent).await.unwrap();
+        save_many(&mut tx, &[(parent, node)]).await.unwrap();
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();
         assert_eq!(nodes.len(), 1);
@@ -363,7 +326,7 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node = LeafNode::missing(encoded_locator, block_id);
-        save(&mut tx, &node, &parent).await.unwrap();
+        save_many(&mut tx, &[(parent, node)]).await.unwrap();
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();
         assert_eq!(nodes.len(), 1);
@@ -385,10 +348,10 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node = LeafNode::missing(encoded_locator, block_id);
-        save(&mut tx, &node, &parent).await.unwrap();
+        save_many(&mut tx, &[(parent, node)]).await.unwrap();
 
         let node = LeafNode::missing(encoded_locator, block_id);
-        save(&mut tx, &node, &parent).await.unwrap();
+        save_many(&mut tx, &[(parent, node)]).await.unwrap();
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();
         assert_eq!(nodes.len(), 1);
@@ -410,10 +373,10 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node = LeafNode::present(encoded_locator, block_id);
-        save(&mut tx, &node, &parent).await.unwrap();
+        save_many(&mut tx, &[(parent, node)]).await.unwrap();
 
         let node = LeafNode::missing(encoded_locator, block_id);
-        save(&mut tx, &node, &parent).await.unwrap();
+        save_many(&mut tx, &[(parent, node)]).await.unwrap();
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();
         assert_eq!(nodes.len(), 1);
@@ -435,7 +398,7 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node = LeafNode::missing(encoded_locator, block_id);
-        save(&mut tx, &node, &parent).await.unwrap();
+        save_many(&mut tx, &[(parent, node)]).await.unwrap();
 
         assert_eq!(
             set_present(&mut tx, &block_id)
@@ -466,7 +429,7 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node = LeafNode::present(encoded_locator, block_id);
-        save(&mut tx, &node, &parent).await.unwrap();
+        save_many(&mut tx, &[(parent, node)]).await.unwrap();
 
         assert_eq!(
             set_present(&mut tx, &block_id)
@@ -505,17 +468,15 @@ mod tests {
 
         let mut tx = pool.begin_write().await.unwrap();
 
-        save(
+        save_many(
             &mut tx,
-            &LeafNode::present(rand::random(), present_id),
-            &parent,
+            &[(parent, LeafNode::present(rand::random(), present_id))],
         )
         .await
         .unwrap();
-        save(
+        save_many(
             &mut tx,
-            &LeafNode::missing(rand::random(), missing_id),
-            &parent,
+            &[(parent, LeafNode::missing(rand::random(), missing_id))],
         )
         .await
         .unwrap();
