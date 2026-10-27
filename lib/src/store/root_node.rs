@@ -745,8 +745,9 @@ impl FromRow<'_, SqliteRow> for RootNode {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{SnapshotWriter, Store};
     use super::*;
-    use crate::crypto::sign::Keypair;
+    use crate::{crypto::sign::Keypair, protocol::test_utils::Snapshot};
     use assert_matches::assert_matches;
     use tempfile::TempDir;
 
@@ -976,6 +977,53 @@ mod tests {
                         .collect()
                 })
         }
+    }
+
+    #[tokio::test]
+    async fn load_node_states_of_missing_blocks() {
+        let (_base_dir, pool) = setup().await;
+        let store = Store::new(pool);
+
+        let write_keys = Keypair::random();
+        let branch_id = PublicKey::random();
+        let snapshot = Snapshot::generate(&mut rand::rng(), 4);
+
+        let mut writer = SnapshotWriter::begin(&store, &snapshot)
+            .await
+            .save_nodes(&write_keys, branch_id, VersionVector::first(branch_id))
+            .await;
+
+        // Make one block present.
+        let (present_id, present_block) = snapshot.blocks().iter().next().unwrap();
+        writer
+            .client_writer()
+            .save_block(present_block)
+            .await
+            .unwrap();
+        writer.commit().await;
+
+        let unreferenced_id: BlockId = rand::random();
+        let block_ids: Vec<_> = snapshot
+            .blocks()
+            .keys()
+            .copied()
+            .chain([unreferenced_id])
+            .collect();
+
+        let mut tx = store.db().begin_read().await.unwrap();
+        let actual = load_node_states_of_missing(&mut tx, &block_ids)
+            .await
+            .unwrap();
+
+        // Present and unreferenced blocks are excluded.
+        let expected: HashMap<_, _> = snapshot
+            .blocks()
+            .keys()
+            .filter(|block_id| *block_id != present_id)
+            .map(|block_id| (*block_id, NodeState::Approved))
+            .collect();
+
+        assert_eq!(actual, expected);
     }
 
     async fn setup() -> (TempDir, db::Pool) {
