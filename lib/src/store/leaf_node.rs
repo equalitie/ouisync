@@ -1,4 +1,7 @@
-use std::collections::HashSet;
+use std::{
+    collections::{HashMap, HashSet},
+    future,
+};
 
 use super::error::Error;
 use crate::{
@@ -17,7 +20,6 @@ use {super::inner_node, crate::protocol::INNER_LAYER_COUNT, async_recursion::asy
 pub(super) struct LeafNodeUpdate {
     pub parent: Hash,
     pub encoded_locator: Hash,
-    pub block_id: BlockId,
 }
 
 pub(super) async fn load_children(
@@ -165,8 +167,8 @@ pub(super) async fn save(
 pub(super) async fn set_present(
     tx: &mut db::WriteTransaction,
     block_ids: &[BlockId],
-) -> Result<Vec<LeafNodeUpdate>, Error> {
-    let mut output = Vec::with_capacity(block_ids.len());
+) -> Result<HashMap<BlockId, Vec<LeafNodeUpdate>>, Error> {
+    let mut output = HashMap::with_capacity(block_ids.len());
 
     if block_ids.is_empty() {
         return Ok(output);
@@ -189,17 +191,24 @@ pub(super) async fn set_present(
             separated.push_bind(block_id);
         }
 
-        builder.push(") RETURNING parent, locator, block_id");
+        builder.push(") RETURNING block_id, parent, locator");
         builder
             .build()
             .persistent(block_ids.len() == 1)
             .fetch(&mut *tx)
-            .map_ok(|row| LeafNodeUpdate {
-                parent: row.get(0),
-                encoded_locator: row.get(1),
-                block_id: row.get(2),
+            .map_ok(|row| {
+                (
+                    row.get(0),
+                    LeafNodeUpdate {
+                        parent: row.get(1),
+                        encoded_locator: row.get(2),
+                    },
+                )
             })
-            .try_collect_into(&mut output)
+            .try_for_each(|(block_id, update)| {
+                output.entry(block_id).or_default().push(update);
+                future::ready(Ok(()))
+            })
             .await?;
     }
 
@@ -422,11 +431,13 @@ mod tests {
             set_present(&mut tx, slice::from_ref(&block_id))
                 .await
                 .unwrap(),
-            [LeafNodeUpdate {
-                parent,
-                encoded_locator,
-                block_id
-            }],
+            HashMap::from([(
+                block_id,
+                vec![LeafNodeUpdate {
+                    parent,
+                    encoded_locator,
+                }]
+            )]),
         );
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();
@@ -453,7 +464,7 @@ mod tests {
             set_present(&mut tx, slice::from_ref(&block_id))
                 .await
                 .unwrap(),
-            [],
+            HashMap::new(),
         );
     }
 
@@ -469,7 +480,7 @@ mod tests {
             set_present(&mut tx, slice::from_ref(&block_id))
                 .await
                 .unwrap(),
-            [],
+            HashMap::new(),
         )
     }
 

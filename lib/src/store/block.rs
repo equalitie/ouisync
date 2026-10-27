@@ -3,7 +3,7 @@ use crate::{
     db::{self, MAX_BIND_PARAMS},
     protocol::{BLOCK_SIZE, Block, BlockContent, BlockId, BlockNonce},
 };
-use sqlx::{QueryBuilder, Row};
+use sqlx::{QueryBuilder, Row, Sqlite};
 
 /// Reads a block from the store into a buffer.
 ///
@@ -44,61 +44,72 @@ pub(super) async fn read(
     Ok(nonce)
 }
 
-/// Writes a block into the store.
-///
-/// If a block with the same id already exists, this is a no-op.
-///
-/// # Panics
-///
-/// Panics if buffer length is not equal to [`BLOCK_SIZE`].
-///
-pub(super) async fn write(tx: &mut db::WriteTransaction, block: &Block) -> Result<(), Error> {
-    assert_eq!(
-        block.content.len(),
-        BLOCK_SIZE,
-        "incorrect buffer length for block write"
-    );
-
-    sqlx::query(
-        "INSERT INTO blocks (id, nonce, content)
-         VALUES (?, ?, ?)
-         ON CONFLICT (id) DO NOTHING",
-    )
-    .bind(&block.id)
-    .bind(&block.nonce[..])
-    .bind(&block.content[..])
-    .execute(tx)
-    .await?;
-
-    Ok(())
+/// Write blocks to the store in batch.
+pub(super) struct BlockWriter<'a> {
+    tx: &'a mut db::WriteTransaction,
+    builder: QueryBuilder<'a, Sqlite>,
+    count: usize,
 }
 
-/// Writes blocks into the store.
-pub(super) async fn write_many(
-    tx: &mut db::WriteTransaction,
-    blocks: &[&Block],
-) -> Result<(), Error> {
-    for block in blocks {
+impl<'a> BlockWriter<'a> {
+    pub fn new(tx: &'a mut db::WriteTransaction) -> Self {
+        Self {
+            tx,
+            builder: QueryBuilder::new("INSERT INTO blocks (id, nonce, content) VALUES "),
+            count: 0,
+        }
+    }
+
+    /// Adds block to the batch
+    pub async fn add(&mut self, block: &'a Block) -> Result<&mut Self, Error> {
         assert_eq!(
             block.content.len(),
             BLOCK_SIZE,
             "incorrect buffer length for block write"
         );
+
+        if self.count >= MAX_BIND_PARAMS / 3 {
+            self.execute().await?;
+        }
+
+        if self.count > 0 {
+            self.builder.push(", ");
+        }
+
+        self.builder.push("(");
+        self.builder.push_bind(&block.id);
+        self.builder.push(", ");
+        self.builder.push_bind(&block.nonce[..]);
+        self.builder.push(", ");
+        self.builder.push_bind(&block.content[..]);
+        self.builder.push(")");
+
+        self.count += 1;
+
+        Ok(self)
     }
 
-    for blocks_chunk in blocks.chunks(MAX_BIND_PARAMS / 3) {
-        let mut builder = QueryBuilder::new("INSERT INTO blocks (id, nonce, content)");
-        builder.push_values(blocks_chunk, |mut builder, block| {
-            builder
-                .push_bind(&block.id)
-                .push_bind(&block.nonce[..])
-                .push_bind(&block.content[..]);
-        });
-        builder.push(" ON CONFLICT (id) DO NOTHING");
-        builder.build().persistent(false).execute(&mut *tx).await?;
+    /// Write all batched blocks to the store.
+    pub async fn finish(&mut self) -> Result<(), Error> {
+        self.execute().await
     }
 
-    Ok(())
+    async fn execute(&mut self) -> Result<(), Error> {
+        if self.count == 0 {
+            return Ok(());
+        }
+
+        self.builder.push(" ON CONFLICT (id) DO NOTHING");
+        self.builder
+            .build()
+            .persistent(false)
+            .execute(&mut *self.tx)
+            .await?;
+        self.builder.reset();
+        self.count = 0;
+
+        Ok(())
+    }
 }
 
 pub(super) async fn remove(tx: &mut db::WriteTransaction, id: &BlockId) -> Result<(), Error> {
@@ -143,7 +154,13 @@ mod tests {
 
         let mut tx = pool.begin_write().await.unwrap();
 
-        write(&mut tx, &block).await.unwrap();
+        BlockWriter::new(&mut tx)
+            .add(&block)
+            .await
+            .unwrap()
+            .finish()
+            .await
+            .unwrap();
 
         let mut content = BlockContent::new();
         read(&mut tx, &block.id, &mut content).await.unwrap();
@@ -176,8 +193,15 @@ mod tests {
 
         let mut tx = pool.begin_write().await.unwrap();
 
-        write(&mut tx, &block).await.unwrap();
-        write(&mut tx, &block).await.unwrap();
+        for _ in 0..2 {
+            BlockWriter::new(&mut tx)
+                .add(&block)
+                .await
+                .unwrap()
+                .finish()
+                .await
+                .unwrap();
+        }
     }
 
     async fn setup() -> (TempDir, db::Pool) {

@@ -1,4 +1,4 @@
-use super::{WriteTransaction, block, error::Error, patch::Patch};
+use super::{WriteTransaction, block::BlockWriter, error::Error, patch::Patch};
 use crate::{
     crypto::{
         Hash,
@@ -59,11 +59,17 @@ impl Changeset {
             patch.save(tx, self.bump, write_keys).await?;
         }
 
-        for block in self.blocks {
-            block::write(tx.db(), &block).await?;
+        if !self.blocks.is_empty() {
+            let mut writer = BlockWriter::new(tx.db());
+            for block in &self.blocks {
+                writer.add(block).await?;
+            }
+            writer.finish().await?;
 
             if let Some(tracker) = &tx.block_expiration_tracker {
-                tracker.handle_block_update(&block.id, false);
+                for block in &self.blocks {
+                    tracker.handle_block_update(&block.id, false);
+                }
             }
 
             changed = true;

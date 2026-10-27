@@ -99,9 +99,10 @@ pub(super) async fn update_summaries(
 
 #[cfg(test)]
 mod tests {
-    use super::super::{inner_node, leaf_node, root_node};
-    use super::*;
-    use crate::store::block;
+    use super::{
+        super::{block::BlockWriter, inner_node, leaf_node, root_node},
+        *,
+    };
     use crate::{
         crypto::{
             Hashable,
@@ -538,13 +539,18 @@ mod tests {
         let mut received_blocks = 0;
 
         for block in snapshot.blocks().values() {
-            block::write_many(&mut tx, slice::from_ref(&block))
+            BlockWriter::new(&mut tx)
+                .add(block)
+                .await
+                .unwrap()
+                .finish()
                 .await
                 .unwrap();
             let parent_hashes = leaf_node::set_present(&mut tx, slice::from_ref(&block.id))
                 .await
                 .unwrap()
-                .into_iter()
+                .into_values()
+                .flatten()
                 .map(|update| update.parent)
                 .collect();
             update_summaries(&mut tx, parent_hashes).await.unwrap();
