@@ -1,7 +1,7 @@
 use tracing::instrument;
 
 use super::{
-    Error, block,
+    Error,
     block_expiration_tracker::BlockExpirationTracker,
     block_id_cache::BlockIdCache,
     block_ids, index, inner_node, leaf_node,
@@ -19,6 +19,7 @@ use crate::{
         RootNodeFilter, SingleBlockPresence, Summary,
     },
     repository,
+    store::block::BlockWriter,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -286,24 +287,27 @@ impl ClientWriter {
         let block_ids: Vec<_> = blocks.iter().map(|block| block.id).collect();
         let updates = leaf_node::set_present(&mut self.db, &block_ids).await?;
 
-        let new_block_ids: HashSet<_> = updates.iter().map(|update| &update.block_id).collect();
-        let new_blocks: Vec<_> = blocks
-            .iter()
-            .filter(|block| new_block_ids.contains(&block.id))
-            .collect();
+        let mut writer = BlockWriter::new(&mut self.db);
+        for block in blocks {
+            if !updates.contains_key(&block.id) {
+                continue;
+            }
+            writer.add(block).await?;
+        }
+        writer.finish().await?;
 
-        block::write_many(&mut self.db, &new_blocks).await?;
-
-        for update in updates {
-            self.summary_updates.insert(update.parent);
-            self.block_id_cache_updates
-                .push((update.encoded_locator, update.block_id));
-
-            if let Some(tracker) = &self.block_expiration_tracker {
-                tracker.handle_block_update(&update.block_id, false);
+        for (block_id, updates) in updates {
+            for update in updates {
+                self.summary_updates.insert(update.parent);
+                self.block_id_cache_updates
+                    .push((update.encoded_locator, block_id));
             }
 
-            self.new_blocks.push(update.block_id);
+            if let Some(tracker) = &self.block_expiration_tracker {
+                tracker.handle_block_update(&block_id, false);
+            }
+
+            self.new_blocks.push(block_id);
         }
 
         Ok(())
