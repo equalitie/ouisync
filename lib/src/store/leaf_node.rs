@@ -129,7 +129,7 @@ pub(super) async fn filter_missing(
 
 /// Save multiple nodes to the store. Takes slice of (parent_hash, node) and returns a set
 /// of parent node hashes whose children were updated.
-pub(super) async fn save_many(
+pub(super) async fn save(
     tx: &mut db::WriteTransaction,
     nodes: &[(Hash, LeafNode)],
 ) -> Result<HashSet<Hash>, Error> {
@@ -304,7 +304,7 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node = LeafNode::present(encoded_locator, block_id);
-        save_many(&mut tx, &[(parent, node)]).await.unwrap();
+        save(&mut tx, &[(parent, node)]).await.unwrap();
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();
         assert_eq!(nodes.len(), 1);
@@ -326,7 +326,7 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node = LeafNode::missing(encoded_locator, block_id);
-        save_many(&mut tx, &[(parent, node)]).await.unwrap();
+        save(&mut tx, &[(parent, node)]).await.unwrap();
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();
         assert_eq!(nodes.len(), 1);
@@ -348,10 +348,10 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node = LeafNode::missing(encoded_locator, block_id);
-        save_many(&mut tx, &[(parent, node)]).await.unwrap();
+        save(&mut tx, &[(parent, node)]).await.unwrap();
 
         let node = LeafNode::missing(encoded_locator, block_id);
-        save_many(&mut tx, &[(parent, node)]).await.unwrap();
+        save(&mut tx, &[(parent, node)]).await.unwrap();
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();
         assert_eq!(nodes.len(), 1);
@@ -373,10 +373,10 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node = LeafNode::present(encoded_locator, block_id);
-        save_many(&mut tx, &[(parent, node)]).await.unwrap();
+        save(&mut tx, &[(parent, node)]).await.unwrap();
 
         let node = LeafNode::missing(encoded_locator, block_id);
-        save_many(&mut tx, &[(parent, node)]).await.unwrap();
+        save(&mut tx, &[(parent, node)]).await.unwrap();
 
         let nodes = load_children(&mut tx, &parent).await.unwrap();
         assert_eq!(nodes.len(), 1);
@@ -398,7 +398,7 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node = LeafNode::missing(encoded_locator, block_id);
-        save_many(&mut tx, &[(parent, node)]).await.unwrap();
+        save(&mut tx, &[(parent, node)]).await.unwrap();
 
         assert_eq!(
             set_present(&mut tx, &block_id)
@@ -429,7 +429,7 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node = LeafNode::present(encoded_locator, block_id);
-        save_many(&mut tx, &[(parent, node)]).await.unwrap();
+        save(&mut tx, &[(parent, node)]).await.unwrap();
 
         assert_eq!(
             set_present(&mut tx, &block_id)
@@ -468,13 +468,13 @@ mod tests {
 
         let mut tx = pool.begin_write().await.unwrap();
 
-        save_many(
+        save(
             &mut tx,
             &[(parent, LeafNode::present(rand::random(), present_id))],
         )
         .await
         .unwrap();
-        save_many(
+        save(
             &mut tx,
             &[(parent, LeafNode::missing(rand::random(), missing_id))],
         )

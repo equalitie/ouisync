@@ -249,7 +249,7 @@ impl ClientWriter {
                 .collect()
         };
 
-        let affected_parent_hashes = leaf_node::save_many(&mut self.db, &valid_nodes).await?;
+        let affected_parent_hashes = leaf_node::save(&mut self.db, &valid_nodes).await?;
         self.summary_updates.extend(affected_parent_hashes);
 
         let statuses = node_sets
