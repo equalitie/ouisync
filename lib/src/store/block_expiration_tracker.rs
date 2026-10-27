@@ -443,6 +443,8 @@ async fn set_as_missing_if_expired(
 
 #[cfg(test)]
 mod test {
+    use std::slice;
+
     use super::super::*;
     use super::*;
     use crate::crypto::sign::Keypair;
@@ -605,7 +607,7 @@ mod test {
                     match op {
                         Op::Receive(block) => {
                             let mut writer = store.begin_client_write().await.unwrap();
-                            writer.save_block(&block).await.unwrap();
+                            writer.save_blocks(slice::from_ref(&block)).await.unwrap();
                             writer.commit().await.unwrap();
                         }
                         Op::Remove(id) => {

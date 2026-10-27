@@ -480,11 +480,12 @@ impl Inner {
         writer: &mut ClientWriter,
         responses: &mut Vec<BlockResponse>,
     ) -> Result<()> {
-        for response in responses.drain(..) {
-            writer.save_block(&response.block).await?;
+        let blocks: Vec<_> = responses.drain(..).map(|response| response.block).collect();
+        writer.save_blocks(&blocks).await?;
 
+        for block in &blocks {
             self.request_tracker
-                .success(MessageKey::Block(response.block.id), vec![]);
+                .success(MessageKey::Block(block.id), vec![]);
         }
 
         Ok(())

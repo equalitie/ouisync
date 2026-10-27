@@ -231,10 +231,13 @@ mod tests {
             .await;
 
         // ... make some of them as present.
-        for node in snapshot.leaf_nodes().take(num_present) {
-            let block = snapshot.blocks().get(&node.block_id).unwrap();
-            writer.client_writer().save_block(block).await.unwrap();
-        }
+        let blocks: Vec<_> = snapshot
+            .leaf_nodes()
+            .take(num_present)
+            .filter_map(|node| snapshot.blocks().get(&node.block_id))
+            .cloned()
+            .collect();
+        writer.client_writer().save_blocks(&blocks).await.unwrap();
 
         writer.commit().await;
 

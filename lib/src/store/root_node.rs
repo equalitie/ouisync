@@ -745,6 +745,8 @@ impl FromRow<'_, SqliteRow> for RootNode {
 
 #[cfg(test)]
 mod tests {
+    use std::slice;
+
     use super::super::{SnapshotWriter, Store};
     use super::*;
     use crate::{crypto::sign::Keypair, protocol::test_utils::Snapshot};
@@ -997,7 +999,7 @@ mod tests {
         let (present_id, present_block) = snapshot.blocks().iter().next().unwrap();
         writer
             .client_writer()
-            .save_block(present_block)
+            .save_blocks(slice::from_ref(present_block))
             .await
             .unwrap();
         writer.commit().await;

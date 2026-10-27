@@ -1,4 +1,3 @@
-use futures_util::TryStreamExt as _;
 use tracing::instrument;
 
 use super::{
@@ -283,29 +282,28 @@ impl ClientWriter {
         Ok(statuses)
     }
 
-    pub async fn save_block(&mut self, block: &Block) -> Result<(), Error> {
-        let updated = {
-            let mut updated = false;
-            let mut updates = leaf_node::set_present(&mut self.db, &block.id);
+    pub async fn save_blocks(&mut self, blocks: &[Block]) -> Result<(), Error> {
+        let block_ids: Vec<_> = blocks.iter().map(|block| block.id).collect();
+        let updates = leaf_node::set_present(&mut self.db, &block_ids).await?;
 
-            while let Some(update) = updates.try_next().await? {
-                self.summary_updates.insert(update.parent);
-                self.block_id_cache_updates
-                    .push((update.encoded_locator, block.id));
-                updated = true;
-            }
+        let new_block_ids: HashSet<_> = updates.iter().map(|update| &update.block_id).collect();
+        let new_blocks: Vec<_> = blocks
+            .iter()
+            .filter(|block| new_block_ids.contains(&block.id))
+            .collect();
 
-            updated
-        };
+        block::write_many(&mut self.db, &new_blocks).await?;
 
-        if updated {
-            block::write(&mut self.db, block).await?;
+        for update in updates {
+            self.summary_updates.insert(update.parent);
+            self.block_id_cache_updates
+                .push((update.encoded_locator, update.block_id));
 
             if let Some(tracker) = &self.block_expiration_tracker {
-                tracker.handle_block_update(&block.id, false);
+                tracker.handle_block_update(&update.block_id, false);
             }
 
-            self.new_blocks.push(block.id);
+            self.new_blocks.push(update.block_id);
         }
 
         Ok(())
@@ -843,7 +841,7 @@ mod tests {
             // Mark one of the missing block as present so the block presences are different (but still
             // `Some`).
             let mut writer = store.begin_client_write().await.unwrap();
-            writer.save_block(&block_1).await.unwrap();
+            writer.save_blocks(slice::from_ref(&block_1)).await.unwrap();
             writer.commit().await.unwrap();
 
             // Receive the same node we already have. The hashes and version vectors are equal but the
@@ -1107,9 +1105,10 @@ mod tests {
         let snapshot = Snapshot::generate(&mut rand::rng(), 1);
 
         let mut writer = store.begin_client_write().await.unwrap();
-        for block in snapshot.blocks().values() {
-            writer.save_block(block).await.unwrap();
-        }
+        writer
+            .save_blocks(&snapshot.blocks().values().cloned().collect::<Vec<_>>())
+            .await
+            .unwrap();
         writer.commit().await.unwrap();
 
         let mut reader = store.acquire_read().await.unwrap();

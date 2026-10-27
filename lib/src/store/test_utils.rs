@@ -80,9 +80,10 @@ impl<'a> SnapshotWriter<'a> {
     }
 
     pub async fn save_blocks(mut self) -> Self {
-        for block in self.snapshot.blocks().values() {
-            self.writer.save_block(block).await.unwrap();
-        }
+        self.writer
+            .save_blocks(&self.snapshot.blocks().values().cloned().collect::<Vec<_>>())
+            .await
+            .unwrap();
         self
     }
 
