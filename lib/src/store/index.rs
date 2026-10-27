@@ -156,7 +156,7 @@ mod tests {
         let hash = nodes.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        leaf_node::save_many(
+        leaf_node::save(
             &mut tx,
             &nodes.iter().map(|node| (hash, *node)).collect::<Vec<_>>(),
         )
@@ -180,7 +180,7 @@ mod tests {
         let hash = nodes.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        leaf_node::save_many(
+        leaf_node::save(
             &mut tx,
             &nodes.iter().map(|node| (hash, *node)).collect::<Vec<_>>(),
         )
@@ -203,7 +203,7 @@ mod tests {
         let hash = nodes.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        leaf_node::save_many(
+        leaf_node::save(
             &mut tx,
             &nodes.iter().map(|node| (hash, *node)).collect::<Vec<_>>(),
         )
@@ -428,7 +428,7 @@ mod tests {
         let mut unsaved_leaves = snapshot.leaf_count();
 
         for (parent_hash, nodes) in snapshot.leaf_sets() {
-            leaf_node::save_many(
+            leaf_node::save(
                 &mut tx,
                 &nodes
                     .iter()
@@ -517,7 +517,7 @@ mod tests {
         }
 
         for (parent_hash, nodes) in snapshot.leaf_sets() {
-            leaf_node::save_many(
+            leaf_node::save(
                 &mut tx,
                 &nodes
                     .iter()

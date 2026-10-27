@@ -208,7 +208,7 @@ impl Patch {
             } else if let Some(nodes) = self.leaves.remove(&key) {
                 leaf_nodes.clear();
                 leaf_nodes.extend(nodes.iter().map(|node| (parent_hash, *node)));
-                leaf_node::save_many(tx.db(), &leaf_nodes).await?;
+                leaf_node::save(tx.db(), &leaf_nodes).await?;
             }
         }
 
