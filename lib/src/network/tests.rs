@@ -140,10 +140,11 @@ async fn transfer_blocks_between_two_replicas_case(block_count: usize, rng_seed:
         // Simulate receiving the blocks from yet another replica
         let mut writer = a_vault.store().begin_client_write().await.unwrap();
 
-        for (id, block) in snapshot.blocks() {
-            writer.save_block(block).await.unwrap();
-            tracing::info!(?id, "save block");
-        }
+        writer
+            .save_blocks(&snapshot.blocks().values().cloned().collect::<Vec<_>>())
+            .await
+            .unwrap();
+        tracing::info!(ids = ?snapshot.blocks().keys().collect::<Vec<_>>(), "save blocks");
 
         let status = writer.commit().await.unwrap();
 

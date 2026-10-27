@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, slice};
 
 use super::{RepositoryId, RepositoryMonitor, Vault};
 use crate::{
@@ -616,7 +616,7 @@ async fn receive_snapshot(
 
 async fn receive_block(vault: &Vault, block: &Block) {
     let mut writer = vault.store().begin_client_write().await.unwrap();
-    writer.save_block(block).await.unwrap();
+    writer.save_blocks(slice::from_ref(block)).await.unwrap();
     writer.commit().await.unwrap();
 }
 

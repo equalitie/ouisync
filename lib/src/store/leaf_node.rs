@@ -8,7 +8,7 @@ use crate::{
     protocol::{BlockId, LeafNode, LeafNodes, SingleBlockPresence},
 };
 use futures_util::{Stream, TryStreamExt as _};
-use sqlx::{FromRow, QueryBuilder, Row, sqlite::SqliteRow};
+use sqlx::{QueryBuilder, Row};
 
 #[cfg(test)]
 use {super::inner_node, crate::protocol::INNER_LAYER_COUNT, async_recursion::async_recursion};
@@ -17,15 +17,7 @@ use {super::inner_node, crate::protocol::INNER_LAYER_COUNT, async_recursion::asy
 pub(super) struct LeafNodeUpdate {
     pub parent: Hash,
     pub encoded_locator: Hash,
-}
-
-impl FromRow<'_, SqliteRow> for LeafNodeUpdate {
-    fn from_row(row: &SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(Self {
-            parent: row.try_get(0)?,
-            encoded_locator: row.try_get(1)?,
-        })
-    }
+    pub block_id: BlockId,
 }
 
 pub(super) async fn load_children(
@@ -168,25 +160,50 @@ pub(super) async fn save(
     Ok(output)
 }
 
-/// Marks all leaf nodes that point to the specified block as present (not missing). Returns
-/// the locators and parent hashes of the updated nodes.
-pub(super) fn set_present<'a>(
-    tx: &'a mut db::WriteTransaction,
-    block_id: &'a BlockId,
-) -> impl Stream<Item = Result<LeafNodeUpdate, Error>> + 'a {
-    // Update only those nodes that have block_presence set to `Missing`.
-    sqlx::query_as(
-        "UPDATE snapshot_leaf_nodes
-         SET block_presence = ?
-         WHERE block_id = ? AND (block_presence = ? OR block_presence = ?)
-         RETURNING parent, locator",
-    )
-    .bind(SingleBlockPresence::Present)
-    .bind(block_id)
-    .bind(SingleBlockPresence::Expired)
-    .bind(SingleBlockPresence::Missing)
-    .fetch(tx)
-    .err_into()
+/// Marks all leaf nodes that point to the specified blocks as present (not missing). Returns the
+/// locators and parent hashes of the updated nodes.
+pub(super) async fn set_present(
+    tx: &mut db::WriteTransaction,
+    block_ids: &[BlockId],
+) -> Result<Vec<LeafNodeUpdate>, Error> {
+    let mut output = Vec::with_capacity(block_ids.len());
+
+    if block_ids.is_empty() {
+        return Ok(output);
+    }
+
+    for block_ids_chunk in block_ids.chunks(MAX_BIND_PARAMS - 3) {
+        let mut builder = QueryBuilder::new(
+            "UPDATE snapshot_leaf_nodes
+             SET block_presence = ",
+        );
+        builder.push_bind(SingleBlockPresence::Present);
+        builder.push(" WHERE block_presence IN (");
+        builder.push_bind(SingleBlockPresence::Expired);
+        builder.push(", ");
+        builder.push_bind(SingleBlockPresence::Missing);
+        builder.push(") AND block_id IN (");
+
+        let mut separated = builder.separated(", ");
+        for block_id in block_ids_chunk {
+            separated.push_bind(block_id);
+        }
+
+        builder.push(") RETURNING parent, locator, block_id");
+        builder
+            .build()
+            .persistent(block_ids.len() == 1)
+            .fetch(&mut *tx)
+            .map_ok(|row| LeafNodeUpdate {
+                parent: row.get(0),
+                encoded_locator: row.get(1),
+                block_id: row.get(2),
+            })
+            .try_collect_into(&mut output)
+            .await?;
+    }
+
+    Ok(output)
 }
 
 /// Marks all leaf nodes that point to the specified block as missing. Returns the parent hashes of
@@ -289,8 +306,9 @@ pub(super) async fn count_in(
 
 #[cfg(test)]
 mod tests {
+    use std::slice;
+
     use super::*;
-    use futures_util::TryStreamExt;
     use tempfile::TempDir;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -401,13 +419,13 @@ mod tests {
         save(&mut tx, &[(parent, node)]).await.unwrap();
 
         assert_eq!(
-            set_present(&mut tx, &block_id)
-                .try_collect::<Vec<_>>()
+            set_present(&mut tx, slice::from_ref(&block_id))
                 .await
                 .unwrap(),
             [LeafNodeUpdate {
                 parent,
-                encoded_locator
+                encoded_locator,
+                block_id
             }],
         );
 
@@ -432,8 +450,7 @@ mod tests {
         save(&mut tx, &[(parent, node)]).await.unwrap();
 
         assert_eq!(
-            set_present(&mut tx, &block_id)
-                .try_collect::<Vec<_>>()
+            set_present(&mut tx, slice::from_ref(&block_id))
                 .await
                 .unwrap(),
             [],
@@ -449,8 +466,7 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         assert_eq!(
-            set_present(&mut tx, &block_id)
-                .try_collect::<Vec<_>>()
+            set_present(&mut tx, slice::from_ref(&block_id))
                 .await
                 .unwrap(),
             [],

@@ -1,9 +1,9 @@
 use super::error::Error;
 use crate::{
-    db,
+    db::{self, MAX_BIND_PARAMS},
     protocol::{BLOCK_SIZE, Block, BlockContent, BlockId, BlockNonce},
 };
-use sqlx::Row;
+use sqlx::{QueryBuilder, Row};
 
 /// Reads a block from the store into a buffer.
 ///
@@ -69,6 +69,34 @@ pub(super) async fn write(tx: &mut db::WriteTransaction, block: &Block) -> Resul
     .bind(&block.content[..])
     .execute(tx)
     .await?;
+
+    Ok(())
+}
+
+/// Writes blocks into the store.
+pub(super) async fn write_many(
+    tx: &mut db::WriteTransaction,
+    blocks: &[&Block],
+) -> Result<(), Error> {
+    for block in blocks {
+        assert_eq!(
+            block.content.len(),
+            BLOCK_SIZE,
+            "incorrect buffer length for block write"
+        );
+    }
+
+    for blocks_chunk in blocks.chunks(MAX_BIND_PARAMS / 3) {
+        let mut builder = QueryBuilder::new("INSERT INTO blocks (id, nonce, content)");
+        builder.push_values(blocks_chunk, |mut builder, block| {
+            builder
+                .push_bind(&block.id)
+                .push_bind(&block.nonce[..])
+                .push_bind(&block.content[..]);
+        });
+        builder.push(" ON CONFLICT (id) DO NOTHING");
+        builder.build().persistent(false).execute(&mut *tx).await?;
+    }
 
     Ok(())
 }

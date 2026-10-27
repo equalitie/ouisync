@@ -115,9 +115,8 @@ mod tests {
         version_vector::VersionVector,
     };
     use assert_matches::assert_matches;
-    use futures_util::TryStreamExt;
     use rand::{SeedableRng, rngs::StdRng};
-    use std::iter;
+    use std::{iter, slice};
     use tempfile::TempDir;
     use test_strategy::proptest;
 
@@ -539,12 +538,15 @@ mod tests {
         let mut received_blocks = 0;
 
         for block in snapshot.blocks().values() {
-            block::write(&mut tx, block).await.unwrap();
-            let parent_hashes = leaf_node::set_present(&mut tx, &block.id)
-                .map_ok(|info| info.parent)
-                .try_collect()
+            block::write_many(&mut tx, slice::from_ref(&block))
                 .await
                 .unwrap();
+            let parent_hashes = leaf_node::set_present(&mut tx, slice::from_ref(&block.id))
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|update| update.parent)
+                .collect();
             update_summaries(&mut tx, parent_hashes).await.unwrap();
 
             received_blocks += 1;
