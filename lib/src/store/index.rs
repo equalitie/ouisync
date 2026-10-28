@@ -1,9 +1,6 @@
 //! Operations on the whole index (or its subset) as opposed to individual nodes.
 
-use std::{
-    collections::{HashMap, HashSet},
-    mem,
-};
+use std::collections::{HashMap, HashSet};
 
 use super::{error::Error, inner_node, root_node};
 use crate::{
@@ -66,32 +63,31 @@ pub(super) async fn filter_existing_parents(
 /// Returns the affected snapshots and their states.
 pub(super) async fn update_summaries(
     tx: &mut db::WriteTransaction,
-    nodes: HashSet<Hash>,
+    nodes: &[Hash],
 ) -> Result<HashMap<Hash, NodeState>, Error> {
-    let mut curr = nodes;
-    let mut next = HashSet::new();
+    let mut states = HashMap::new();
 
-    let mut states = HashMap::default();
+    let mut curr = nodes;
+    let mut next = Vec::new();
 
     while !curr.is_empty() {
-        for hash in curr.drain() {
-            let summary = inner_node::compute_summary(tx, &hash).await?;
+        let summaries = inner_node::compute_summaries(tx, curr).await?;
+        let updated = inner_node::update_summaries(tx, &summaries).await?;
 
-            // First try inner nodes ...
-            let count = inner_node::update_summaries(tx, &hash, &summary)
-                .try_collect_into(&mut next)
-                .await?;
-
-            if count == 0 {
-                // ... no hits. Let's try root nodes.
-                let state = root_node::update_summaries(tx, &hash, summary).await?;
-                let summary = summary.with_state(state);
-
-                states.insert(hash, summary.state);
+        // Handle root node summaries
+        for (hash, summary) in summaries {
+            if updated.contains_key(&hash) {
+                continue;
             }
+
+            let state = root_node::update_summaries(tx, &hash, summary).await?;
+            let summary = summary.with_state(state);
+            states.insert(hash, summary.state);
         }
 
-        mem::swap(&mut curr, &mut next);
+        next.clear();
+        next.extend(updated.into_values());
+        curr = &next;
     }
 
     Ok(states)
@@ -127,7 +123,12 @@ mod tests {
         let mut conn = pool.acquire().await.unwrap();
 
         let hash = *EMPTY_LEAF_HASH;
-        let summary = inner_node::compute_summary(&mut conn, &hash).await.unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut conn, slice::from_ref(&hash))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
 
         assert_eq!(summary.state, NodeState::Complete);
         assert_eq!(summary.block_presence, MultiBlockPresence::None);
@@ -142,7 +143,12 @@ mod tests {
         let nodes: LeafNodes = iter::once(node).collect();
         let hash = nodes.hash();
 
-        let summary = inner_node::compute_summary(&mut conn, &hash).await.unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut conn, &[hash])
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
 
         assert_eq!(summary, Summary::INCOMPLETE);
     }
@@ -162,7 +168,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut tx, &[hash])
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(summary.state, NodeState::Complete);
@@ -186,7 +197,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut tx, slice::from_ref(&hash))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(summary.state, NodeState::Complete);
@@ -209,7 +225,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut tx, slice::from_ref(&hash))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(summary.state, NodeState::Complete);
@@ -222,7 +243,12 @@ mod tests {
         let mut conn = pool.acquire().await.unwrap();
 
         let hash = *EMPTY_INNER_HASH;
-        let summary = inner_node::compute_summary(&mut conn, &hash).await.unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut conn, slice::from_ref(&hash))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
 
         assert_eq!(summary.state, NodeState::Complete);
         assert_eq!(summary.block_presence, MultiBlockPresence::None);
@@ -237,7 +263,12 @@ mod tests {
         let nodes: InnerNodes = iter::once((0, node)).collect();
         let hash = nodes.hash();
 
-        let summary = inner_node::compute_summary(&mut conn, &hash).await.unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut conn, slice::from_ref(&hash))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
 
         assert_eq!(summary, Summary::INCOMPLETE);
     }
@@ -270,7 +301,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut tx, slice::from_ref(&hash))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(summary.state, NodeState::Complete);
@@ -326,7 +362,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut tx, slice::from_ref(&hash))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(summary.state, NodeState::Complete);
@@ -362,7 +403,12 @@ mod tests {
         )
         .await
         .unwrap();
-        let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut tx, slice::from_ref(&hash))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(summary.state, NodeState::Complete);
@@ -454,7 +500,7 @@ mod tests {
         pool.close().await.unwrap();
 
         async fn update_summaries_and_approve(tx: &mut db::WriteTransaction, hash: Hash) {
-            for (hash, state) in update_summaries(tx, [hash].into()).await.unwrap() {
+            for (hash, state) in update_summaries(tx, slice::from_ref(&hash)).await.unwrap() {
                 match state {
                     NodeState::Complete => {
                         root_node::approve(tx, &hash).try_consume().await.unwrap();
@@ -499,7 +545,7 @@ mod tests {
         .unwrap();
 
         if snapshot.leaf_count() == 0 {
-            update_summaries(&mut tx, [root_node.proof.hash].into())
+            update_summaries(&mut tx, slice::from_ref(&root_node.proof.hash))
                 .await
                 .unwrap();
         }
@@ -526,7 +572,7 @@ mod tests {
             )
             .await
             .unwrap();
-            update_summaries(&mut tx, [*parent_hash].into())
+            update_summaries(&mut tx, slice::from_ref(parent_hash))
                 .await
                 .unwrap();
         }
@@ -546,14 +592,14 @@ mod tests {
                 .finish()
                 .await
                 .unwrap();
-            let parent_hashes = leaf_node::set_present(&mut tx, slice::from_ref(&block.id))
+            let parent_hashes: Vec<_> = leaf_node::set_present(&mut tx, slice::from_ref(&block.id))
                 .await
                 .unwrap()
                 .into_values()
                 .flatten()
                 .map(|update| update.parent)
                 .collect();
-            update_summaries(&mut tx, parent_hashes).await.unwrap();
+            update_summaries(&mut tx, &parent_hashes).await.unwrap();
 
             received_blocks += 1;
 
