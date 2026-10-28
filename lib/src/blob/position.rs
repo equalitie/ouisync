@@ -47,4 +47,12 @@ impl Position {
             Ordering::Greater => panic!("advancing too far"),
         }
     }
+
+    /// Return new position at the beginning of this position's block.
+    pub fn with_zero_offset(self) -> Self {
+        Self {
+            block: self.block,
+            offset: if self.block == 0 { HEADER_SIZE } else { 0 },
+        }
+    }
 }

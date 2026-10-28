@@ -487,6 +487,62 @@ async fn append() {
     store.close().await.unwrap();
 }
 
+// Append to a partially filled block after it's been flushed (and thus evicted from the cache).
+mod append_after_flush_to_partial_block {
+    use super::*;
+
+    // Separate test case when the split point is in the first block because it's special (it
+    // contains the blob header).
+    #[tokio::test]
+    async fn first() {
+        case(8).await
+    }
+
+    // General case when the split point is past the first block.
+    #[tokio::test]
+    async fn second() {
+        case(BLOCK_SIZE - HEADER_SIZE + 8).await
+    }
+
+    async fn case(split_at: usize) {
+        let len = 2 * BLOCK_SIZE - HEADER_SIZE;
+        assert!(split_at < len);
+
+        let (mut rng, _base_dir, store, [branch]) = setup(0).await;
+
+        let mut tx = store.begin_write().await.unwrap();
+
+        let id = rng.r#gen();
+        let content = random_bytes(&mut rng, len);
+        let (head, tail) = content.split_at(split_at);
+
+        let mut blob = Blob::create(branch.clone(), id);
+
+        let mut changeset = Changeset::new();
+        blob.write_all(&mut tx, &mut changeset, head).await.unwrap();
+        blob.flush(&mut tx, &mut changeset).await.unwrap();
+        changeset
+            .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
+            .await
+            .unwrap();
+
+        let mut changeset = Changeset::new();
+        blob.write_all(&mut tx, &mut changeset, tail).await.unwrap();
+        blob.flush(&mut tx, &mut changeset).await.unwrap();
+        changeset
+            .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
+            .await
+            .unwrap();
+
+        let mut blob = Blob::open(&mut tx, branch, id).await.unwrap();
+        let actual = blob.read_to_end(&mut tx).await.unwrap();
+        assert!(actual == content);
+
+        drop(tx);
+        store.close().await.unwrap();
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn write_reopen_and_read() {
     let (mut rng, _base_dir, store, [branch]) = setup(0).await;
