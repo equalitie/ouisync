@@ -22,26 +22,40 @@ pub(super) struct LeafNodeUpdate {
     pub encoded_locator: Hash,
 }
 
+/// Load all leaf nodes with the specified parent hashes. Returns map of parent hash -> child nodes.
 pub(super) async fn load_children(
     conn: &mut db::Connection,
-    parent: &Hash,
-) -> Result<LeafNodes, Error> {
-    Ok(sqlx::query(
-        "SELECT locator, block_id, block_presence
-         FROM snapshot_leaf_nodes
-         WHERE parent = ?",
-    )
-    .bind(parent)
-    .fetch(conn)
-    .map_ok(|row| LeafNode {
-        locator: row.get(0),
-        block_id: row.get(1),
-        block_presence: row.get(2),
-    })
-    .try_collect::<Vec<_>>()
-    .await?
-    .into_iter()
-    .collect())
+    parent_hashes: &[Hash],
+) -> Result<HashMap<Hash, LeafNodes>, Error> {
+    let mut output = HashMap::with_capacity(parent_hashes.len());
+
+    for parent_hashes_chunk in parent_hashes.chunks(MAX_BIND_PARAMS) {
+        let mut builder = QueryBuilder::new(
+            "SELECT parent, locator, block_id, block_presence
+             FROM snapshot_leaf_nodes
+             WHERE parent IN (",
+        );
+        let mut separated = builder.separated(", ");
+        for hash in parent_hashes_chunk {
+            separated.push_bind(hash);
+        }
+        builder.push(")");
+        builder
+            .build()
+            .persistent(parent_hashes.len() == 1)
+            .fetch(&mut *conn)
+            .try_for_each(|row| {
+                output
+                    .entry(row.get(0))
+                    .or_insert_with(LeafNodes::default)
+                    .insert(row.get(1), row.get(2), row.get(3));
+
+                future::ready(Ok(()))
+            })
+            .await?;
+    }
+
+    Ok(output)
 }
 
 /// Loads all locators (most of the time (always?) there will be at most one) pointing to the
@@ -127,10 +141,6 @@ pub(super) async fn save(
     tx: &mut db::WriteTransaction,
     nodes: &[(Hash, LeafNode)],
 ) -> Result<HashSet<Hash>, Error> {
-    if nodes.is_empty() {
-        return Ok(HashSet::new());
-    }
-
     let mut output = HashSet::new();
 
     // `MAX_BIND_PARAMS / 4` because we bind 4 parameters per record
@@ -170,10 +180,6 @@ pub(super) async fn set_present(
 ) -> Result<HashMap<BlockId, Vec<LeafNodeUpdate>>, Error> {
     let mut output = HashMap::with_capacity(block_ids.len());
 
-    if block_ids.is_empty() {
-        return Ok(output);
-    }
-
     for block_ids_chunk in block_ids.chunks(MAX_BIND_PARAMS - 3) {
         let mut builder = QueryBuilder::new(
             "UPDATE snapshot_leaf_nodes
@@ -206,7 +212,7 @@ pub(super) async fn set_present(
                 )
             })
             .try_for_each(|(block_id, update)| {
-                output.entry(block_id).or_default().push(update);
+                output.entry(block_id).or_insert(Vec::new()).push(update);
                 future::ready(Ok(()))
             })
             .await?;
@@ -235,7 +241,7 @@ pub(super) fn set_missing<'a>(
     .err_into()
 }
 
-/// Marks the block as missing ony if it's currently expired. Returns the parent hashes of the
+/// Marks the block as missing only if it's currently expired. Returns the parent hashes of the
 /// updated nodes.
 pub(super) fn set_missing_if_expired<'a>(
     tx: &'a mut db::WriteTransaction,
@@ -294,22 +300,22 @@ pub(super) async fn count_block_ids(conn: &mut db::Connection) -> Result<u64, Er
 pub(super) async fn count_in(
     conn: &mut db::Connection,
     current_layer: usize,
-    node: &Hash,
+    nodes: &[Hash],
 ) -> Result<usize, Error> {
-    // TODO: this can be rewritten as a single query using CTE
-
     if current_layer < INNER_LAYER_COUNT {
-        let children = inner_node::load_children(conn, node).await?;
+        let children: Vec<_> = inner_node::load_children(conn, nodes)
+            .await?
+            .into_values()
+            .flat_map(|nodes| nodes.into_iter().map(|(_, node)| node.hash))
+            .collect();
 
-        let mut sum = 0;
-
-        for (_bucket, child) in children {
-            sum += count_in(conn, current_layer + 1, &child.hash).await?;
-        }
-
-        Ok(sum)
+        count_in(conn, current_layer + 1, &children).await
     } else {
-        Ok(load_children(conn, node).await?.len())
+        Ok(load_children(conn, nodes)
+            .await?
+            .values()
+            .map(|nodes| nodes.len())
+            .sum())
     }
 }
 
@@ -333,7 +339,12 @@ mod tests {
         let node = LeafNode::present(encoded_locator, block_id);
         save(&mut tx, &[(parent, node)]).await.unwrap();
 
-        let nodes = load_children(&mut tx, &parent).await.unwrap();
+        let nodes = load_children(&mut tx, slice::from_ref(&parent))
+            .await
+            .unwrap()
+            .into_values()
+            .next()
+            .unwrap();
         assert_eq!(nodes.len(), 1);
 
         let node = nodes.get(&encoded_locator).unwrap();
@@ -355,7 +366,12 @@ mod tests {
         let node = LeafNode::missing(encoded_locator, block_id);
         save(&mut tx, &[(parent, node)]).await.unwrap();
 
-        let nodes = load_children(&mut tx, &parent).await.unwrap();
+        let nodes = load_children(&mut tx, slice::from_ref(&parent))
+            .await
+            .unwrap()
+            .into_values()
+            .next()
+            .unwrap();
         assert_eq!(nodes.len(), 1);
 
         let node = nodes.get(&encoded_locator).unwrap();
@@ -380,7 +396,12 @@ mod tests {
         let node = LeafNode::missing(encoded_locator, block_id);
         save(&mut tx, &[(parent, node)]).await.unwrap();
 
-        let nodes = load_children(&mut tx, &parent).await.unwrap();
+        let nodes = load_children(&mut tx, slice::from_ref(&parent))
+            .await
+            .unwrap()
+            .into_values()
+            .next()
+            .unwrap();
         assert_eq!(nodes.len(), 1);
 
         let node = nodes.get(&encoded_locator).unwrap();
@@ -405,7 +426,12 @@ mod tests {
         let node = LeafNode::missing(encoded_locator, block_id);
         save(&mut tx, &[(parent, node)]).await.unwrap();
 
-        let nodes = load_children(&mut tx, &parent).await.unwrap();
+        let nodes = load_children(&mut tx, slice::from_ref(&parent))
+            .await
+            .unwrap()
+            .into_values()
+            .next()
+            .unwrap();
         assert_eq!(nodes.len(), 1);
 
         let node = nodes.get(&encoded_locator).unwrap();
@@ -440,7 +466,12 @@ mod tests {
             )]),
         );
 
-        let nodes = load_children(&mut tx, &parent).await.unwrap();
+        let nodes = load_children(&mut tx, slice::from_ref(&parent))
+            .await
+            .unwrap()
+            .into_values()
+            .next()
+            .unwrap();
         assert_eq!(
             nodes.get(&encoded_locator).unwrap().block_presence,
             SingleBlockPresence::Present

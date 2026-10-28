@@ -55,6 +55,7 @@ use std::{
     borrow::Cow,
     ops::{Deref, DerefMut},
     path::Path,
+    slice,
     sync::{Arc, RwLock},
     time::{Duration, SystemTime},
 };
@@ -401,7 +402,7 @@ impl Reader {
             .await?
             .proof
             .hash;
-        leaf_node::count_in(self.db(), 0, &root_hash).await
+        leaf_node::count_in(self.db(), 0, slice::from_ref(&root_hash)).await
     }
 
     /// Load the latest approved root node of the given branch.
@@ -463,14 +464,16 @@ impl Reader {
         root_node::load_all_by_writer(self.db(), writer_id)
     }
 
-    // TODO: use cache and remove `ReadTransaction::load_inner_nodes_with_cache`
     pub async fn load_inner_nodes(&mut self, parent_hash: &Hash) -> Result<InnerNodes, Error> {
-        inner_node::load_children(self.db(), parent_hash).await
+        inner_node::load_children(self.db(), slice::from_ref(parent_hash))
+            .await
+            .map(|node_sets| node_sets.into_values().next().unwrap_or_default())
     }
 
-    // TODO: use cache and remove `ReadTransaction::load_leaf_nodes_with_cache`
     pub async fn load_leaf_nodes(&mut self, parent_hash: &Hash) -> Result<LeafNodes, Error> {
-        leaf_node::load_children(self.db(), parent_hash).await
+        leaf_node::load_children(self.db(), slice::from_ref(parent_hash))
+            .await
+            .map(|node_sets| node_sets.into_values().next().unwrap_or_default())
     }
 
     pub fn load_locators<'a>(
@@ -557,8 +560,9 @@ impl WriteTransaction {
         let db = self.db();
 
         block::remove(db, id).await?;
-        let parent_hashes = leaf_node::set_missing(db, id).try_collect().await?;
-        index::update_summaries(db, parent_hashes).await?;
+
+        let parent_hashes: Vec<_> = leaf_node::set_missing(db, id).try_collect().await?;
+        index::update_summaries(db, &parent_hashes).await?;
 
         let WriteTransaction {
             inner:

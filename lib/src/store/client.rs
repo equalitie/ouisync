@@ -23,7 +23,7 @@ use crate::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    mem, slice,
+    slice,
     sync::Arc,
 };
 
@@ -32,7 +32,7 @@ pub(crate) struct ClientWriter {
     db: db::WriteTransaction,
     block_expiration_tracker: Option<Arc<BlockExpirationTracker>>,
     quota: Option<StorageSize>,
-    summary_updates: HashSet<Hash>,
+    summary_updates: Vec<Hash>,
     new_blocks: Vec<BlockId>,
     block_id_cache: BlockIdCache,
     block_id_cache_updates: Vec<(Hash, BlockId)>,
@@ -50,7 +50,7 @@ impl ClientWriter {
             db,
             block_expiration_tracker,
             quota,
-            summary_updates: HashSet::new(),
+            summary_updates: Vec::new(),
             new_blocks: Vec::new(),
             block_id_cache,
             block_id_cache_updates: Vec::new(),
@@ -81,7 +81,7 @@ impl ClientWriter {
             )
             .await?;
 
-            self.summary_updates.insert(node.proof.hash);
+            self.summary_updates.push(node.proof.hash);
         }
 
         Ok(status)
@@ -298,7 +298,7 @@ impl ClientWriter {
 
         for (block_id, updates) in updates {
             for update in updates {
-                self.summary_updates.insert(update.parent);
+                self.summary_updates.push(update.parent);
                 self.block_id_cache_updates
                     .push((update.encoded_locator, block_id));
             }
@@ -365,8 +365,10 @@ impl ClientWriter {
 
     #[instrument(target = "perf", skip_all, fields(tx_id = %self.id()))]
     async fn finalize_snapshots(&mut self) -> Result<FinalizeStatus, Error> {
-        let states =
-            index::update_summaries(&mut self.db, mem::take(&mut self.summary_updates)).await?;
+        self.summary_updates.sort();
+        self.summary_updates.dedup();
+        let states = index::update_summaries(&mut self.db, &self.summary_updates).await?;
+        self.summary_updates.clear();
 
         let mut approved_branches = Vec::new();
         let mut rejected_branches = Vec::new();

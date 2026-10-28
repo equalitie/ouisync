@@ -411,7 +411,7 @@ async fn set_as_missing_if_expired(
     let mut branches: HashSet<PublicKey> = HashSet::default();
 
     for block_id in &block_ids {
-        let parent_hashes: HashSet<_> = leaf_node::set_missing_if_expired(&mut tx, block_id)
+        let mut parent_hashes: Vec<_> = leaf_node::set_missing_if_expired(&mut tx, block_id)
             .try_collect()
             .await?;
 
@@ -419,12 +419,15 @@ async fn set_as_missing_if_expired(
             continue;
         }
 
+        parent_hashes.sort();
+        parent_hashes.dedup();
+
         // TODO: Why is this here? For blind replicas requiring blocks is never necessary because
-        // the block tracker produces block ids immediatelly after they become offered by peers.
+        // the block tracker produces block ids immediately after they become offered by peers.
         // For non-blind replicas blocks are already required in the `scan` job.
         block_download_tracker.require(*block_id);
 
-        for (hash, _state) in index::update_summaries(&mut tx, parent_hashes).await? {
+        for (hash, _state) in index::update_summaries(&mut tx, &parent_hashes).await? {
             root_node::load_writer_ids_by_hash(&mut tx, &hash)
                 .try_collect_into(&mut branches)
                 .await?;
