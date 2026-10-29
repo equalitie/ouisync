@@ -289,9 +289,16 @@ impl Blob {
                     return Err(ReadWriteError::CacheFull);
                 }
 
-                if self.position.get() >= self.len_modified
+                // We can skip loading the block only if it contains no data we need to preserve,
+                // that is, if it lies entirely past the end of the blob (excluding the header of
+                // the first block which is going to get overwritten on flush anyway so doesn't need
+                // to be preserved) or if we are going to overwrite it completely.
+                if self.position.with_zero_offset().get() >= self.len_modified
                     || self.position.offset == 0 && buffer.len() >= BLOCK_SIZE
                 {
+                    // TODO: use `HashMap::try_insert(...).unwrap()` when it becomes stable, to make
+                    // it clearer that we are always inserting new entry (the unwrap is ok because
+                    // we are in the `None` arm which means the entry doesn't exist yet)
                     self.cache.entry(self.position.block).or_default()
                 } else {
                     return Err(ReadWriteError::CacheMiss);
