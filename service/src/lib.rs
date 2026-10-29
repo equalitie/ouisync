@@ -60,7 +60,9 @@ const LOCAL_ENDPOINT_KEY: ConfigKey<LocalEndpoint> = ConfigKey::new("local_endpo
 
 pub struct Service {
     state: Arc<State>,
-    local_server: LocalServer,
+    // `None` only transiently, while rebinding after the old listener died - see
+    // `rebind_local_server`.
+    local_server: Option<LocalServer>,
     connections: FuturesUnordered<Pin<Box<dyn Future<Output = ()> + Send>>>,
     closed: watch::Sender<bool>,
 }
@@ -101,7 +103,7 @@ impl Service {
 
         Ok(Self {
             state,
-            local_server,
+            local_server: Some(local_server),
             connections: FuturesUnordered::new(),
             closed: watch::Sender::new(false),
         })
@@ -119,9 +121,23 @@ impl Service {
 
         loop {
             select! {
-                result = self.local_server.accept() => {
-                    let conn = result.map_err(Error::Accept)?;
-                    self.start_connection(AcceptedConnection::Local(conn));
+                result = self.local_server.as_ref().expect(
+                    "local_server is only ever None transiently inside rebind_local_server, \
+                     which this branch's body awaits to completion before looping back here"
+                ).accept() => {
+                    match result {
+                        Ok(conn) => self.start_connection(AcceptedConnection::Local(conn)),
+                        // The local listener's socket can be invalidated by the OS independently
+                        // of anything we did (e.g. iOS tearing down a backgrounded app's sockets),
+                        // and nothing else will ever recreate it - propagating this with `?` would
+                        // permanently kill the entire service (all local AND remote connections,
+                        // repository expiration, everything), not just local connections, since
+                        // this whole function "never completes (unless it errors)". Rebind instead.
+                        Err(error) => {
+                            tracing::warn!(?error, "local server accept failed, rebinding");
+                            self.rebind_local_server().await;
+                        }
+                    }
                 }
                 result = self.state.remote_accept() => {
                     let conn = result.map_err(Error::Accept)?;
@@ -130,6 +146,38 @@ impl Service {
                 Some(_) = self.connections.next() => (),
                 _ = repo_expiration_interval.tick() => {
                     self.state.delete_expired_repositories().await;
+                }
+            }
+        }
+    }
+
+    /// Rebinds the local server listener to the same endpoint it was previously bound to.
+    /// Retries with capped exponential backoff instead of giving up, since giving up here would
+    /// mean no local client (i.e. the app's own UI) could ever talk to this service again until
+    /// restarted.
+    async fn rebind_local_server(&mut self) {
+        let endpoint = *self.local_server.as_ref().unwrap().endpoint();
+
+        // Drop the old listener *before* trying to bind the new one: even though its socket may
+        // already be invalid at the OS level (that's exactly why we're here), our process still
+        // holds a reference to it until it's dropped, which is enough to make the OS refuse to
+        // bind a new socket to the same port (`AddrInUse`).
+        self.local_server = None;
+
+        let mut delay = Duration::from_millis(50);
+        const MAX_DELAY: Duration = Duration::from_secs(5);
+
+        loop {
+            match LocalServer::bind(endpoint).await {
+                Ok(server) => {
+                    tracing::info!(port = server.endpoint().port, "local server rebound");
+                    self.local_server = Some(server);
+                    return;
+                }
+                Err(error) => {
+                    tracing::warn!(?error, ?delay, "local server rebind failed, retrying");
+                    time::sleep(delay).await;
+                    delay = (delay * 2).min(MAX_DELAY);
                 }
             }
         }
@@ -148,7 +196,7 @@ impl Service {
     }
 
     pub fn local_endpoint(&self) -> &LocalEndpoint {
-        self.local_server.endpoint()
+        self.local_server.as_ref().unwrap().endpoint()
     }
 
     pub fn store_dirs(&self) -> Vec<PathBuf> {
@@ -252,6 +300,37 @@ mod tests {
         );
 
         service0.close().await;
+    }
+
+    // Regression test for the local listener's socket being invalidated independently of
+    // anything the service did (e.g. iOS tearing down a backgrounded app's sockets): the service
+    // must rebind and keep accepting new local connections on the same port, instead of its
+    // whole run loop dying because one `accept()` call failed.
+    #[tokio::test]
+    async fn rebind_local_server() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let port = service.local_endpoint().port;
+
+        // Exercise the same rebind path `run()` takes on an accept error, without needing to
+        // simulate the OS invalidating the fd (which is OS/platform specific) - this still
+        // covers the tricky part: binding to the *same* port while the old (still live, not yet
+        // dropped) listener technically still holds it.
+        time::timeout(Duration::from_secs(5), service.rebind_local_server())
+            .await
+            .expect("rebind_local_server timed out");
+
+        assert_eq!(service.local_endpoint().port, port);
+
+        let runner = ServiceRunner::start(service);
+
+        // A fresh connection to the same port must still be accepted after rebinding.
+        tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .expect("failed to connect after rebind");
+
+        let mut service = runner.stop().await;
+        service.close().await;
     }
 
     #[tokio::test]

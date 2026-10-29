@@ -13,7 +13,19 @@ class FfiServer extends Server {
   FfiServer({required super.configPath, super.debugLabel});
 
   @override
-  Future<void> initLog() async => Bindings.instance.initLog();
+  Future<void> initLog({String? logFilePath}) async {
+    if (logFilePath == null) {
+      Bindings.instance.initLog();
+      return;
+    }
+
+    final pathPtr = logFilePath.toNativeUtf8(allocator: malloc);
+    try {
+      Bindings.instance.initLogToFile(pathPtr.cast());
+    } finally {
+      malloc.free(pathPtr);
+    }
+  }
 
   @override
   Future<void> start() async {

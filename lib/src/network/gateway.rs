@@ -102,6 +102,12 @@ impl Gateway {
         self.stacks.borrow().connectivity()
     }
 
+    /// Whether any currently bound stack has hit a fatal error and stopped working. See
+    /// `Stacks::any_stack_is_dead`.
+    pub fn any_stack_is_dead(&self) -> bool {
+        self.stacks.borrow().any_stack_is_dead()
+    }
+
     pub async fn connect_with_retries(&self, peer: &SeenPeer) -> Option<Connection> {
         let create_backoff = || {
             ExponentialBackoffBuilder::new()
@@ -297,6 +303,14 @@ impl Stacks {
 
     fn connectivity(&self) -> Connectivity {
         Connectivity::infer(&self.addresses())
+    }
+
+    /// Whether any currently bound stack has hit a fatal error and stopped working (e.g. the
+    /// network interface going down while the app is backgrounded). Such a stack never recovers
+    /// on its own - it must be rebound, even if the address it was bound to hasn't changed.
+    fn any_stack_is_dead(&self) -> bool {
+        self.quic_v4.as_ref().is_some_and(QuicStack::is_dead)
+            || self.quic_v6.as_ref().is_some_and(QuicStack::is_dead)
     }
 
     fn allows_connection_to(&self, addr: &PeerAddr) -> bool {
@@ -496,6 +510,10 @@ impl QuicStack {
     fn close(&self) {
         self.listener_task.abort();
         self.connector.close();
+    }
+
+    fn is_dead(&self) -> bool {
+        self.connector.is_dead()
     }
 }
 
