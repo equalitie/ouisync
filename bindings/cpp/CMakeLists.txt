@@ -151,6 +151,17 @@ target_link_libraries(cpp_ouisync_service
         ${OUISYNC_SERVICE_PRIVATE_LIBS}
 )
 
+if (APPLE)
+    # Needed by the Rust `security-framework`, `system-configuration` and
+    # `notify` (FSEvents) crates linked into ouisync_service
+    target_link_libraries(cpp_ouisync_service PRIVATE
+        "-framework Security"
+        "-framework SystemConfiguration"
+        "-framework CoreFoundation"
+        "-framework CoreServices"
+    )
+endif()
+
 target_include_directories(cpp_ouisync_service
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
