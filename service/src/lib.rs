@@ -131,6 +131,13 @@ impl Service {
             // this here rather than inline in the accept arm is what keeps `run()` safe to cancel
             // and restart: a restart that finds `local_server` still `None` recovers here instead
             // of panicking on an `unwrap`.
+            //
+            // Known limitation: this rebind is awaited inline, so while it retries (capped backoff)
+            // the `select!` below is paused - remote accepts, connection cleanup and repository
+            // expiration don't make progress until it succeeds. That's acceptable because a rebind
+            // normally succeeds on the first try within milliseconds; a rebind that keeps failing
+            // means the local listener is unusable anyway. If that ever needs to run concurrently,
+            // drive the rebind as its own `select!` arm instead.
             if self.local_server.is_none() {
                 self.rebind_local_server().await;
             }
