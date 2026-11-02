@@ -7,11 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.10.1...master)
 
+- Add support for MIPS architecture (PRs #197, #198, #199, #200)
+- Fix bug where in rare cases a data corruption could happen when writing to a Ouisync file
+- Fix bug where missing store dir would prevent scanning other store dirs.
+- Update dependencies to address security alerts
 - Add support for desktop JVM (Linux, macOS and Windows, each on x86_64 and arm64) to the Kotlin
   bindings (new `ouisync-service-jvm` package), making them usable also in Kotlin Multiplatform apps
 - **Breaking:** Rename the Kotlin `ouisync-service` package to `ouisync-service-android`
 - **Breaking:** Stop publishing the debug variants of the Kotlin packages (`ouisync-service-debug`,
   `ouisync-android-debug`)
+- Fix linking issues on Android in the C++ bindings
 
 ## [v0.10.1](https://github.com/equalitie/ouisync/compare/v0.10.0...v0.10.1) - 2026-09-24
 
