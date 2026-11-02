@@ -72,7 +72,7 @@ tokio-stream = { workspace = true, features = ["sync"] }
 tokio-util = { workspace = true, features = ["time", "codec"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = [ "env-filter" ] }
-xxhash-rust = { version = "0.8.12", default-features = false, features = ["xxh3"] }
+xxhash-rust = { version = "0.8.19", default-features = false, features = ["xxh3"] }
 urlencoding = "2.1.0"
 vint64 = "1.0.1"
 zeroize = "1.6.0"
