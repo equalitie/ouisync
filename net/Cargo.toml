@@ -28,7 +28,7 @@ thiserror          = "1.0.31"
 tokio              = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync"] }
 tokio-util         = { workspace = true, features = ["compat"] }
 tracing            = { workspace = true }
-yamux              = "0.13.3"
+yamux              = "0.14.1"
 
 [dev-dependencies]
 anyhow             = { workspace = true }
