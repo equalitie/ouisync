@@ -32,7 +32,9 @@ impl Sender {
                 event = rx.recv() => {
                     match event {
                         Ok(_) | Err(RecvError::Lagged(_)) => continue,
-                        Err(RecvError::Closed) => panic!("notification channel unexpectedly closed"),
+                        Err(RecvError::Closed) => {
+                            tracing_panic!("notification channel unexpectedly closed");
+                        }
                     }
                 }
                 _ = self.0.closed() => {
@@ -65,7 +67,7 @@ impl Receiver {
 
                 let that_vv = self.0.borrow();
 
-                debug!(?this_vv, that_vv = ?*that_vv);
+                // debug!(?this_vv, that_vv = ?*that_vv);
 
                 if !that_vv.is_empty() && this_vv == *that_vv {
                     break;

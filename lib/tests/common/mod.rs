@@ -5,6 +5,7 @@ mod macros;
 
 pub(crate) mod dht;
 pub(crate) mod dump;
+pub(crate) mod observer;
 pub(crate) mod progress;
 pub(crate) mod swarm;
 pub(crate) mod sync_watch;
@@ -53,7 +54,7 @@ use tracing_subscriber::{
 
 pub(crate) const DEFAULT_REPO: &str = "default";
 
-/// Timeout when waiting for various test conditions. Can be overriden with the `TEST_TIMEOUT` env
+/// Timeout when waiting for various test conditions. Can be overridden with the `TEST_TIMEOUT` env
 /// variable or the `with_test_timeout` method (if both are used, the env variable has precedence).
 pub(crate) fn test_timeout() -> Duration {
     std::env::var("TEST_TIMEOUT")

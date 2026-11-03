@@ -3,6 +3,8 @@
 #[macro_use]
 mod common;
 
+use crate::common::observer::RepositoryObserver;
+
 use self::common::{
     DEFAULT_REPO, Env, Proto, actor, dump, swarm::SyncSwarmCase, sync_watch, utils,
 };
@@ -796,8 +798,10 @@ fn rename_directory_while_syncing() {
         // Populate this replica with the content
         utils::copy_all(&content, &repo).await;
 
+        let observer = RepositoryObserver::new(&repo);
+
         // Wait until the peer partially syncs
-        partial_sync_rx.recv().await.unwrap();
+        observer.run_until(partial_sync_rx.recv()).await.unwrap();
 
         // Pick a random directory and rename it (retry on failure)
         let (src_dir, dst_dir) = {
@@ -845,8 +849,8 @@ fn rename_directory_while_syncing() {
         };
 
         // Wait until full sync
-        sync_tx
-            .run(&repo)
+        observer
+            .run_until(sync_tx.run(&repo))
             .instrument(info_span!("wait for sync"))
             .await;
 
@@ -872,6 +876,8 @@ fn rename_directory_while_syncing() {
         );
         utils::copy_all(&content, &repo).await;
 
+        let observer = RepositoryObserver::new(&repo);
+
         let mut repo_rx = repo.subscribe();
 
         // Wait until the sync starts. Depending on whether we have local content, there are two
@@ -887,54 +893,60 @@ fn rename_directory_while_syncing() {
         // became aware of the peers content which means we started syncing. Note we can't do this
         // in the first case because the progress reports also the local content and so the check
         // would complete immediately, potentially before the syncing even starts.
-        async {
-            loop {
-                // Depending on whether
-                if content.is_empty() {
-                    let progress = repo.sync_progress().await.unwrap();
-                    if progress.total > 0 {
-                        break;
-                    }
-                } else {
-                    let vv = repo.get_merged_version_vector().await.unwrap();
-                    if vv.len() > 1 {
-                        break;
+        observer
+            .run_until(
+                async {
+                    loop {
+                        // Depending on whether
+                        if content.is_empty() {
+                            let progress = repo.sync_progress().await.unwrap();
+                            if progress.total > 0 {
+                                break;
+                            }
+                        } else {
+                            let vv = repo.get_merged_version_vector().await.unwrap();
+                            if vv.len() > 1 {
+                                break;
+                            }
+                        }
+
+                        common::wait(&mut repo_rx).await;
                     }
                 }
-
-                common::wait(&mut repo_rx).await;
-            }
-        }
-        .instrument(info_span!("wait for sync start"))
-        .await;
+                .instrument(info_span!("wait for sync start")),
+            )
+            .await;
 
         info!("sync started");
 
         // Wait until partially synced
         let threshold = rng.random_range(0.0..=1.0);
-        async {
-            loop {
-                let progress = repo.sync_progress().await.unwrap();
-                if progress.ratio() >= threshold {
-                    info!("sync threshold reached: {}", progress.percent());
-                    break;
-                }
+        observer
+            .run_until(
+                async {
+                    loop {
+                        let progress = repo.sync_progress().await.unwrap();
+                        if progress.ratio() >= threshold {
+                            info!("sync threshold reached: {}", progress.percent());
+                            break;
+                        }
 
-                common::wait(&mut repo_rx).await;
-            }
-        }
-        .instrument(info_span!(
-            "wait for partial sync",
-            threashold = %format_args!("{:.0}%", 100.0 * threshold)
-        ))
-        .await;
+                        common::wait(&mut repo_rx).await;
+                    }
+                }
+                .instrument(info_span!(
+                    "wait for partial sync",
+                    threshold = %format_args!("{:.0}%", 100.0 * threshold)
+                )),
+            )
+            .await;
 
         // Notify the peer
         partial_sync_tx.send(()).await.unwrap();
 
         // Wait until fully synced
-        sync_rx
-            .run(&repo)
+        observer
+            .run_until(sync_rx.run(&repo))
             .instrument(info_span!("wait for full sync"))
             .await;
     });

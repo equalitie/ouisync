@@ -89,6 +89,12 @@ impl VersionVector {
         self.0.values().all(|version| *version == 0)
     }
 
+    pub fn entries(&self) -> impl Iterator<Item = (&PublicKey, u64)> {
+        self.0
+            .iter()
+            .map(|(writer_id, version)| (writer_id, *version))
+    }
+
     pub fn len(&self) -> usize {
         self.0.values().filter(|version| **version > 0).count()
     }
