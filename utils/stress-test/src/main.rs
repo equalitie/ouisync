@@ -306,7 +306,7 @@ fn run(
     let temp_dir = temp_root.join(process.to_string());
     fs::create_dir_all(&temp_dir).unwrap();
 
-    let runner = CommandRunner::new(temp_root);
+    let runner = CommandRunner::new(temp_dir);
 
     for iteration in 0.. {
         for command in &mut commands {
@@ -388,7 +388,7 @@ fn make_commands(runner: Option<String>, exes: Vec<String>, args: Vec<String>) -
 
             // collect args with values in the "--name=value" form
             if let Some((name, value)) = arg.split_once("=")
-                && (name == "--test-threads" || arg == "--color" || arg == "--format")
+                && (name == "--test-threads" || name == "--color" || name == "--format")
             {
                 test_args.push(name);
                 test_args.push(value);
