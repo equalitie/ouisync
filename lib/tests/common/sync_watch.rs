@@ -76,17 +76,17 @@ impl Receiver {
                 event = rx.recv() => {
                     match event {
                         Ok(_) | Err(RecvError::Lagged(_)) => continue,
-                        Err(RecvError::Closed) => panic!("notification channel unexpectedly closed"),
+                        Err(RecvError::Closed) => tracing_panic!("notification channel unexpectedly closed"),
                     }
                 }
                 result = self.0.changed() => {
                     if result.is_err() {
-                        panic!("sender unexpectedly closed")
+                        tracing_panic!("sender unexpectedly closed")
                     }
 
                     continue;
                 }
-                _ = time::sleep(test_timeout()) => panic!("timeout waiting for notification"),
+                _ = time::sleep(test_timeout()) => tracing_panic!("timeout waiting for notification"),
             }
         }
     }

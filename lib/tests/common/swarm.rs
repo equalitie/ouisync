@@ -1,6 +1,7 @@
-use super::{Env, Proto, actor};
+use super::{Env, Proto, actor, utils::copy};
 use camino::{Utf8Path, Utf8PathBuf};
 use ouisync::{Error, Repository, StorageSize, StoreError};
+use ouisync_rand_test_dir as rtd;
 use rand::RngExt;
 use std::{
     cmp::Ordering,
@@ -76,8 +77,6 @@ impl SyncSwarmCase {
     }
 
     pub fn run(&self) {
-        use ouisync_rand_test_dir as rtd;
-
         assert!(self.min_peers > 1);
         assert!(self.min_peers <= self.max_peers);
         assert!(self.num_repos > 0);
@@ -160,7 +159,7 @@ impl SyncSwarmCase {
                                     repo.create_directory(parent).await.unwrap();
                                 }
                                 let mut file = repo.create_file(&path).await.unwrap();
-                                write(test_file, &mut file).await;
+                                copy(test_file, &mut file).await;
                                 file.flush().await.unwrap();
                             }
                             .instrument(info_span!("write", repo = repo_index, file = %path))
@@ -190,24 +189,6 @@ impl SyncSwarmCase {
                     rtd::Entry::Directory(_) => None,
                 })
                 .map(|(path, file)| (Utf8PathBuf::from(path), file))
-        }
-
-        // Write the content of `dst` into `src`.
-        async fn write(src: &rtd::File, dst: &mut ouisync::File) {
-            use std::io::Read;
-
-            let mut buffer = vec![0; 8 * 1024];
-            let mut reader = src.reader();
-
-            loop {
-                // NOTE: this `read` never blocks so it's ok to use it in an `async` function.
-                let n = reader.read(&mut buffer).unwrap();
-                if n == 0 {
-                    break;
-                }
-
-                dst.write_all(&buffer[..n]).await.unwrap();
-            }
         }
 
         // Wait until the file at `path` in `repo` has the same content as `expected`.

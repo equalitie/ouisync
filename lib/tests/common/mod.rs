@@ -8,6 +8,7 @@ pub(crate) mod dump;
 pub(crate) mod progress;
 pub(crate) mod swarm;
 pub(crate) mod sync_watch;
+pub(crate) mod utils;
 mod wait_map;
 
 pub(crate) use self::env::*;
@@ -447,12 +448,7 @@ pub(crate) async fn wait(rx: &mut broadcast::Receiver<Event>) -> Option<Payload>
             }
         }
         Err(_) => {
-            const MESSAGE: &str = "timeout waiting for notification";
-
-            // NOTE: in release mode backtrace is useless so this trace helps us to locate the
-            // source of the panic:
-            error!("{}", MESSAGE);
-            panic!("{}", MESSAGE);
+            tracing_panic!("timeout waiting for notification");
         }
     }
 }

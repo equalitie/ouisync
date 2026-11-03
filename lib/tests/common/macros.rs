@@ -53,3 +53,13 @@ macro_rules! event_enabled {
         tracing::event_enabled!(target: "ouisync-test", $($tokens)*)
     }
 }
+
+// Like `panic!`, but also logs the panic message with `tracing::error`. This is useful to locate
+// the source of the panic in release mode where backtrace is typically useless.
+macro_rules! tracing_panic {
+    ($($tokens:tt)*) => {{
+        let message = format_args!($($tokens)*);
+        error!(location = %std::panic::Location::caller(), "{}", message);
+        panic!("{}", message);
+    }}
+}

@@ -88,6 +88,10 @@ impl VersionVector {
     pub fn is_empty(&self) -> bool {
         self.0.values().all(|version| *version == 0)
     }
+
+    pub fn len(&self) -> usize {
+        self.0.values().filter(|version| **version > 0).count()
+    }
 }
 
 // Less clutter in the debug output this way (as opposed to deriving).

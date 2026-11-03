@@ -105,6 +105,10 @@ impl Directory {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     fn random_name(
         &self,
         rng: &mut dyn Rng,

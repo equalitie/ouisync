@@ -3,14 +3,22 @@
 #[macro_use]
 mod common;
 
-use self::common::{DEFAULT_REPO, Env, Proto, actor, dump, swarm::SyncSwarmCase, sync_watch};
+use self::common::{
+    DEFAULT_REPO, Env, Proto, actor, dump, swarm::SyncSwarmCase, sync_watch, utils,
+};
 use assert_matches::assert_matches;
 use backoff::{ExponentialBackoffBuilder, backoff::Backoff};
 use ouisync::{
     Access, AccessMode, BLOB_HEADER_SIZE, BLOCK_SIZE, EntryType, Error, Payload, Repository,
     StorageSize, StoreError, VersionVector,
 };
-use rand::RngExt;
+use ouisync_rand_test_dir as rtd;
+use rand::{
+    RngExt, SeedableRng,
+    distr::{Alphanumeric, SampleString},
+    rngs::StdRng,
+    seq::IteratorRandom,
+};
 use std::{cmp::Ordering, collections::HashSet, io::SeekFrom, sync::Arc, time::Duration};
 use tokio::{
     sync::{Barrier, broadcast, mpsc},
@@ -356,7 +364,7 @@ fn relay_case(proto: Proto, file_size: usize, relay_access_mode: AccessMode) {
 
 // Test for an edge case where a sync happens while we are in the middle of writing a file.
 // This test makes sure that when the sync happens, the partially written file content is not
-// garbage collected prematurelly.
+// garbage collected prematurely.
 #[test]
 fn sync_during_file_write() {
     let mut env = Env::new();
@@ -762,6 +770,177 @@ fn remote_move_file_to_directory_then_rename_that_directory() {
 }
 
 #[test]
+fn rename_directory_while_syncing() {
+    let mut env = Env::new();
+
+    let (sync_tx, sync_rx) = sync_watch::channel();
+    let (partial_sync_tx, mut partial_sync_rx) = mpsc::channel(1);
+
+    env.actor("alice", async move {
+        let (network, repo, _reg) = actor::setup().await;
+        let mut rng = StdRng::from_rng(&mut rand::rng());
+
+        // Generate repo content with at least one directory (apart from the root)
+        let content = loop {
+            let content = rtd::Directory::generate(&mut rng, rtd::GenerateOptions::default());
+            let has_dirs = content
+                .walk()
+                .any(|(_, entry)| matches!(entry, rtd::Entry::Directory(_)));
+            if has_dirs {
+                break content;
+            }
+        };
+
+        network.add_user_provided_peer(&actor::lookup_addr("bob").await);
+
+        // Populate this replica with the content
+        utils::copy_all(&content, &repo).await;
+
+        // Wait until the peer partially syncs
+        partial_sync_rx.recv().await.unwrap();
+
+        // Pick a random directory and rename it (retry on failure)
+        let (src_dir, dst_dir) = {
+            let mut repo_rx = repo.subscribe();
+            loop {
+                let src_dir = match utils::collect_entries(&repo).await {
+                    Ok(entries) => entries
+                        .into_iter()
+                        .filter_map(|(path, ty)| match ty {
+                            EntryType::Directory => Some(path),
+                            EntryType::File => None,
+                        })
+                        .choose(&mut rng)
+                        .unwrap(),
+                    Err(error) => {
+                        warn!(?error, "failed to collect repo entries");
+                        common::wait(&mut repo_rx).await;
+                        continue;
+                    }
+                };
+
+                let dst_dir = loop {
+                    let len = rng.random_range(1..=12);
+                    let dst_dir = src_dir
+                        .parent()
+                        .unwrap()
+                        .join(Alphanumeric.sample_string(&mut rng, len));
+                    if dst_dir != src_dir {
+                        break dst_dir;
+                    }
+                };
+
+                match repo.move_entry(&src_dir, &dst_dir).await {
+                    Ok(_) => {
+                        info!("renamed {} -> {}", src_dir, dst_dir);
+                        break (src_dir, dst_dir);
+                    }
+                    Err(error) => {
+                        warn!(?error, "failed to rename {} -> {}", src_dir, dst_dir);
+                        common::wait(&mut repo_rx).await;
+                        continue;
+                    }
+                }
+            }
+        };
+
+        // Wait until full sync
+        sync_tx
+            .run(&repo)
+            .instrument(info_span!("wait for sync"))
+            .await;
+
+        // Verify the rename
+        assert_matches!(
+            repo.open_directory(src_dir).await,
+            Err(Error::EntryNotFound)
+        );
+        assert_matches!(repo.open_directory(dst_dir).await, Ok(_))
+    });
+
+    env.actor("bob", async move {
+        let (_network, repo, _reg) = actor::setup().await;
+        let mut rng = StdRng::from_rng(&mut rand::rng());
+
+        // Populate this replica with random content
+        let content = rtd::Directory::generate(
+            &mut rng,
+            rtd::GenerateOptions {
+                min_files: 0,
+                ..Default::default()
+            },
+        );
+        utils::copy_all(&content, &repo).await;
+
+        let mut repo_rx = repo.subscribe();
+
+        // Wait until the sync starts. Depending on whether we have local content, there are two
+        // ways to do this:
+        //
+        // 1. If we do have local content, wait until the merged version vector has at least two
+        // entries. This indicates that we received at least one snapshot from some other replica
+        // that isn't us.
+        //
+        // 2. If we don't have local content, we can't do the above because the version vector would
+        // contain only the peers entry, not ours. Instead we wait until the sync progress reports
+        // the total repo size is non-zero. Because we have no local content that can only mean we
+        // became aware of the peers content which means we started syncing. Note we can't do this
+        // in the first case because the progress reports also the local content and so the check
+        // would complete immediately, potentially before the syncing even starts.
+        async {
+            loop {
+                // Depending on whether
+                if content.is_empty() {
+                    let progress = repo.sync_progress().await.unwrap();
+                    if progress.total > 0 {
+                        break;
+                    }
+                } else {
+                    let vv = repo.get_merged_version_vector().await.unwrap();
+                    if vv.len() > 1 {
+                        break;
+                    }
+                }
+
+                common::wait(&mut repo_rx).await;
+            }
+        }
+        .instrument(info_span!("wait for sync start"))
+        .await;
+
+        info!("sync started");
+
+        // Wait until partially synced
+        let threshold = rng.random_range(0.0..=1.0);
+        async {
+            loop {
+                let progress = repo.sync_progress().await.unwrap();
+                if progress.ratio() >= threshold {
+                    info!("sync threshold reached: {}", progress.percent());
+                    break;
+                }
+
+                common::wait(&mut repo_rx).await;
+            }
+        }
+        .instrument(info_span!(
+            "wait for partial sync",
+            threashold = %format_args!("{:.0}%", 100.0 * threshold)
+        ))
+        .await;
+
+        // Notify the peer
+        partial_sync_tx.send(()).await.unwrap();
+
+        // Wait until fully synced
+        sync_rx
+            .run(&repo)
+            .instrument(info_span!("wait for full sync"))
+            .await;
+    });
+}
+
+#[test]
 fn concurrent_update_and_delete_during_conflict() {
     let mut env = Env::new();
     let proto = Proto::Tcp;
@@ -926,7 +1105,7 @@ fn content_stays_available_during_sync() {
                     common::check_file_version_content(&repo, "b/c.dat", None, &content0).await
                 );
 
-                // ...until the new files are transfered
+                // ...until the new files are transferred
                 for (name, content) in [("a.dat", &content1[..]), ("b/d.dat", &[])] {
                     if !common::check_file_version_content(&repo, name, None, content).await {
                         return false;
