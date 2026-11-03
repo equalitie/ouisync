@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased](https://github.com/equalitie/ouisync/compare/v0.10.1...master)
 
-- Add support for MIPS architecture (PRs #197, #198, #199, #200)
+- Add support for MIPS architecture (PRs [#197], [#198], [#199], [#200])
 - Fix bug where in rare cases a data corruption could happen when writing to a Ouisync file
 - Fix bug where missing store dir would prevent scanning other store dirs.
 - Update dependencies to address security alerts
@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** Stop publishing the debug variants of the Kotlin packages (`ouisync-service-debug`,
   `ouisync-android-debug`)
 - Fix linking issues on Android in the C++ bindings
+
+[#197]: https://github.com/equalitie/ouisync/pull/197
+[#198]: https://github.com/equalitie/ouisync/pull/198
+[#199]: https://github.com/equalitie/ouisync/pull/199
+[#200]: https://github.com/equalitie/ouisync/pull/200
 
 ## [v0.10.1](https://github.com/equalitie/ouisync/compare/v0.10.0...v0.10.1) - 2026-09-24
 
