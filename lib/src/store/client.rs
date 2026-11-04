@@ -536,7 +536,7 @@ mod tests {
     use crate::{
         access_control::WriteSecrets,
         protocol::{
-            BlockContent, EMPTY_INNER_HASH, MultiBlockPresence, SingleBlockPresence,
+            BlockContent, Bump, EMPTY_INNER_HASH, MultiBlockPresence, SingleBlockPresence,
             test_utils::Snapshot,
         },
         store::{SnapshotWriter, Store},
@@ -1196,5 +1196,71 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(node.summary.state, NodeState::Approved);
+    }
+
+    // Receive a remote root node, then create a local snapshot with the same hash before the
+    // remote child nodes are received. The remote snapshot must become complete right away,
+    // without having to receive its child nodes.
+    #[tokio::test]
+    async fn complete_remote_snapshot_whose_nodes_were_created_locally() {
+        let mut rng = StdRng::seed_from_u64(0);
+        let (_base_dir, pool) = db::create_temp().await.unwrap();
+        let store = Store::new(pool);
+        let secrets = WriteSecrets::generate(&mut rng);
+        let local_id = PublicKey::generate(&mut rng);
+        let remote_id = PublicKey::generate(&mut rng);
+
+        let snapshot = Snapshot::generate(&mut rng, 5);
+
+        // Receive the remote root node
+        let mut writer = store.begin_client_write().await.unwrap();
+        writer
+            .save_root_node(
+                Proof::new(
+                    remote_id,
+                    VersionVector::first(remote_id),
+                    *snapshot.root_hash(),
+                    &secrets.write_keys,
+                ),
+                &MultiBlockPresence::Full,
+            )
+            .await
+            .unwrap();
+        writer.commit().await.unwrap();
+
+        // Create identical snapshot locally
+        let mut tx = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
+        for node in snapshot.leaf_nodes() {
+            changeset.link_block(node.locator, node.block_id, SingleBlockPresence::Present);
+        }
+        changeset.bump(Bump::increment(local_id));
+        changeset
+            .apply(&mut tx, &local_id, &secrets.write_keys)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let local_node = store
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&local_id)
+            .try_next()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(local_node.proof.hash, *snapshot.root_hash());
+
+        let remote_node = store
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&remote_id)
+            .try_next()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(remote_node.summary.state, NodeState::Approved);
     }
 }
