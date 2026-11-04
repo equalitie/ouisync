@@ -1263,4 +1263,88 @@ mod tests {
             .unwrap();
         assert_eq!(remote_node.summary.state, NodeState::Approved);
     }
+
+    // Receive a remote root node and its children, then create a local snapshot that is different
+    // from the remote one but shares some of its subtrees. The remote nodes shared with the local
+    // snapshot must become complete right away, without having to receive their child nodes.
+    #[tokio::test]
+    async fn complete_remote_nodes_shared_with_local_snapshot() {
+        let mut rng = StdRng::seed_from_u64(0);
+        let (_base_dir, pool) = db::create_temp().await.unwrap();
+        let store = Store::new(pool);
+        let secrets = WriteSecrets::generate(&mut rng);
+        let local_id = PublicKey::generate(&mut rng);
+        let remote_id = PublicKey::generate(&mut rng);
+
+        let shared: (Hash, Block) = rng.random();
+        let remote_only: (Hash, Block) = rng.random();
+        let local_only: (Hash, Block) = rng.random();
+
+        let remote_snapshot = Snapshot::from_present_blocks([shared.clone(), remote_only]);
+        let local_snapshot = Snapshot::from_present_blocks([shared, local_only]);
+
+        // Children of the remote root that are also in the local snapshot.
+        let shared_hashes: HashSet<_> = remote_snapshot
+            .get_inner_set(remote_snapshot.root_hash())
+            .unwrap()
+            .into_iter()
+            .map(|(_, node)| node.hash)
+            .filter(|hash| local_snapshot.inner_nodes().any(|node| node.hash == *hash))
+            .collect();
+
+        // Sanity check: the snapshots differ but they share at least one subtree.
+        assert_ne!(remote_snapshot.root_hash(), local_snapshot.root_hash());
+        assert!(!shared_hashes.is_empty());
+
+        // Receive the remote root node and its children
+        let mut writer = store.begin_client_write().await.unwrap();
+        writer
+            .save_root_node(
+                Proof::new(
+                    remote_id,
+                    VersionVector::first(remote_id),
+                    *remote_snapshot.root_hash(),
+                    &secrets.write_keys,
+                ),
+                &MultiBlockPresence::Full,
+            )
+            .await
+            .unwrap();
+        writer
+            .save_inner_nodes(&[remote_snapshot
+                .get_inner_set(remote_snapshot.root_hash())
+                .unwrap()
+                .clone()
+                .into()])
+            .await
+            .unwrap();
+        writer.commit().await.unwrap();
+
+        // Create the local snapshot
+        let mut tx = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
+        for node in local_snapshot.leaf_nodes() {
+            changeset.link_block(node.locator, node.block_id, SingleBlockPresence::Present);
+        }
+        changeset.bump(Bump::increment(local_id));
+        changeset
+            .apply(&mut tx, &local_id, &secrets.write_keys)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let remote_nodes = store
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_inner_nodes(remote_snapshot.root_hash())
+            .await
+            .unwrap();
+
+        for (_, node) in &remote_nodes {
+            if shared_hashes.contains(&node.hash) {
+                assert_eq!(node.summary.state, NodeState::Complete);
+            }
+        }
+    }
 }
