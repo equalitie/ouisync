@@ -60,7 +60,12 @@ const LOCAL_ENDPOINT_KEY: ConfigKey<LocalEndpoint> = ConfigKey::new("local_endpo
 
 pub struct Service {
     state: Arc<State>,
-    local_server: LocalServer,
+    // `None` only transiently, between the local listener dying and `run()` rebinding it at the
+    // top of its loop - see `run`/`rebind_local_server`.
+    local_server: Option<LocalServer>,
+    // The (resolved) endpoint the local listener binds to. Kept separately so we can rebind to it
+    // even while `local_server` is `None`, and so `local_endpoint()` never has to unwrap.
+    local_endpoint: LocalEndpoint,
     connections: FuturesUnordered<Pin<Box<dyn Future<Output = ()> + Send>>>,
     closed: watch::Sender<bool>,
 }
@@ -91,6 +96,8 @@ impl Service {
 
         local_endpoint_entry.set(local_server.endpoint()).await?;
 
+        let resolved_endpoint = *local_server.endpoint();
+
         tracing::debug!(
             port = local_server.endpoint().port,
             "local server listening"
@@ -101,7 +108,8 @@ impl Service {
 
         Ok(Self {
             state,
-            local_server,
+            local_server: Some(local_server),
+            local_endpoint: resolved_endpoint,
             connections: FuturesUnordered::new(),
             closed: watch::Sender::new(false),
         })
@@ -118,10 +126,38 @@ impl Service {
         repo_expiration_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         loop {
+            // If the local listener is gone - the accept arm below dropped it after a fatal error,
+            // or a previous `run()` was cancelled mid-rebind - rebind it before polling it. Doing
+            // this here rather than inline in the accept arm is what keeps `run()` safe to cancel
+            // and restart: a restart that finds `local_server` still `None` recovers here instead
+            // of panicking on an `unwrap`.
+            //
+            // Known limitation: this rebind is awaited inline, so while it retries (capped backoff)
+            // the `select!` below is paused - remote accepts, connection cleanup and repository
+            // expiration don't make progress until it succeeds. That's acceptable because a rebind
+            // normally succeeds on the first try within milliseconds; a rebind that keeps failing
+            // means the local listener is unusable anyway. If that ever needs to run concurrently,
+            // drive the rebind as its own `select!` arm instead.
+            if self.local_server.is_none() {
+                self.rebind_local_server().await;
+            }
+
             select! {
-                result = self.local_server.accept() => {
-                    let conn = result.map_err(Error::Accept)?;
-                    self.start_connection(AcceptedConnection::Local(conn));
+                result = self.local_server.as_ref().unwrap().accept() => {
+                    match result {
+                        Ok(conn) => self.start_connection(AcceptedConnection::Local(conn)),
+                        // The local listener's socket can be invalidated by the OS independently
+                        // of anything we did (e.g. iOS tearing down a backgrounded app's sockets),
+                        // and nothing else will ever recreate it - propagating this with `?` would
+                        // permanently kill the entire service (all local AND remote connections,
+                        // repository expiration, everything), not just local connections, since
+                        // this whole function "never completes (unless it errors)". Drop the dead
+                        // listener so the top of the loop rebinds it.
+                        Err(error) => {
+                            tracing::warn!(?error, "local server accept failed, rebinding");
+                            self.local_server = None;
+                        }
+                    }
                 }
                 result = self.state.remote_accept() => {
                     let conn = result.map_err(Error::Accept)?;
@@ -130,6 +166,36 @@ impl Service {
                 Some(_) = self.connections.next() => (),
                 _ = repo_expiration_interval.tick() => {
                     self.state.delete_expired_repositories().await;
+                }
+            }
+        }
+    }
+
+    /// Rebinds the local server listener to the same endpoint it was previously bound to.
+    /// Retries with capped exponential backoff instead of giving up, since giving up here would
+    /// mean no local client (i.e. the app's own UI) could ever talk to this service again until
+    /// restarted.
+    async fn rebind_local_server(&mut self) {
+        // Drop the old listener *before* trying to bind the new one: even though its socket may
+        // already be invalid at the OS level (that's exactly why we're here), our process still
+        // holds a reference to it until it's dropped, which is enough to make the OS refuse to
+        // bind a new socket to the same port (`AddrInUse`).
+        self.local_server = None;
+
+        let mut delay = Duration::from_millis(50);
+        const MAX_DELAY: Duration = Duration::from_secs(5);
+
+        loop {
+            match LocalServer::bind(self.local_endpoint).await {
+                Ok(server) => {
+                    tracing::info!(port = server.endpoint().port, "local server rebound");
+                    self.local_server = Some(server);
+                    return;
+                }
+                Err(error) => {
+                    tracing::warn!(?error, ?delay, "local server rebind failed, retrying");
+                    time::sleep(delay).await;
+                    delay = (delay * 2).min(MAX_DELAY);
                 }
             }
         }
@@ -148,7 +214,7 @@ impl Service {
     }
 
     pub fn local_endpoint(&self) -> &LocalEndpoint {
-        self.local_server.endpoint()
+        &self.local_endpoint
     }
 
     pub fn store_dirs(&self) -> Vec<PathBuf> {
@@ -252,6 +318,70 @@ mod tests {
         );
 
         service0.close().await;
+    }
+
+    // Regression test for the local listener's socket being invalidated independently of
+    // anything the service did (e.g. iOS tearing down a backgrounded app's sockets): the service
+    // must rebind and keep accepting new local connections on the same port, instead of its
+    // whole run loop dying because one `accept()` call failed.
+    #[tokio::test]
+    async fn rebind_local_server() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let port = service.local_endpoint().port;
+
+        // Exercise the same rebind path `run()` takes on an accept error, without needing to
+        // simulate the OS invalidating the fd (which is OS/platform specific) - this still
+        // covers the tricky part: binding to the *same* port while the old (still live, not yet
+        // dropped) listener technically still holds it.
+        time::timeout(Duration::from_secs(5), service.rebind_local_server())
+            .await
+            .expect("rebind_local_server timed out");
+
+        assert_eq!(service.local_endpoint().port, port);
+
+        let runner = ServiceRunner::start(service);
+
+        // A fresh connection to the same port must still be accepted after rebinding.
+        tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .expect("failed to connect after rebind");
+
+        let mut service = runner.stop().await;
+        service.close().await;
+    }
+
+    // Regression test for `run()` being cancelled while `rebind_local_server` had already dropped
+    // the old listener (so the `Service` is left with no local listener), then restarted: `run()`
+    // must rebind on entry rather than panic on a missing listener.
+    #[tokio::test]
+    async fn run_rebinds_missing_local_server_on_start() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let port = service.local_endpoint().port;
+
+        // Simulate the state left behind by a cancel during rebind: the listener is gone.
+        service.local_server = None;
+
+        let runner = ServiceRunner::start(service);
+
+        // The rebind happens inside `run()` right after start, so retry briefly until the listener
+        // comes back up on the same port.
+        let connect = async {
+            loop {
+                match tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await {
+                    Ok(stream) => break stream,
+                    Err(_) => time::sleep(Duration::from_millis(10)).await,
+                }
+            }
+        };
+        time::timeout(Duration::from_secs(5), connect)
+            .await
+            .expect("listener never came back up after restart with a missing listener");
+
+        let mut service = runner.stop().await;
+        assert_eq!(service.local_endpoint().port, port);
+        service.close().await;
     }
 
     #[tokio::test]
