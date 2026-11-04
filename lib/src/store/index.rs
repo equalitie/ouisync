@@ -1,10 +1,16 @@
 //! Operations on the whole index (or its subset) as opposed to individual nodes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::{error::Error, inner_node, root_node};
-use crate::{crypto::Hash, db, future::TryStreamExt, protocol::NodeState};
-use sqlx::Row;
+use crate::{
+    crypto::Hash,
+    db::{self, MAX_BIND_PARAMS},
+    future::TryStreamExt as _,
+    protocol::NodeState,
+};
+use futures_util::TryStreamExt as _;
+use sqlx::{QueryBuilder, Row};
 
 /// Does a parent node (root or inner) with the given hash exist?
 pub(super) async fn parent_exists(conn: &mut db::Connection, hash: &Hash) -> Result<bool, Error> {
@@ -20,30 +26,68 @@ pub(super) async fn parent_exists(conn: &mut db::Connection, hash: &Hash) -> Res
     .get(0))
 }
 
+/// Filter node hashes corresponding to existing root or inner nodes.
+pub(super) async fn filter_existing_parents(
+    conn: &mut db::Connection,
+    hashes: &[Hash],
+) -> Result<HashSet<Hash>, Error> {
+    let mut output = HashSet::with_capacity(hashes.len());
+
+    for hash_chunk in hashes.chunks(MAX_BIND_PARAMS) {
+        let mut builder = QueryBuilder::new(
+            "SELECT hash FROM (
+                 SELECT hash FROM snapshot_root_nodes
+                 UNION ALL
+                 SELECT hash FROM snapshot_inner_nodes
+             ) WHERE hash in (",
+        );
+
+        let mut separated = builder.separated(", ");
+        for hash in hash_chunk {
+            separated.push_bind(hash);
+        }
+        builder.push(")");
+        builder
+            .build()
+            .persistent(false)
+            .fetch(&mut *conn)
+            .map_ok(|row| row.get::<Hash, _>(0))
+            .try_collect_into(&mut output)
+            .await?;
+    }
+
+    Ok(output)
+}
+
 /// Update summary of the nodes with the specified hashes and all their ancestor nodes.
 /// Returns the affected snapshots and their states.
 pub(super) async fn update_summaries(
     tx: &mut db::WriteTransaction,
-    mut nodes: Vec<Hash>,
+    nodes: &[Hash],
 ) -> Result<HashMap<Hash, NodeState>, Error> {
-    let mut states = HashMap::default();
+    let mut states = HashMap::new();
 
-    while let Some(hash) = nodes.pop() {
-        let summary = inner_node::compute_summary(tx, &hash).await?;
-        let old_len = nodes.len();
+    let mut curr = nodes;
+    let mut next = Vec::new();
 
-        // First try inner nodes ...
-        inner_node::update_summaries(tx, &hash, &summary)
-            .try_collect_into(&mut nodes)
-            .await?;
+    while !curr.is_empty() {
+        let summaries = inner_node::compute_summaries(tx, curr).await?;
+        let updated = inner_node::update_summaries(tx, &summaries).await?;
 
-        if nodes.len() == old_len {
-            // ... no hits. Let's try root nodes.
+        // Handle root node summaries
+        for (hash, summary) in summaries {
+            if updated.contains_key(&hash) {
+                continue;
+            }
+
             let state = root_node::update_summaries(tx, &hash, summary).await?;
             let summary = summary.with_state(state);
-
             states.insert(hash, summary.state);
         }
+
+        next.clear();
+        next.extend(updated.into_values());
+        curr = &next;
     }
 
     Ok(states)
@@ -51,10 +95,10 @@ pub(super) async fn update_summaries(
 
 #[cfg(test)]
 mod tests {
-    use super::super::{inner_node, leaf_node, root_node};
-    use super::*;
-    use crate::future::TryStreamExt as _;
-    use crate::store::block;
+    use super::{
+        super::{block::BlockWriter, inner_node, leaf_node, root_node},
+        *,
+    };
     use crate::{
         crypto::{
             Hashable,
@@ -68,9 +112,8 @@ mod tests {
         version_vector::VersionVector,
     };
     use assert_matches::assert_matches;
-    use futures_util::TryStreamExt;
     use rand::{SeedableRng, rngs::StdRng};
-    use std::iter;
+    use std::{iter, slice};
     use tempfile::TempDir;
     use test_strategy::proptest;
 
@@ -80,7 +123,12 @@ mod tests {
         let mut conn = pool.acquire().await.unwrap();
 
         let hash = *EMPTY_LEAF_HASH;
-        let summary = inner_node::compute_summary(&mut conn, &hash).await.unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut conn, slice::from_ref(&hash))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
 
         assert_eq!(summary.state, NodeState::Complete);
         assert_eq!(summary.block_presence, MultiBlockPresence::None);
@@ -95,7 +143,12 @@ mod tests {
         let nodes: LeafNodes = iter::once(node).collect();
         let hash = nodes.hash();
 
-        let summary = inner_node::compute_summary(&mut conn, &hash).await.unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut conn, &[hash])
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
 
         assert_eq!(summary, Summary::INCOMPLETE);
     }
@@ -109,8 +162,18 @@ mod tests {
         let hash = nodes.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        leaf_node::save_all(&mut tx, &nodes, &hash).await.unwrap();
-        let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
+        leaf_node::save(
+            &mut tx,
+            &nodes.iter().map(|node| (hash, *node)).collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut tx, &[hash])
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(summary.state, NodeState::Complete);
@@ -128,8 +191,18 @@ mod tests {
         let hash = nodes.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        leaf_node::save_all(&mut tx, &nodes, &hash).await.unwrap();
-        let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
+        leaf_node::save(
+            &mut tx,
+            &nodes.iter().map(|node| (hash, *node)).collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut tx, slice::from_ref(&hash))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(summary.state, NodeState::Complete);
@@ -146,8 +219,18 @@ mod tests {
         let hash = nodes.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        leaf_node::save_all(&mut tx, &nodes, &hash).await.unwrap();
-        let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
+        leaf_node::save(
+            &mut tx,
+            &nodes.iter().map(|node| (hash, *node)).collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut tx, slice::from_ref(&hash))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(summary.state, NodeState::Complete);
@@ -160,7 +243,12 @@ mod tests {
         let mut conn = pool.acquire().await.unwrap();
 
         let hash = *EMPTY_INNER_HASH;
-        let summary = inner_node::compute_summary(&mut conn, &hash).await.unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut conn, slice::from_ref(&hash))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
 
         assert_eq!(summary.state, NodeState::Complete);
         assert_eq!(summary.block_presence, MultiBlockPresence::None);
@@ -175,7 +263,12 @@ mod tests {
         let nodes: InnerNodes = iter::once((0, node)).collect();
         let hash = nodes.hash();
 
-        let summary = inner_node::compute_summary(&mut conn, &hash).await.unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut conn, slice::from_ref(&hash))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
 
         assert_eq!(summary, Summary::INCOMPLETE);
     }
@@ -199,8 +292,21 @@ mod tests {
         let hash = inners.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        inner_node::save_all(&mut tx, &inners, &hash).await.unwrap();
-        let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
+        inner_node::save(
+            &mut tx,
+            &inners
+                .iter()
+                .map(|(bucket, node)| (hash, bucket, *node))
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut tx, slice::from_ref(&hash))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(summary.state, NodeState::Complete);
@@ -247,8 +353,21 @@ mod tests {
         let hash = inners.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        inner_node::save_all(&mut tx, &inners, &hash).await.unwrap();
-        let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
+        inner_node::save(
+            &mut tx,
+            &inners
+                .iter()
+                .map(|(bucket, node)| (hash, bucket, *node))
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut tx, slice::from_ref(&hash))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(summary.state, NodeState::Complete);
@@ -275,8 +394,21 @@ mod tests {
         let hash = inners.hash();
 
         let mut tx = pool.begin_write().await.unwrap();
-        inner_node::save_all(&mut tx, &inners, &hash).await.unwrap();
-        let summary = inner_node::compute_summary(&mut tx, &hash).await.unwrap();
+        inner_node::save(
+            &mut tx,
+            &inners
+                .iter()
+                .map(|(bucket, node)| (hash, bucket, *node))
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
+        let (_, summary) = inner_node::compute_summaries(&mut tx, slice::from_ref(&hash))
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
         tx.commit().await.unwrap();
 
         assert_eq!(summary.state, NodeState::Complete);
@@ -323,9 +455,15 @@ mod tests {
         // breadth-first.
 
         for (parent_hash, nodes) in snapshot.inner_sets() {
-            inner_node::save_all(&mut tx, &nodes.clone().into_incomplete(), parent_hash)
-                .await
-                .unwrap();
+            inner_node::save(
+                &mut tx,
+                &nodes
+                    .iter()
+                    .map(|(bucket, node)| (*parent_hash, bucket, node.into_incomplete()))
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .unwrap();
 
             update_summaries_and_approve(&mut tx, *parent_hash).await;
 
@@ -336,9 +474,15 @@ mod tests {
         let mut unsaved_leaves = snapshot.leaf_count();
 
         for (parent_hash, nodes) in snapshot.leaf_sets() {
-            leaf_node::save_all(&mut tx, &nodes.clone().into_missing(), parent_hash)
-                .await
-                .unwrap();
+            leaf_node::save(
+                &mut tx,
+                &nodes
+                    .iter()
+                    .map(|node| (*parent_hash, node.into_missing()))
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .unwrap();
             unsaved_leaves -= nodes.len();
 
             update_summaries_and_approve(&mut tx, *parent_hash).await;
@@ -356,7 +500,7 @@ mod tests {
         pool.close().await.unwrap();
 
         async fn update_summaries_and_approve(tx: &mut db::WriteTransaction, hash: Hash) {
-            for (hash, state) in update_summaries(tx, vec![hash]).await.unwrap() {
+            for (hash, state) in update_summaries(tx, slice::from_ref(&hash)).await.unwrap() {
                 match state {
                     NodeState::Complete => {
                         root_node::approve(tx, &hash).try_consume().await.unwrap();
@@ -401,22 +545,36 @@ mod tests {
         .unwrap();
 
         if snapshot.leaf_count() == 0 {
-            update_summaries(&mut tx, vec![root_node.proof.hash])
+            update_summaries(&mut tx, slice::from_ref(&root_node.proof.hash))
                 .await
                 .unwrap();
         }
 
         for (parent_hash, nodes) in snapshot.inner_sets() {
-            inner_node::save_all(&mut tx, &nodes.clone().into_incomplete(), parent_hash)
-                .await
-                .unwrap();
+            inner_node::save(
+                &mut tx,
+                &nodes
+                    .iter()
+                    .map(|(bucket, node)| (*parent_hash, bucket, node.into_incomplete()))
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .unwrap();
         }
 
         for (parent_hash, nodes) in snapshot.leaf_sets() {
-            leaf_node::save_all(&mut tx, &nodes.clone().into_missing(), parent_hash)
+            leaf_node::save(
+                &mut tx,
+                &nodes
+                    .iter()
+                    .map(|node| (*parent_hash, node.into_missing()))
+                    .collect::<Vec<_>>(),
+            )
+            .await
+            .unwrap();
+            update_summaries(&mut tx, slice::from_ref(parent_hash))
                 .await
                 .unwrap();
-            update_summaries(&mut tx, vec![*parent_hash]).await.unwrap();
         }
 
         // Check that initially all blocks are missing
@@ -427,13 +585,21 @@ mod tests {
         let mut received_blocks = 0;
 
         for block in snapshot.blocks().values() {
-            block::write(&mut tx, block).await.unwrap();
-            let parent_hashes = leaf_node::set_present(&mut tx, &block.id)
-                .map_ok(|info| info.parent)
-                .try_collect()
+            BlockWriter::new(&mut tx)
+                .add(block)
+                .await
+                .unwrap()
+                .finish()
                 .await
                 .unwrap();
-            update_summaries(&mut tx, parent_hashes).await.unwrap();
+            let parent_hashes: Vec<_> = leaf_node::set_present(&mut tx, slice::from_ref(&block.id))
+                .await
+                .unwrap()
+                .into_values()
+                .flatten()
+                .map(|update| update.parent)
+                .collect();
+            update_summaries(&mut tx, &parent_hashes).await.unwrap();
 
             received_blocks += 1;
 

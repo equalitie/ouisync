@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, slice};
 
 use super::{RepositoryId, RepositoryMonitor, Vault};
 use crate::{
@@ -355,20 +355,29 @@ async fn block_ids_excludes_blocks_from_incomplete_snapshots() {
     );
 
     let mut writer = vault.store().begin_client_write().await.unwrap();
-
     writer
         .save_root_node(proof, &MultiBlockPresence::None)
         .await
         .unwrap();
-
-    for (_, nodes) in snapshot.inner_sets() {
-        writer.save_inner_nodes(nodes.clone().into()).await.unwrap();
-    }
-
-    for (_, nodes) in snapshot.leaf_sets().take(1) {
-        writer.save_leaf_nodes(nodes.clone().into()).await.unwrap();
-    }
-
+    writer
+        .save_inner_nodes(
+            &snapshot
+                .inner_sets()
+                .map(|(_, nodes)| nodes.clone().into())
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
+    writer
+        .save_leaf_nodes(
+            &snapshot
+                .leaf_sets()
+                .take(1)
+                .map(|(_, nodes)| nodes.clone().into())
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
     writer.commit().await.unwrap();
 
     let actual = vault.store().block_ids(u32::MAX).next().await.unwrap();
@@ -607,7 +616,7 @@ async fn receive_snapshot(
 
 async fn receive_block(vault: &Vault, block: &Block) {
     let mut writer = vault.store().begin_client_write().await.unwrap();
-    writer.save_block(block).await.unwrap();
+    writer.save_blocks(slice::from_ref(block)).await.unwrap();
     writer.commit().await.unwrap();
 }
 

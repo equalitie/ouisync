@@ -1,235 +1,244 @@
 use super::{error::Error, leaf_node};
 use crate::{
     crypto::Hash,
-    db,
+    db::{self, MAX_BIND_PARAMS},
+    future::TryStreamExt as _,
     protocol::{EMPTY_INNER_HASH, EMPTY_LEAF_HASH, InnerNode, InnerNodes, LeafNodes, Summary},
 };
-use futures_util::{Stream, TryStreamExt, future};
-use sqlx::Row;
-use std::convert::TryInto;
+use futures_util::{TryStreamExt, future};
+use sqlx::{QueryBuilder, Row};
+use std::{
+    collections::{HashMap, HashSet},
+    convert::TryInto,
+};
 
-/// Load all inner nodes with the specified parent hash.
+/// Load all inner nodes with the specified parent hashes. Returns map of parent hash -> child
+/// nodes.
 pub(super) async fn load_children(
     conn: &mut db::Connection,
-    parent: &Hash,
-) -> Result<InnerNodes, Error> {
-    sqlx::query(
-        "SELECT
-             bucket,
-             hash,
-             state,
-             block_presence
-         FROM snapshot_inner_nodes
-         WHERE parent = ?",
-    )
-    .bind(parent)
-    .fetch(conn)
-    .map_ok(|row| {
-        let bucket: u32 = row.get(0);
-        let node = InnerNode {
-            hash: row.get(1),
-            summary: Summary {
-                state: row.get(2),
-                block_presence: row.get(3),
-            },
-        };
+    parent_hashes: &[Hash],
+) -> Result<HashMap<Hash, InnerNodes>, Error> {
+    let mut output = HashMap::with_capacity(parent_hashes.len());
 
-        (bucket, node)
-    })
-    .try_filter_map(|(bucket, node)| {
-        if let Ok(bucket) = bucket.try_into() {
-            future::ready(Ok(Some((bucket, node))))
-        } else {
-            tracing::error!("bucket out of range: {:?}", bucket);
-            future::ready(Ok(None))
+    for parent_hashes_chunk in parent_hashes.chunks(MAX_BIND_PARAMS) {
+        let mut builder = QueryBuilder::new(
+            "SELECT parent, bucket, hash, state, block_presence
+             FROM snapshot_inner_nodes
+             WHERE parent IN (",
+        );
+        let mut separated = builder.separated(", ");
+        for hash in parent_hashes_chunk {
+            separated.push_bind(hash);
         }
-    })
-    .try_collect()
-    .await
-    .map_err(From::from)
+        builder.push(")");
+        builder
+            .build()
+            .persistent(false)
+            .fetch(&mut *conn)
+            .map_ok(|row| {
+                (
+                    row.get::<Hash, _>(0),
+                    row.get::<u32, _>(1),
+                    InnerNode {
+                        hash: row.get(2),
+                        summary: Summary {
+                            state: row.get(3),
+                            block_presence: row.get(4),
+                        },
+                    },
+                )
+            })
+            .try_filter_map(|(parent, bucket, node)| {
+                if let Ok(bucket) = bucket.try_into() {
+                    future::ready(Ok(Some((parent, bucket, node))))
+                } else {
+                    tracing::error!("bucket out of range: {:?}", bucket);
+                    future::ready(Ok(None))
+                }
+            })
+            .try_for_each(|(parent, bucket, node)| {
+                output
+                    .entry(parent)
+                    .or_insert_with(InnerNodes::default)
+                    .insert(bucket, node);
+                future::ready(Ok(()))
+            })
+            .await?;
+    }
+
+    Ok(output)
 }
 
+/// Load all nodes with the given hashes.
 pub(super) async fn load(
     conn: &mut db::Connection,
-    hash: &Hash,
-) -> Result<Option<InnerNode>, Error> {
-    let node = sqlx::query(
-        "SELECT state, block_presence
-         FROM snapshot_inner_nodes
-         WHERE hash = ?",
-    )
-    .bind(hash)
-    .fetch_optional(conn)
-    .await?
-    .map(|row| InnerNode {
-        hash: *hash,
-        summary: Summary {
-            state: row.get(0),
-            block_presence: row.get(1),
-        },
-    });
+    hashes: &[Hash],
+) -> Result<HashMap<Hash, InnerNode>, Error> {
+    let mut output = HashMap::new();
 
-    Ok(node)
+    for hashes_chunk in hashes.chunks(MAX_BIND_PARAMS) {
+        let mut builder = QueryBuilder::new(
+            "SELECT hash, state, block_presence
+             FROM snapshot_inner_nodes
+             WHERE hash IN (",
+        );
+        let mut separated = builder.separated(", ");
+        for hash in hashes_chunk {
+            separated.push_bind(hash);
+        }
+        builder.push(")");
+        builder
+            .build()
+            .persistent(false)
+            .fetch(&mut *conn)
+            .map_ok(|row| InnerNode {
+                hash: row.get(0),
+                summary: Summary {
+                    state: row.get(1),
+                    block_presence: row.get(2),
+                },
+            })
+            .map_ok(|node| (node.hash, node))
+            .try_collect_into(&mut output)
+            .await?;
+    }
+
+    Ok(output)
 }
 
-/// Saves this inner node into the db unless it already exists.
+/// Save multiple nodes to the store. Takes slice of (parent_hash, bucket, node) and returns a set
+/// of parent node hashes whose children were updated.
 pub(super) async fn save(
     tx: &mut db::WriteTransaction,
-    node: &InnerNode,
-    parent: &Hash,
-    bucket: u8,
-) -> Result<bool, Error> {
-    debug_assert_ne!(node.hash, *EMPTY_INNER_HASH);
-    debug_assert_ne!(node.hash, *EMPTY_LEAF_HASH);
+    nodes: &[(Hash, u8, InnerNode)],
+) -> Result<HashSet<Hash>, Error> {
+    let mut output = HashSet::new();
 
-    let result = sqlx::query(
-        "INSERT INTO snapshot_inner_nodes (
-             parent,
-             bucket,
-             hash,
-             state,
-             block_presence
-         )
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT (parent, bucket) DO NOTHING",
-    )
-    .bind(parent)
-    .bind(bucket)
-    .bind(&node.hash)
-    .bind(node.summary.state)
-    .bind(&node.summary.block_presence)
-    .execute(tx)
-    .await?;
-
-    Ok(result.rows_affected() > 0)
-}
-
-/// Atomically saves all nodes in this map to the db.
-pub(super) async fn save_all(
-    tx: &mut db::WriteTransaction,
-    nodes: &InnerNodes,
-    parent: &Hash,
-) -> Result<usize, Error> {
-    let mut updated = 0;
-
-    for (bucket, node) in nodes {
-        if save(tx, node, parent, bucket).await? {
-            updated += 1;
-        }
+    // `MAX_BIND_PARAMS / 5` because we bind 5 parameters per record
+    for nodes_chunk in nodes.chunks(MAX_BIND_PARAMS / 5) {
+        QueryBuilder::new(
+            "INSERT INTO snapshot_inner_nodes (
+                parent,
+                bucket,
+                hash,
+                state,
+                block_presence
+             ) ",
+        )
+        .push_values(nodes_chunk, |mut builder, (parent_hash, bucket, node)| {
+            builder
+                .push_bind(parent_hash)
+                .push_bind(bucket)
+                .push_bind(&node.hash)
+                .push_bind(node.summary.state)
+                .push_bind(&node.summary.block_presence);
+        })
+        .push(" ON CONFLICT (parent, bucket) DO NOTHING RETURNING parent")
+        .build()
+        .persistent(false)
+        .fetch(&mut *tx)
+        .map_ok(|row| row.get::<Hash, _>(0))
+        .try_collect_into(&mut output)
+        .await?;
     }
 
-    Ok(updated)
+    Ok(output)
 }
 
-/// Compute summaries from the children nodes of the specified parent nodes.
-pub(super) async fn compute_summary(
+/// Compute summaries of the nodes with the specified hashes.
+pub(super) async fn compute_summaries(
     conn: &mut db::Connection,
-    parent_hash: &Hash,
-) -> Result<Summary, Error> {
-    // 1st attempt: empty inner nodes
-    if parent_hash == &*EMPTY_INNER_HASH {
-        let children = InnerNodes::default();
-        return Ok(Summary::from_inners(&children));
-    }
+    hashes: &[Hash],
+) -> Result<Vec<(Hash, Summary)>, Error> {
+    let mut output = Vec::with_capacity(hashes.len());
+    let mut remaining = hashes.to_vec();
 
-    // 2nd attempt: empty leaf nodes
-    if parent_hash == &*EMPTY_LEAF_HASH {
-        let children = LeafNodes::default();
-        return Ok(Summary::from_leaves(&children));
-    }
-
-    // 3rd attempt: non-empty inner nodes
-    let children = load_children(conn, parent_hash).await?;
-    if !children.is_empty() {
+    // Handle non-empty inner nodes
+    let children = load_children(conn, &remaining).await?;
+    for (hash, nodes) in &children {
         // We download all children nodes of a given parent together so when we know that
         // we have at least one we also know we have them all.
-        return Ok(Summary::from_inners(&children));
+        if nodes.is_empty() {
+            continue;
+        }
+
+        output.push((*hash, Summary::from_inners(nodes)));
     }
 
-    // 4th attempt: non-empty leaf nodes
-    let children = leaf_node::load_children(conn, parent_hash).await?;
-    if !children.is_empty() {
+    remaining.retain(|hash| !children.contains_key(hash));
+
+    // Handle non-empty leaf nodes
+    let children = leaf_node::load_children(conn, &remaining).await?;
+    for (hash, nodes) in &children {
         // Similarly as in the inner nodes case, we only need to check that we have at
         // least one leaf node child and that already tells us that we have them all.
-        return Ok(Summary::from_leaves(&children));
+        if nodes.is_empty() {
+            continue;
+        }
+
+        output.push((*hash, Summary::from_leaves(nodes)));
     }
 
-    // The parent hash doesn't correspond to any known node
-    Ok(Summary::INCOMPLETE)
+    remaining.retain(|hash| !children.contains_key(hash));
+
+    // Handle empty and invalid nodes
+    for hash in remaining {
+        if hash == *EMPTY_INNER_HASH {
+            output.push((hash, Summary::from_inners(&InnerNodes::default())));
+            continue;
+        }
+
+        if hash == *EMPTY_LEAF_HASH {
+            output.push((hash, Summary::from_leaves(&LeafNodes::default())));
+            continue;
+        }
+
+        output.push((hash, Summary::INCOMPLETE));
+    }
+
+    Ok(output)
 }
 
-/// Updates summaries of all nodes with the specified hash at the specified inner layer.
-pub(super) fn update_summaries<'a>(
-    tx: &'a mut db::WriteTransaction,
-    hash: &'a Hash,
-    summary: &'a Summary,
-) -> impl Stream<Item = Result<Hash, Error>> + 'a {
-    sqlx::query(
-        "UPDATE snapshot_inner_nodes
-         SET state = ?, block_presence = ?
-         WHERE hash = ?
-         RETURNING parent",
-    )
-    .bind(summary.state)
-    .bind(&summary.block_presence)
-    .bind(hash)
-    .fetch(tx)
-    .map_ok(|row| row.get(0))
-    .err_into()
-}
+/// Updates summaries according to the given map (keys are hashes of nodes to update, values are the
+/// summaries to update the node with).
+/// Returns map of updated node hash -> it's parent
+pub(super) async fn update_summaries(
+    tx: &mut db::WriteTransaction,
+    summaries: &[(Hash, Summary)],
+) -> Result<HashMap<Hash, Hash>, Error> {
+    let mut output = HashMap::with_capacity(summaries.len());
 
-pub(super) async fn inherit_summaries(
-    conn: &mut db::Connection,
-    nodes: &mut InnerNodes,
-) -> Result<(), Error> {
-    for (_, node) in nodes {
-        inherit_summary(conn, node).await?;
+    for summaries_chunk in summaries.chunks(MAX_BIND_PARAMS / 3) {
+        let mut builder = QueryBuilder::new("WITH input(hash, state, block_presence) AS (");
+        builder.push_values(summaries_chunk, |mut builder, (hash, summary)| {
+            builder
+                .push_bind(hash)
+                .push_bind(summary.state)
+                .push_bind(&summary.block_presence);
+        });
+        builder.push(
+            ") UPDATE snapshot_inner_nodes
+             SET state = input.state, block_presence = input.block_presence
+             FROM input
+             WHERE snapshot_inner_nodes.hash = input.hash
+             RETURNING hash, parent",
+        );
+        builder
+            .build()
+            .persistent(false)
+            .fetch(&mut *tx)
+            .map_ok(|row| (row.get::<Hash, _>(0), row.get(1)))
+            .try_collect_into(&mut output)
+            .await?;
     }
 
-    Ok(())
-}
-
-/// If the summary of this node is `INCOMPLETE` and there exists another node with the same
-/// hash as this one, copy the summary of that node into this node.
-///
-/// Note this is hack/workaround due to the database schema currently not being fully
-/// normalized. That is, when there is a node that has more than one parent, we actually
-/// represent it as multiple records, each with distinct parent_hash. The summaries of those
-/// records need to be identical (because they conceptually represent a single node) so we need
-/// this function to copy them manually.
-/// Ideally, we should change the db schema to be normalized, which in this case would mean
-/// to have only one record per node and to represent the parent-child relation using a
-/// separate db table (many-to-many relation).
-pub(super) async fn inherit_summary(
-    conn: &mut db::Connection,
-    node: &mut InnerNode,
-) -> Result<(), Error> {
-    if node.summary != Summary::INCOMPLETE {
-        return Ok(());
-    }
-
-    let summary = sqlx::query(
-        "SELECT state, block_presence
-             FROM snapshot_inner_nodes
-             WHERE hash = ?",
-    )
-    .bind(&node.hash)
-    .fetch_optional(conn)
-    .await?
-    .map(|row| Summary {
-        state: row.get(0),
-        block_presence: row.get(1),
-    });
-
-    if let Some(summary) = summary {
-        node.summary = summary;
-    }
-
-    Ok(())
+    Ok(output)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::slice;
+
     use super::*;
     use crate::crypto::Hashable;
     use assert_matches::assert_matches;
@@ -251,9 +260,14 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node = InnerNode::new(hash, Summary::INCOMPLETE);
-        save(&mut tx, &node, &parent, bucket).await.unwrap();
+        save(&mut tx, &[(parent, bucket, node)]).await.unwrap();
 
-        let nodes = load_children(&mut tx, &parent).await.unwrap();
+        let nodes = load_children(&mut tx, slice::from_ref(&parent))
+            .await
+            .unwrap()
+            .into_values()
+            .next()
+            .unwrap();
 
         assert_eq!(nodes.get(bucket), Some(&node));
 
@@ -275,12 +289,17 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node0 = InnerNode::new(hash, Summary::INCOMPLETE);
-        save(&mut tx, &node0, &parent, bucket).await.unwrap();
+        save(&mut tx, &[(parent, bucket, node0)]).await.unwrap();
 
         let node1 = InnerNode::new(hash, Summary::INCOMPLETE);
-        save(&mut tx, &node1, &parent, bucket).await.unwrap();
+        save(&mut tx, &[(parent, bucket, node1)]).await.unwrap();
 
-        let nodes = load_children(&mut tx, &parent).await.unwrap();
+        let nodes = load_children(&mut tx, slice::from_ref(&parent))
+            .await
+            .unwrap()
+            .into_values()
+            .next()
+            .unwrap();
 
         assert_eq!(nodes.get(bucket), Some(&node0));
         assert!((0..bucket).all(|b| nodes.get(b).is_none()));
@@ -308,10 +327,10 @@ mod tests {
         let mut tx = pool.begin_write().await.unwrap();
 
         let node0 = InnerNode::new(hash0, Summary::INCOMPLETE);
-        save(&mut tx, &node0, &parent, bucket).await.unwrap();
+        save(&mut tx, &[(parent, bucket, node0)]).await.unwrap();
 
         let node1 = InnerNode::new(hash1, Summary::INCOMPLETE);
-        assert_matches!(save(&mut tx, &node1, &parent, bucket).await, Err(_)); // TODO: match concrete error type
+        assert_matches!(save(&mut tx, &[(parent, bucket, node1)]).await, Err(_)); // TODO: match concrete error type
     }
 
     async fn setup() -> (TempDir, db::Pool) {

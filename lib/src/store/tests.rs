@@ -502,23 +502,31 @@ async fn check_complete(reader: &mut Reader, root_hash: &Hash) {
         return;
     }
 
-    let nodes = inner_node::load_children(reader.db(), root_hash)
+    let mut nodes: Vec<_> = inner_node::load_children(reader.db(), slice::from_ref(root_hash))
         .await
-        .unwrap();
+        .unwrap()
+        .into_values()
+        .flat_map(|nodes| nodes.into_iter().map(|(_, node)| node.hash))
+        .collect();
     assert!(!nodes.is_empty());
 
-    let mut stack: Vec<_> = nodes.into_iter().map(|(_, node)| node).collect();
-
-    while let Some(node) = stack.pop() {
-        let inners = inner_node::load_children(reader.db(), &node.hash)
+    while !nodes.is_empty() {
+        let inners: Vec<_> = inner_node::load_children(reader.db(), &nodes)
             .await
-            .unwrap();
-        let leaves = leaf_node::load_children(reader.db(), &node.hash)
+            .unwrap()
+            .into_values()
+            .flat_map(|nodes| nodes.into_iter().map(|(_, node)| node.hash))
+            .collect();
+
+        let leaves_count: usize = leaf_node::load_children(reader.db(), &nodes)
             .await
-            .unwrap();
+            .unwrap()
+            .into_values()
+            .map(|nodes| nodes.len())
+            .sum();
 
-        assert!(inners.len() + leaves.len() > 0);
+        assert!(inners.len() + leaves_count > 0);
 
-        stack.extend(inners.into_iter().map(|(_, node)| node));
+        nodes = inners;
     }
 }

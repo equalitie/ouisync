@@ -187,18 +187,28 @@ impl Patch {
 
     async fn save_children(&mut self, tx: &mut WriteTransaction) -> Result<(), Error> {
         let mut stack = vec![(self.root_hash, Key::ROOT)];
+        let mut inner_nodes = Vec::new();
+        let mut leaf_nodes = Vec::new();
 
         while let Some((parent_hash, key)) = stack.pop() {
             if (key.layer as usize) < INNER_LAYER_COUNT {
                 if let Some(nodes) = self.inners.remove(&key) {
-                    inner_node::save_all(tx.db(), &nodes, &parent_hash).await?;
+                    inner_nodes.clear();
+                    inner_nodes.extend(
+                        nodes
+                            .iter()
+                            .map(|(bucket, node)| (parent_hash, bucket, *node)),
+                    );
+                    inner_node::save(tx.db(), &inner_nodes).await?;
 
                     for (bucket, node) in &nodes {
                         stack.push((node.hash, key.child(bucket)));
                     }
                 }
             } else if let Some(nodes) = self.leaves.remove(&key) {
-                leaf_node::save_all(tx.db(), &nodes, &parent_hash).await?;
+                leaf_nodes.clear();
+                leaf_nodes.extend(nodes.iter().map(|node| (parent_hash, *node)));
+                leaf_node::save(tx.db(), &leaf_nodes).await?;
             }
         }
 
