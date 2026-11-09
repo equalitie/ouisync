@@ -25,7 +25,6 @@ pub(crate) trait TryStreamExt: TryStream {
     }
 
     /// Consumes the whole stream, discarding the items.
-    #[cfg(test)] // currently used only in tests
     fn try_consume(self) -> TryConsume<Self>
     where
         Self: Sized,

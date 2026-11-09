@@ -1,9 +1,12 @@
-use super::{ReadTransaction, WriteTransaction, error::Error, inner_node, leaf_node, root_node};
+use super::{
+    ReadTransaction, WriteTransaction, error::Error, index, inner_node, leaf_node, root_node,
+};
 use crate::{
     crypto::{
         Hash, Hashable,
         sign::{Keypair, PublicKey},
     },
+    future::TryStreamExt,
     protocol::{
         BlockId, Bump, EMPTY_INNER_HASH, EMPTY_LEAF_HASH, INNER_LAYER_COUNT, InnerNode, InnerNodes,
         LeafNodes, NodeState, Proof, RootNodeFilter, RootNodeKind, SingleBlockPresence, Summary,
@@ -12,7 +15,7 @@ use crate::{
     version_vector::VersionVector,
 };
 use std::{
-    collections::{BTreeMap, btree_map::Entry},
+    collections::{BTreeMap, HashSet, btree_map::Entry},
     fmt,
     ops::Range,
 };
@@ -187,29 +190,61 @@ impl Patch {
 
     async fn save_children(&mut self, tx: &mut WriteTransaction) -> Result<(), Error> {
         let mut stack = vec![(self.root_hash, Key::ROOT)];
+
         let mut inner_nodes = Vec::new();
         let mut leaf_nodes = Vec::new();
 
+        // Nodes which need to have their summaries updated.
+        let mut summary_updates = Vec::new();
+
+        // Collect the nodes to be saved
         while let Some((parent_hash, key)) = stack.pop() {
             if (key.layer as usize) < INNER_LAYER_COUNT {
                 if let Some(nodes) = self.inners.remove(&key) {
-                    inner_nodes.clear();
+                    summary_updates.push(parent_hash);
                     inner_nodes.extend(
                         nodes
                             .iter()
                             .map(|(bucket, node)| (parent_hash, bucket, *node)),
                     );
-                    inner_node::save(tx.db(), &inner_nodes).await?;
 
                     for (bucket, node) in &nodes {
                         stack.push((node.hash, key.child(bucket)));
                     }
                 }
             } else if let Some(nodes) = self.leaves.remove(&key) {
-                leaf_nodes.clear();
+                summary_updates.push(parent_hash);
                 leaf_nodes.extend(nodes.iter().map(|node| (parent_hash, *node)));
-                leaf_node::save(tx.db(), &leaf_nodes).await?;
             }
+        }
+
+        // Only update summaries of nodes that already exist. New nodes are already created with
+        // correct summaries so don't need to be updated.
+        let mut summary_updates: Vec<_> = index::filter_existing_parents(tx.db(), &summary_updates)
+            .await?
+            .into_iter()
+            .collect();
+
+        // Save the nodes to the store
+        let mut updated_parents = HashSet::new();
+        updated_parents.extend(inner_node::save(tx.db(), &inner_nodes).await?);
+        updated_parents.extend(leaf_node::save(tx.db(), &leaf_nodes).await?);
+
+        // Only update summaries of nodes which received new child nodes.
+        summary_updates.retain(|hash| updated_parents.contains(hash));
+
+        let updated_roots = index::update_summaries(tx.db(), &summary_updates).await?;
+
+        // Approve the remote root nodes that became complete.
+        // TODO: quota check
+        // TODO: emit notification about approved/rejected remote snapshots
+        for (hash, state) in updated_roots {
+            match state {
+                NodeState::Complete => (),
+                NodeState::Approved | NodeState::Rejected | NodeState::Incomplete => continue,
+            }
+
+            root_node::approve(tx.db(), &hash).try_consume().await?;
         }
 
         debug_assert!(self.inners.values().all(|nodes| nodes.is_empty()));
