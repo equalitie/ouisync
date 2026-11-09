@@ -1,6 +1,7 @@
 use super::{
     choke::Choker,
     client::Client,
+    constants::REQUEST_BUFFER_SIZE,
     crypto::{self, DecryptingStream, EncryptingSink, EstablishError, Role},
     message::{Message, Request, Response},
     message_dispatcher::{MessageDispatcher, MessageSink, MessageStream},
@@ -302,7 +303,7 @@ async fn run_link(
     pex_tx: &mut PexSender,
     pex_rx: &mut PexReceiver,
 ) {
-    let (incoming_request_tx, incoming_request_rx) = mpsc::channel(1);
+    let (incoming_request_tx, incoming_request_rx) = mpsc::channel(REQUEST_BUFFER_SIZE);
     let (incoming_response_tx, incoming_response_rx) = mpsc::channel(1);
     let (outgoing_message_tx, outgoing_message_rx) = mpsc::channel(1);
 

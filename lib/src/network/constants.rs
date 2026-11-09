@@ -19,6 +19,9 @@ pub(super) const RESPONSE_BUFFER_SIZE: usize = RESPONSE_BATCH_SIZE;
 /// Max number of responses to process in a singe batch (that is, in a single db write transaction).
 pub(super) const RESPONSE_BATCH_SIZE: usize = 1024;
 
+/// Capacity of the buffer where incoming requests wait before they are processed.
+pub(super) const REQUEST_BUFFER_SIZE: usize = RESPONSE_BUFFER_SIZE;
+
 /// Max number of requests being processed concurrently per server.
 ///
 /// Note that the request processing is already limited by the number of database connections that
