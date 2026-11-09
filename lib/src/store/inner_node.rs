@@ -199,14 +199,14 @@ pub(super) async fn compute_summaries(
     Ok(output)
 }
 
-/// Updates summaries according to the given map (keys are hashes of nodes to update, values are the
-/// summaries to update the node with).
-/// Returns map of updated node hash -> it's parent
+/// Updates summaries according to the given slice - each entry contains the hash of the node to
+/// update and the summary to update the node with. Returns pairs of (updated node hash, its
+/// parent).
 pub(super) async fn update_summaries(
     tx: &mut db::WriteTransaction,
     summaries: &[(Hash, Summary)],
-) -> Result<HashMap<Hash, Hash>, Error> {
-    let mut output = HashMap::with_capacity(summaries.len());
+) -> Result<Vec<(Hash, Hash)>, Error> {
+    let mut output = Vec::with_capacity(summaries.len());
 
     for summaries_chunk in summaries.chunks(MAX_BIND_PARAMS / 3) {
         let mut builder = QueryBuilder::new("WITH input(hash, state, block_presence) AS (");

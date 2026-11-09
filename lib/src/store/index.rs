@@ -72,11 +72,16 @@ pub(super) async fn update_summaries(
 
     while !curr.is_empty() {
         let summaries = inner_node::compute_summaries(tx, curr).await?;
-        let updated = inner_node::update_summaries(tx, &summaries).await?;
+
+        let (updated_hashes, updated_parents): (HashSet<_>, HashSet<_>) =
+            inner_node::update_summaries(tx, &summaries)
+                .await?
+                .into_iter()
+                .collect();
 
         // Handle root node summaries
         for (hash, summary) in summaries {
-            if updated.contains_key(&hash) {
+            if updated_hashes.contains(&hash) {
                 continue;
             }
 
@@ -86,7 +91,7 @@ pub(super) async fn update_summaries(
         }
 
         next.clear();
-        next.extend(updated.into_values());
+        next.extend(updated_parents);
         curr = &next;
     }
 
