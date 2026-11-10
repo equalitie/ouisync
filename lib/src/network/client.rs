@@ -341,20 +341,34 @@ impl Inner {
 
             tracing::debug!(?hash, ?writer_id, "Received root node - {status}");
 
-            self.request_tracker.success(
-                MessageKey::RootNode(writer_id, response.cookie),
-                status
-                    .request_children()
-                    .map(|local_block_presence| {
-                        CandidateRequest::new(Request::ChildNodes(hash, response.debug.follow_up()))
-                            .variant(RequestVariant::new(
-                                local_block_presence,
-                                response.block_presence,
-                            ))
-                    })
-                    .into_iter()
-                    .collect(),
-            );
+            let mut requests = Vec::new();
+
+            if let Some(local_block_presence) = status.request_children() {
+                let request =
+                    CandidateRequest::new(Request::ChildNodes(hash, response.debug.follow_up()))
+                        .variant(RequestVariant::new(
+                            local_block_presence,
+                            response.block_presence,
+                        ));
+
+                // If the children of this node are not in the store (e.g., because they've been
+                // removed together with an outdated snapshot), request them even if they've been
+                // requested before.
+                let request = if writer
+                    .filter_nodes_without_children(&[hash])
+                    .await?
+                    .is_empty()
+                {
+                    request
+                } else {
+                    request.force()
+                };
+
+                requests.push(request);
+            }
+
+            self.request_tracker
+                .success(MessageKey::RootNode(writer_id, response.cookie), requests);
         }
 
         Ok(())
@@ -377,6 +391,15 @@ impl Inner {
 
         let status_sets = writer.save_inner_nodes(&node_sets).await?;
 
+        // Nodes whose children are not in the store (e.g., because they've been removed together
+        // with an outdated snapshot). These are requested even if they've been requested before.
+        let hashes: Vec<_> = status_sets
+            .values()
+            .flatten()
+            .map(|status| status.hash)
+            .collect();
+        let force = writer.filter_nodes_without_children(&hashes).await?;
+
         for (parent_hash, statuses) in status_sets {
             // `unwrap` is ok because there is an entry in `debug_payloads` for each parent_hash in
             // `node_sets` (by construction).
@@ -387,14 +410,20 @@ impl Inner {
                 statuses
                     .into_iter()
                     .map(|status| {
-                        CandidateRequest::new(Request::ChildNodes(
+                        let request = CandidateRequest::new(Request::ChildNodes(
                             status.hash,
                             debug_payload.follow_up(),
                         ))
                         .variant(RequestVariant::new(
                             status.local_block_presence,
                             status.remote_block_presence,
-                        ))
+                        ));
+
+                        if force.contains(&status.hash) {
+                            request.force()
+                        } else {
+                            request
+                        }
                     })
                     .collect(),
             );

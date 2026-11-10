@@ -298,6 +298,7 @@ pub(super) struct CandidateRequest {
     pub payload: Request,
     pub variant: RequestVariant,
     pub state: InitialRequestState,
+    pub force: bool,
 }
 
 impl CandidateRequest {
@@ -307,6 +308,7 @@ impl CandidateRequest {
             payload,
             variant: RequestVariant::default(),
             state: InitialRequestState::Ready,
+            force: false,
         }
     }
 
@@ -318,6 +320,16 @@ impl CandidateRequest {
     pub fn suspended(self) -> Self {
         Self {
             state: InitialRequestState::Suspended,
+            ..self
+        }
+    }
+
+    /// Send this request even if an identical request has already been committed. Use this when
+    /// the data fetched by the previous request is known to be no longer in the store (e.g.,
+    /// because it's been removed together with an outdated snapshot).
+    pub fn force(self) -> Self {
+        Self {
+            force: true,
             ..self
         }
     }
@@ -874,6 +886,17 @@ impl Worker {
             parent_key,
             RequestState::Cancelled,
         );
+
+        // A committed request can still be tracked if it has some followups that are not yet
+        // committed. Such request is normally not sent again because its data has already been
+        // received. When forced, we reset it so that it gets sent again.
+        if request.force {
+            let node = self.requests.get_mut(node_key).expect(BROKEN_INVARIANT);
+
+            if matches!(node.value(), RequestState::Committed) {
+                *node.value_mut() = RequestState::Cancelled;
+            }
+        }
 
         self.update_request(client_id, node_key, request.state);
     }

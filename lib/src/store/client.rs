@@ -64,6 +64,14 @@ impl ClientWriter {
         }
     }
 
+    /// Returns those of the given node hashes whose child nodes are not in the store.
+    pub async fn filter_nodes_without_children(
+        &mut self,
+        hashes: &[Hash],
+    ) -> Result<HashSet<Hash>, Error> {
+        index::filter_nodes_without_children(&mut self.db, hashes).await
+    }
+
     /// Saves received root node into the store.
     pub async fn save_root_node(
         &mut self,

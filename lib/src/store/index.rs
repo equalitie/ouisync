@@ -59,6 +59,35 @@ pub(super) async fn filter_existing_parents(
     Ok(output)
 }
 
+/// Filter node hashes corresponding to nodes that have no child nodes (inner or leaf) in the store.
+pub(super) async fn filter_nodes_without_children(
+    conn: &mut db::Connection,
+    hashes: &[Hash],
+) -> Result<HashSet<Hash>, Error> {
+    let mut output = HashSet::new();
+
+    for hash_chunk in hashes.chunks(MAX_BIND_PARAMS) {
+        let mut builder = QueryBuilder::new("WITH input(hash) AS (");
+        builder.push_values(hash_chunk, |mut builder, hash| {
+            builder.push_bind(hash);
+        });
+        builder.push(
+            ") SELECT hash FROM input
+             WHERE NOT EXISTS (SELECT 0 FROM snapshot_inner_nodes WHERE parent = input.hash)
+               AND NOT EXISTS (SELECT 0 FROM snapshot_leaf_nodes WHERE parent = input.hash)",
+        );
+        builder
+            .build()
+            .persistent(false)
+            .fetch(&mut *conn)
+            .map_ok(|row| row.get::<Hash, _>(0))
+            .try_collect_into(&mut output)
+            .await?;
+    }
+
+    Ok(output)
+}
+
 /// Update summary of the nodes with the specified hashes and all their ancestor nodes.
 /// Returns the affected snapshots and their states.
 pub(super) async fn update_summaries(
