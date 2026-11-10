@@ -6,11 +6,16 @@ use super::{
     server::Server,
 };
 use crate::{
-    crypto::sign::{Keypair, PublicKey},
+    block_tracker::BlockRequestMode,
+    crypto::{
+        Hash,
+        sign::{Keypair, PublicKey},
+    },
     db,
     event::{Event, EventSender, Payload},
     protocol::{
-        Block, BlockId, Bump, RepositoryId, RootNode, SingleBlockPresence, test_utils::Snapshot,
+        Block, BlockId, Bump, RepositoryId, RootNode, SingleBlockPresence, get_bucket,
+        test_utils::Snapshot,
     },
     repository::{Vault, monitor::RepositoryMonitor},
     store::{Changeset, SnapshotWriter},
@@ -34,7 +39,7 @@ use tokio::{
 };
 use tracing::Instrument;
 
-const TIMEOUT: Duration = Duration::from_secs(60);
+const TIMEOUT: Duration = Duration::from_secs(5);
 
 // Test complete transfer of one snapshot from one replica to another
 // Also test a new snapshot transfer is performed after every local branch
@@ -395,6 +400,146 @@ async fn failed_block_other_peer() {
     }
 }
 
+// Receive a snapshot, then a newer one which doesn't contain some subtree of the first one, prune
+// the first one (which removes that subtree), then receive yet newer snapshot which contains the
+// subtree again. Make sure the subtree gets received again.
+#[tokio::test]
+async fn receive_subtree_again_after_it_was_pruned() {
+    test_utils::init_log();
+
+    let mut rng = StdRng::seed_from_u64(0);
+
+    let write_keys = Keypair::generate(&mut rng);
+    let (_a_base_dir, a_vault, _, a_choker, a_id) = create_repository(&mut rng, &write_keys).await;
+    let (_b_base_dir, b_vault, b_request_tracker, _, _) =
+        create_repository(&mut rng, &write_keys).await;
+
+    // Don't request the blocks. This keeps the block requests suspended which in turn keeps the
+    // requests for the index nodes they were referenced from tracked even after they've been
+    // committed.
+    b_vault
+        .block_tracker
+        .set_request_mode(BlockRequestMode::Lazy);
+
+    // Generate three blocks whose locators fall into different buckets of the root node, so that
+    // each of them is in a separate subtree.
+    let mut locators: Vec<Hash> = Vec::new();
+    while locators.len() < 3 {
+        let locator: Hash = rng.random();
+
+        if locators
+            .iter()
+            .all(|other| get_bucket(other, 0) != get_bucket(&locator, 0))
+        {
+            locators.push(locator);
+        }
+    }
+
+    let blocks: Vec<Block> = (0..3).map(|_| rng.random()).collect();
+
+    let mut server = create_server(a_vault.clone(), a_choker);
+    let mut client = create_client(b_vault.clone(), &b_request_tracker);
+
+    // Timeout for each sync below. Needs to be shorter than `TIMEOUT` so that it's clear from the
+    // panic message which sync failed.
+    const SYNC_TIMEOUT: Duration = Duration::from_secs(1);
+
+    let drive = async {
+        // Snapshot 1: blocks 0 and 1
+        update_snapshot(
+            &a_vault,
+            &a_id,
+            &write_keys,
+            [
+                (locators[0], blocks[0].clone()),
+                (locators[1], blocks[1].clone()),
+            ],
+            [],
+        )
+        .await;
+        time::timeout(
+            SYNC_TIMEOUT,
+            wait_until_snapshots_in_sync(&a_vault, a_id, &b_vault),
+        )
+        .await
+        .expect("timeout waiting for snapshot 1");
+
+        // The subtree containing block 0
+        let root = load_latest_root_node(&b_vault, &a_id).await.unwrap();
+        let subtree_hash = b_vault
+            .store()
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_inner_nodes(&root.proof.hash)
+            .await
+            .unwrap()
+            .get(get_bucket(&locators[0], 0))
+            .unwrap()
+            .hash;
+
+        // Snapshot 2: blocks 1 and 2 (doesn't contain the subtree)
+        update_snapshot(
+            &a_vault,
+            &a_id,
+            &write_keys,
+            [(locators[2], blocks[2].clone())],
+            [locators[0]],
+        )
+        .await;
+        time::timeout(
+            SYNC_TIMEOUT,
+            wait_until_snapshots_in_sync(&a_vault, a_id, &b_vault),
+        )
+        .await
+        .expect("timeout waiting for snapshot 2");
+
+        // Prune snapshot 1. This removes the subtree.
+        let root = load_latest_root_node(&b_vault, &a_id).await.unwrap();
+        assert!(
+            b_vault
+                .store()
+                .remove_outdated_snapshots(&root)
+                .await
+                .unwrap()
+        );
+        assert!(
+            b_vault
+                .store()
+                .acquire_read()
+                .await
+                .unwrap()
+                .load_inner_nodes(&subtree_hash)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        // Snapshot 3: blocks 0 and 2 (different from both previous snapshots, but contains the
+        // subtree again)
+        update_snapshot(
+            &a_vault,
+            &a_id,
+            &write_keys,
+            [(locators[0], blocks[0].clone())],
+            [locators[1]],
+        )
+        .await;
+        time::timeout(
+            SYNC_TIMEOUT,
+            wait_until_snapshots_in_sync(&a_vault, a_id, &b_vault),
+        )
+        .await
+        .expect("timeout waiting for snapshot 3");
+    };
+
+    simulate_connection_until(&mut server, &mut client, drive).await;
+
+    // HACK: prevent "too many open files" error.
+    a_vault.store().close().await.unwrap();
+    b_vault.store().close().await.unwrap();
+}
+
 async fn create_repository<R: Rng + CryptoRng>(
     rng: &mut R,
     write_keys: &Keypair,
@@ -534,6 +679,37 @@ async fn create_changeset(
 
         changeset.link_block(encoded_locator, block.id, SingleBlockPresence::Present);
         changeset.write_block(block);
+    }
+
+    changeset.bump(Bump::increment(*writer_id));
+    changeset
+        .apply(&mut tx, writer_id, write_keys)
+        .await
+        .unwrap();
+
+    tx.commit().await.unwrap();
+
+    vault.event_tx.send(Payload::SnapshotApproved(*writer_id));
+}
+
+// Create a new snapshot by linking and unlinking the given blocks.
+async fn update_snapshot(
+    vault: &Vault,
+    writer_id: &PublicKey,
+    write_keys: &Keypair,
+    link: impl IntoIterator<Item = (Hash, Block)>,
+    unlink: impl IntoIterator<Item = Hash>,
+) {
+    let mut tx = vault.store().begin_write().await.unwrap();
+    let mut changeset = Changeset::new();
+
+    for (encoded_locator, block) in link {
+        changeset.link_block(encoded_locator, block.id, SingleBlockPresence::Present);
+        changeset.write_block(block);
+    }
+
+    for encoded_locator in unlink {
+        changeset.unlink_block(encoded_locator, None);
     }
 
     changeset.bump(Bump::increment(*writer_id));
