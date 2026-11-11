@@ -313,6 +313,92 @@ async fn do_not_prune_incomplete_snapshots_if_no_newer_snapshot_is_complete() {
     );
 }
 
+// A branch can have a complete snapshot followed by a newer incomplete one. When such branch
+// becomes outdated, all its snapshots must be pruned, including the incomplete one (it's also
+// outdated and there might be no other prune run to remove it).
+#[tokio::test]
+async fn prune_outdated_branch_with_newer_incomplete_snapshot() {
+    let mut rng: StdRng = rand::make_rng();
+    let (_base_dir, shared) = setup(&mut rng).await;
+    let secrets = shared
+        .credentials
+        .read()
+        .unwrap()
+        .secrets
+        .clone()
+        .into_write_secrets()
+        .unwrap();
+
+    let local_id = shared.credentials.read().unwrap().writer_id;
+    let remote_id = sign::PublicKey::generate(&mut rng);
+
+    // Remote: complete snapshot
+    let remote_vv_0 = VersionVector::first(remote_id);
+    SnapshotWriter::begin(shared.vault.store(), &Snapshot::generate(&mut rng, 2))
+        .await
+        .save_nodes(&secrets.write_keys, remote_id, remote_vv_0.clone())
+        .await
+        .commit()
+        .await;
+
+    // Remote: newer, incomplete snapshot
+    let remote_vv_1 = remote_vv_0.incremented(remote_id);
+    SnapshotWriter::begin(shared.vault.store(), &Snapshot::generate(&mut rng, 2))
+        .await
+        .save_root_nodes(&secrets.write_keys, remote_id, remote_vv_1.clone())
+        .await
+        .save_inner_nodes()
+        .await
+        // Do not save leaf nodes, to keep the snapshot incomplete.
+        .commit()
+        .await;
+
+    // Local: complete snapshot, newer than both remote snapshots
+    let local_vv = remote_vv_1.incremented(local_id);
+    SnapshotWriter::begin(shared.vault.store(), &Snapshot::generate(&mut rng, 2))
+        .await
+        .save_nodes(&secrets.write_keys, local_id, local_vv)
+        .await
+        .commit()
+        .await;
+
+    // Verify all remote snapshots are present
+    assert_matches!(
+        shared
+            .vault
+            .store()
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&remote_id)
+            .try_collect::<Vec<_>>()
+            .await
+            .as_deref(),
+        Ok([_, _])
+    );
+
+    // Prune
+    let (unlock_tx, _unlock_rx) = unlock::channel();
+    prune::run(&shared, &unlock_tx, &Counter::new())
+        .await
+        .unwrap();
+
+    // Verify all remote snapshots have been removed
+    assert_matches!(
+        shared
+            .vault
+            .store()
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&remote_id)
+            .try_collect::<Vec<_>>()
+            .await
+            .as_deref(),
+        Ok([])
+    );
+}
+
 async fn setup(rng: &mut StdRng) -> (TempDir, Shared) {
     crate::test_utils::init_log();
 
