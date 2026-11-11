@@ -401,6 +401,7 @@ impl Blob {
         tx: &mut ReadTransaction,
         changeset: &mut Changeset,
     ) -> Result<()> {
+        self.prepare_truncated_block(tx).await?;
         self.write_len(tx, changeset).await?;
         self.write_blocks(changeset);
 
@@ -436,6 +437,42 @@ impl Blob {
         } else {
             false
         }
+    }
+
+    // If the blob has been truncated, make sure the block containing the new end of the blob gets
+    // written so its part past the end gets zeroed (see `write_blocks`).
+    async fn prepare_truncated_block(&mut self, tx: &mut ReadTransaction) -> Result<()> {
+        if self.len_modified >= self.len_original {
+            return Ok(());
+        }
+
+        // Absolute offset (including the header) of the end of the blob.
+        let end = self.len_modified + HEADER_SIZE as u64;
+        let number = (end / BLOCK_SIZE as u64) as u32;
+
+        // The end is at a block boundary so there is nothing past it in this block that needs to
+        // be zeroed. Note the first block is always written because it contains the length.
+        if number > 0 && end % BLOCK_SIZE as u64 == 0 {
+            return Ok(());
+        }
+
+        let block = match self.cache.entry(number) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let root_node = tx
+                    .load_latest_approved_root_node(self.branch.id(), RootNodeFilter::Any)
+                    .await?;
+                let locator = Locator::head(self.id).nth(number);
+                let (_, content) =
+                    read_block(tx, &root_node, &locator, self.branch.keys().read()).await?;
+
+                entry.insert(CachedBlock::from(content))
+            }
+        };
+
+        block.dirty = true;
+
+        Ok(())
     }
 
     // Write length, if changed
@@ -474,7 +511,18 @@ impl Blob {
             cache.into_iter().partition(|(_, block)| block.dirty);
         self.cache = clean;
 
-        for (number, block) in dirty {
+        // Absolute offset (including the header) of the end of the blob.
+        let end = self.len_modified + HEADER_SIZE as u64;
+
+        for (number, mut block) in dirty {
+            // Zero the part of the block past the end of the blob. This makes the block content
+            // (and thus its id) depend only on the blob content and not on its history (e.g., on
+            // whether the blob had previously longer content which has since been truncated).
+            // This in turn guarantees that branches with identical content have identical hashes.
+            let block_start = number as u64 * BLOCK_SIZE as u64;
+            let zero_from = end.saturating_sub(block_start).min(BLOCK_SIZE as u64) as usize;
+            block.content[zero_from..].fill(0);
+
             let locator = Locator::head(self.id).nth(number);
             write_block(
                 changeset,
