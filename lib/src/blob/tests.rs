@@ -7,7 +7,7 @@ use crate::{
     error::Error,
     event::EventSender,
     protocol::{BLOCK_SIZE, Bump},
-    store::Store,
+    store::{Store, WriteTransaction},
     test_utils,
 };
 use proptest::collection::vec;
@@ -855,6 +855,108 @@ async fn block_ids_of_identical_blobs_in_different_branches() {
         .unwrap();
 
     assert_eq!(block_ids_0, block_ids_1);
+}
+
+// Identical blobs must have identical block ids even if one of them had previously longer content
+// which has been truncated (that is, the block content must depend only on the current blob
+// content, not on its history). Otherwise branches with identical content could have different
+// hashes.
+mod block_ids_of_identical_blobs_with_different_history {
+    use super::*;
+
+    // Truncate and write the new content into a reopened blob (this is what `Directory` does when
+    // saving its content).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn truncate_and_write() {
+        let (mut rng, _base_dir, store, [branch_0, branch_1]) = setup(0).await;
+
+        let blob_id: BlobId = rng.random();
+        let long_content = random_bytes(&mut rng, 100);
+        let short_content = random_bytes(&mut rng, 50);
+
+        write(&store, &branch_0, blob_id, &long_content).await;
+
+        let mut tx = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
+        let mut blob = Blob::open(&mut tx, branch_0.clone(), blob_id)
+            .await
+            .unwrap();
+        blob.truncate(0).unwrap();
+        blob.write_all(&mut tx, &mut changeset, &short_content)
+            .await
+            .unwrap();
+        blob.flush(&mut tx, &mut changeset).await.unwrap();
+        commit(tx, changeset, &branch_0).await;
+
+        write(&store, &branch_1, blob_id, &short_content).await;
+
+        assert_eq!(
+            load_block_ids(&branch_0, blob_id).await,
+            load_block_ids(&branch_1, blob_id).await
+        );
+    }
+
+    // Truncate a blob whose first block is not cached.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn truncate_only() {
+        let (mut rng, _base_dir, store, [branch_0, branch_1]) = setup(0).await;
+
+        let blob_id: BlobId = rng.random();
+        let content = random_bytes(&mut rng, 100);
+        let short_len = 50;
+
+        // Writing and flushing the blob evicts its blocks from the cache.
+        let mut tx = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
+        let mut blob = Blob::create(branch_0.clone(), blob_id);
+        blob.write_all(&mut tx, &mut changeset, &content)
+            .await
+            .unwrap();
+        blob.flush(&mut tx, &mut changeset).await.unwrap();
+        commit(tx, changeset, &branch_0).await;
+
+        let mut tx = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
+        blob.truncate(short_len as u64).unwrap();
+        blob.flush(&mut tx, &mut changeset).await.unwrap();
+        commit(tx, changeset, &branch_0).await;
+
+        write(&store, &branch_1, blob_id, &content[..short_len]).await;
+
+        assert_eq!(
+            load_block_ids(&branch_0, blob_id).await,
+            load_block_ids(&branch_1, blob_id).await
+        );
+    }
+
+    // Create a blob with the given content.
+    async fn write(store: &Store, branch: &Branch, blob_id: BlobId, content: &[u8]) {
+        let mut tx = store.begin_write().await.unwrap();
+        let mut changeset = Changeset::new();
+        let mut blob = Blob::create(branch.clone(), blob_id);
+        blob.write_all(&mut tx, &mut changeset, content)
+            .await
+            .unwrap();
+        blob.flush(&mut tx, &mut changeset).await.unwrap();
+        commit(tx, changeset, branch).await;
+    }
+
+    async fn commit(mut tx: WriteTransaction, changeset: Changeset, branch: &Branch) {
+        changeset
+            .apply(&mut tx, branch.id(), branch.keys().write().unwrap())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    async fn load_block_ids(branch: &Branch, blob_id: BlobId) -> Vec<BlockId> {
+        BlockIds::open(branch.clone(), blob_id)
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap()
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
