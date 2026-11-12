@@ -16,7 +16,7 @@ use std::{cmp::Ordering, collections::HashMap, fmt, future};
 /// Status of receiving a root node
 #[derive(PartialEq, Eq, Debug)]
 pub(crate) enum RootNodeStatus {
-    /// The incoming node is more up to date than the nodos we already have. Contains info about
+    /// The incoming node is more up to date than the nodes we already have. Contains info about
     /// which part of the node is more up to date and the block presence of the latest node we have
     /// from the same branch as the incoming node.
     Updated(RootNodeUpdated, MultiBlockPresence),
@@ -233,53 +233,6 @@ pub(super) fn load_all_latest_approved(
              )",
     )
     .bind(NodeState::Approved)
-    .fetch(conn)
-    .err_into()
-}
-
-/// Return the latest root nodes of all known writers according to the following order of
-/// preferrence: approved, complete, incomplete, rejected. That is, returns the latest approved
-/// node if it exists, otherwise the latest complete, etc...
-pub(super) fn load_all_latest_preferred(
-    conn: &mut db::Connection,
-) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
-    // Partition all root nodes by their writer_id. Then sort each partition according to the
-    // preferrence as described in the above doc comment. Then take the first row from each
-    // partition.
-
-    // TODO: Is this the best way to do this (simple, efficient, etc...)?
-
-    sqlx::query_as(
-        "SELECT
-             snapshot_id,
-             writer_id,
-             versions,
-             hash,
-             signature,
-             state,
-             block_presence
-         FROM (
-             SELECT
-                 *,
-                 ROW_NUMBER() OVER (
-                     PARTITION BY writer_id
-                     ORDER BY
-                         CASE state
-                             WHEN ? THEN 0
-                             WHEN ? THEN 1
-                             WHEN ? THEN 2
-                             WHEN ? THEN 3
-                         END,
-                         snapshot_id DESC
-                 ) AS position
-             FROM snapshot_root_nodes
-         )
-         WHERE position = 1",
-    )
-    .bind(NodeState::Approved)
-    .bind(NodeState::Complete)
-    .bind(NodeState::Incomplete)
-    .bind(NodeState::Rejected)
     .fetch(conn)
     .err_into()
 }
@@ -617,11 +570,11 @@ pub(super) async fn status(
             }
             Some(Ordering::Equal) => {
                 if new_proof.hash == old_node.proof.hash {
-                    // The incoming node has the same version vector and the same hash as one of
-                    // the existing nodes which means its effectively the same node (except
-                    // possibly in a different branch). There is no point inserting it but if the
-                    // incoming summary is potentially more up-to-date than the exising one, we
-                    // still want to request the children. Otherwise we discard it.
+                    // The incoming node has the same version vector and the same hash as one of the
+                    // existing nodes which means its effectively the same node (except possibly in
+                    // a different branch). There is no point inserting it but if the incoming
+                    // summary is potentially more up-to-date than the existing one, we still want
+                    // to request the children. Otherwise we discard it.
                     if old_node
                         .summary
                         .block_presence
@@ -871,114 +824,6 @@ mod tests {
             .await,
             Err(Error::OutdatedRootNode)
         );
-    }
-
-    // Proptest for the `load_all_latest_preferred` function.
-    mod load_all_latest_preferred {
-        use super::*;
-        use crate::protocol::SnapshotId;
-        use proptest::{arbitrary::any, collection::vec, sample::select, strategy::Strategy};
-        use test_strategy::proptest;
-
-        #[proptest(async = "tokio")]
-        async fn proptest(
-            write_keys: Keypair,
-            #[strategy(root_node_params_strategy())] input: Vec<(
-                SnapshotId,
-                PublicKey,
-                Hash,
-                NodeState,
-            )>,
-        ) {
-            case(write_keys, input).await
-        }
-
-        async fn case(write_keys: Keypair, input: Vec<(SnapshotId, PublicKey, Hash, NodeState)>) {
-            let (_base_dir, pool) = setup().await;
-
-            let mut writer_ids: Vec<_> = input
-                .iter()
-                .map(|(_, writer_id, _, _)| *writer_id)
-                .collect();
-            writer_ids.sort();
-            writer_ids.dedup();
-
-            let mut expected: Vec<_> = writer_ids
-                .into_iter()
-                .filter_map(|this_writer_id| {
-                    input
-                        .iter()
-                        .filter(|(_, that_writer_id, _, _)| *that_writer_id == this_writer_id)
-                        .map(|(snapshot_id, _, _, state)| (*snapshot_id, *state))
-                        .max_by_key(|(snapshot_id, state)| {
-                            (
-                                match state {
-                                    NodeState::Approved => 3,
-                                    NodeState::Complete => 2,
-                                    NodeState::Incomplete => 1,
-                                    NodeState::Rejected => 0,
-                                },
-                                *snapshot_id,
-                            )
-                        })
-                        .map(|(snapshot_id, state)| (this_writer_id, snapshot_id, state))
-                })
-                .collect();
-            expected.sort_by_key(|(writer_id, _, _)| *writer_id);
-
-            let mut vv = VersionVector::default();
-            let mut tx = pool.begin_write().await.unwrap();
-
-            for (expected_snapshot_id, writer_id, hash, state) in input {
-                vv.increment(writer_id);
-
-                let (node, _) = create(
-                    &mut tx,
-                    Proof::new(writer_id, vv.clone(), hash, &write_keys),
-                    Summary {
-                        state,
-                        block_presence: MultiBlockPresence::None,
-                    },
-                    RootNodeFilter::Any,
-                )
-                .await
-                .unwrap();
-
-                assert_eq!(node.snapshot_id, expected_snapshot_id);
-            }
-
-            let mut actual: Vec<_> = load_all_latest_preferred(&mut tx)
-                .map_ok(|node| (node.proof.writer_id, node.snapshot_id, node.summary.state))
-                .try_collect()
-                .await
-                .unwrap();
-            actual.sort_by_key(|(writer_id, _, _)| *writer_id);
-
-            assert_eq!(actual, expected);
-
-            drop(tx);
-            pool.close().await.unwrap();
-        }
-
-        fn root_node_params_strategy()
-        -> impl Strategy<Value = Vec<(SnapshotId, PublicKey, Hash, NodeState)>> {
-            vec(any::<PublicKey>(), 1..=3)
-                .prop_flat_map(|writer_ids| {
-                    vec(
-                        (select(writer_ids), any::<Hash>(), any::<NodeState>()),
-                        0..=32,
-                    )
-                })
-                .prop_map(|params| {
-                    params
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, (writer_id, hash, state))| {
-                            ((index + 1) as u32, writer_id, hash, state)
-                        })
-                        .collect()
-                })
-        }
     }
 
     #[tokio::test]

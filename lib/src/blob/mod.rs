@@ -452,7 +452,7 @@ impl Blob {
 
         // The end is at a block boundary so there is nothing past it in this block that needs to
         // be zeroed. Note the first block is always written because it contains the length.
-        if number > 0 && end % BLOCK_SIZE as u64 == 0 {
+        if number > 0 && end.is_multiple_of(BLOCK_SIZE as u64) {
             return Ok(());
         }
 

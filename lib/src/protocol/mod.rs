@@ -35,4 +35,4 @@ pub(crate) use self::{
 };
 
 #[cfg(test)]
-pub(crate) use self::{block::BLOCK_NONCE_SIZE, root_node::SnapshotId};
+pub(crate) use self::block::BLOCK_NONCE_SIZE;
