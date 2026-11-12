@@ -5,9 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     io::{self, IoSlice},
     pin::Pin,
-    sync::{
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     task::{Context, Poll, ready},
     time::Instant,
 };

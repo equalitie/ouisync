@@ -31,7 +31,7 @@ pub(crate) use self::{
     leaf_node::{EMPTY_LEAF_HASH, LeafNode, LeafNodes},
     locator::Locator,
     proof::ProofError,
-    root_node::{RootNodeFilter, RootNodeKind},
+    root_node::{RootNodeFilter, RootNodeKind, prune},
 };
 
 #[cfg(test)]

@@ -444,6 +444,10 @@ impl Reader {
         root_node::load_writer_ids(self.db())
     }
 
+    pub fn load_latest_root_nodes(&mut self) -> impl Stream<Item = Result<RootNode, Error>> + '_ {
+        root_node::load_all_latest(self.db())
+    }
+
     pub fn load_latest_approved_root_nodes(
         &mut self,
     ) -> impl Stream<Item = Result<RootNode, Error>> + '_ {

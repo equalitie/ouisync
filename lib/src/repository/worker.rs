@@ -374,10 +374,8 @@ mod merge {
 
 /// Remove outdated branches and snapshots.
 mod prune {
-    use std::cmp::Ordering;
-
     use super::*;
-    use crate::{ord, protocol::NodeState};
+    use crate::protocol::{self, NodeState};
     use futures_util::TryStreamExt;
 
     pub(super) async fn run(
@@ -390,55 +388,17 @@ mod prune {
             .store()
             .acquire_read()
             .await?
-            .load_latest_preferred_root_nodes()
+            .load_latest_root_nodes()
             .try_collect()
             .await?;
 
-        let writer_id = shared.credentials.read().unwrap().writer_id;
-
-        let (uptodate, outdated): (_, Vec<_>) = ord::partial_partition_by(all, |a, b| {
-            a.proof
-                .version_vector
-                .partial_cmp(&b.proof.version_vector)
-                .map(|ordering| {
-                    ordering.then_with(|| {
-                        match (
-                            a.proof.writer_id == writer_id,
-                            b.proof.writer_id == writer_id,
-                        ) {
-                            (true, false) => Ordering::Greater,
-                            (false, true) => Ordering::Less,
-                            _ => a.proof.writer_id.cmp(&b.proof.writer_id),
-                        }
-                    })
-                })
-        });
-
-        // For the purpose of pruning, any approved snapshot is always considered more up-to-date
-        // than any non-approved one even if the approved's version vector is happens-before the
-        // non-approved one. This is because the non-approved ones are not visible to the users
-        // until they become approved and there is no guarantee that they ever will (e.g., due to
-        // peers disconnecting before receiving all nodes, etc...). For this reason, until there is
-        // at least one branch with approved snapshot in `uptodate`, we consider all branches as
-        // up-to-date.
-        let (uptodate, outdated) = if uptodate
-            .iter()
-            .any(|node| node.summary.state == NodeState::Approved)
-        {
-            (uptodate, outdated)
-        } else {
-            (uptodate.into_iter().chain(outdated).collect(), Vec::new())
-        };
+        let local_writer_id = shared.credentials.read().unwrap().writer_id;
+        let (uptodate, outdated) = protocol::prune(all, &local_writer_id);
 
         let mut status = JobStatus::Skipped;
 
         // Remove outdated branches
         for node in outdated {
-            // Never remove local branch
-            if node.proof.writer_id == writer_id {
-                continue;
-            }
-
             // Try to acquire a unique lock on the root directory of the branch. If any file or
             // directory from the branch is locked, the root will be locked as well and so this
             // acquire will fail, preventing us from pruning a branch that's still being used.
