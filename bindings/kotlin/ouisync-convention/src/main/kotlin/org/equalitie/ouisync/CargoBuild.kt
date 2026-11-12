@@ -39,6 +39,10 @@ constructor(
     /** Whether to build with the release profile (otherwise debug). Defaults to `true`. */
     @get:Input abstract val release: Property<Boolean>
 
+    /** Custom cargo profile to build with (e.g. `slim`). If set, overrides [release]. */
+    @get:Input @get:Optional
+    abstract val profile: Property<String>
+
     /**
      * Whether to strip the symbols from the library. Only the copy in [outputDir] is stripped, the
      * original in the cargo target dir is kept intact. Requires `llvm-strip` from the `llvm-tools`
@@ -80,6 +84,7 @@ constructor(
         val tool = tool.get()
         val target = target.get()
         val release = release.get()
+        val profile = profile.orNull
         val workspaceDir = workspaceDir.get().asFile
 
         // Pass `--target` only when needed so that building for the host target reuses the
@@ -128,7 +133,9 @@ constructor(
 
             args("--package", packageName.get(), "--lib")
 
-            if (release) {
+            if (profile != null) {
+                args("--profile", profile)
+            } else if (release) {
                 args("--release")
             }
         }
@@ -142,7 +149,7 @@ constructor(
                     System.getenv("CARGO_TARGET_DIR")?.let { File(it) } ?: workspaceDir.resolve("target")
 
                 (if (explicitTarget) targetDir.resolve(target) else targetDir)
-                    .resolve(if (release) "release" else "debug")
+                    .resolve(profile ?: if (release) "release" else "debug")
                     .resolve(fileName)
             }
 

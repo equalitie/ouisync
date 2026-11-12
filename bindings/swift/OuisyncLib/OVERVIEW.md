@@ -98,7 +98,7 @@ bash bindings/swift/OuisyncLib/build-xcframework.sh
 
 This script:
 1. Reads the enabled targets from `config.sh` (macOS, iOS device, iOS simulator)
-2. Runs `cargo build --package ouisync-service --release --target <triple>` for each
+2. Runs `cargo build --package ouisync-service --profile slim --target <triple>` for each
 3. Runs `cbindgen` to generate `target/swift-include/bindings.h` from the Rust sources
 4. Combines simulator slices with `lipo` where needed
 5. Creates `OuisyncLib/output/OuisyncLibFFI.xcframework` via `xcodebuild -create-xcframework`

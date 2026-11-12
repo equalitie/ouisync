@@ -35,10 +35,10 @@ if [ $SKIP ] && [ $SKIP -gt 0 ]; then
 fi
 if [ $DEBUG ] && [ $DEBUG -gt 0 ]; then
     CONFIGURATION="debug"
-    FLAGS=""
+    FLAGS=()
 else
-    CONFIGURATION="release"
-    FLAGS="--release"
+    CONFIGURATION="slim"
+    FLAGS=(--profile slim)
 fi
 
 # convert targets to dictionary
@@ -54,7 +54,7 @@ for TARGET in ${(k)TARGETS}; do
         --package ouisync-service \
         --target $TARGET \
         --target-dir "$BUILD_OUTPUT" \
-        $FLAGS || exit 1
+        $FLAGS[@] || exit 1
 done
 
 # generate include files

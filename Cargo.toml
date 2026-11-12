@@ -97,6 +97,16 @@ debug = 1
 inherits = "release"
 debug = 1
 
+# Profile for smaller binaries (used for mobile builds). Slower to build than release.
+[profile.slim]
+inherits = "release"
+# Optimize across all crates at link time, which removes a lot of unused and duplicated code.
+lto = "fat"
+# Compile each crate as a single unit so the optimizer sees all of it at once. Slower to build but
+# produces smaller code.
+codegen-units = 1
+strip = "symbols"
+
 # Build dependencies with optimizations even in dev mode
 [profile.dev.package."*"]
 opt-level = 3

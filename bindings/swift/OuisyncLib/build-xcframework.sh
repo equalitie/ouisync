@@ -5,7 +5,8 @@
 #
 # Targets are read from config.sh (TARGETS array). SKIP is intentionally ignored —
 # this script always builds. Set DEBUG=1 in config.sh or in the environment for a
-# debug build (much faster, but not suitable for production).
+# debug build (much faster, but not suitable for production). Otherwise the size
+# optimized `slim` cargo profile is used.
 #
 # Prerequisites:
 #   cargo, cbindgen, rustup
@@ -29,8 +30,8 @@ if [[ "${DEBUG:-}" == "1" ]]; then
     CONFIGURATION="debug"
     RELEASE_FLAG=""
 else
-    CONFIGURATION="release"
-    RELEASE_FLAG="--release"
+    CONFIGURATION="slim"
+    RELEASE_FLAG="--profile slim"
 fi
 
 BUILD_DIR="$PROJECT_ROOT/target"

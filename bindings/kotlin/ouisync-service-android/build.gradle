@@ -135,7 +135,11 @@ android.buildTypes.all { buildType ->
             task.workspaceDir = rustCratesDir
             task.packageName = 'ouisync-service'
             task.libraryName = 'ouisync_service'
-            task.release = name != 'debug'
+            if (name != 'debug') {
+                task.profile = 'slim'
+            } else {
+                task.release = false
+            }
             task.outputDir = file("$jniLibsDir/$abi")
         }
     }
