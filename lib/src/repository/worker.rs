@@ -399,6 +399,12 @@ mod prune {
 
         // Remove outdated branches
         for node in outdated {
+            // Never remove local branch. Note a node from the local branch can be outdated if it's
+            // not approved (see `protocol::prune` for details).
+            if node.proof.writer_id == local_writer_id {
+                continue;
+            }
+
             // Try to acquire a unique lock on the root directory of the branch. If any file or
             // directory from the branch is locked, the root will be locked as well and so this
             // acquire will fail, preventing us from pruning a branch that's still being used.

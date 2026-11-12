@@ -37,22 +37,12 @@ pub(crate) enum RootNodeFilter {
 /// The decision into which group a node belongs to depends on its version vector, state and whether
 /// the node belongs to the local branch.
 ///
-/// # Panics
-///
-/// Panics if any node from the local branch is not approved. Local snapshots are always created
-/// fully in a single db transaction and the quota is not applied to the local branch, so they are
-/// always approved.
+/// Note that nodes from the local branch can end up in the outdated group (see `compare_for_prune`
+/// for details). It's the responsibility of the caller to never prune the local branch.
 pub(crate) fn prune(
     nodes: Vec<RootNode>,
     local_writer_id: &PublicKey,
 ) -> (Vec<RootNode>, Vec<RootNode>) {
-    for node in &nodes {
-        assert!(
-            node.proof.writer_id != *local_writer_id || node.summary.state == NodeState::Approved,
-            "local root node is not approved: {node:?}"
-        );
-    }
-
     ord::partial_partition_by(nodes, |a, b| compare_for_prune(a, b, local_writer_id))
 }
 
@@ -80,14 +70,18 @@ pub(crate) fn prune(
 // are pruned only when there is an approved node that is newer than both of them, either in the
 // same branch or in a different one.
 //
-// Precondition: local nodes are always approved (checked in `prune`).
+// Only approved nodes from the local branch are considered local. Local snapshots are always created
+// fully in a single db transaction and the quota is not applied to the local branch, so they are
+// normally always approved. A non-approved node with the local writer id can still exist though, for
+// example when it's received from another replica that uses the same writer id. Such node is
+// treated as non-local.
 fn compare_for_prune(a: &RootNode, b: &RootNode, local_id: &PublicKey) -> Option<Ordering> {
     fn is_approved(node: &RootNode) -> bool {
         node.summary.state == NodeState::Approved
     }
 
     fn is_local(node: &RootNode, local_id: &PublicKey) -> bool {
-        node.proof.writer_id == *local_id
+        node.proof.writer_id == *local_id && is_approved(node)
     }
 
     if !is_approved(a) && !is_approved(b) && a.proof.writer_id != b.proof.writer_id {
@@ -264,12 +258,22 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "local root node is not approved")]
-    fn prune_panics_on_unapproved_local_node() {
+    fn prune_treats_unapproved_local_node_as_non_local() {
         let l_id = PublicKey::random();
-        let a = make_root_node(l_id, VersionVector::first(l_id), NodeState::Incomplete);
+        let r_id = PublicKey::random();
 
-        prune(vec![a], &l_id);
+        let vv0 = VersionVector::first(l_id);
+        let vv1 = vv0.clone().incremented(r_id);
+
+        // Would be kept if it was considered local.
+        let a = make_root_node(l_id, vv0, NodeState::Incomplete);
+        let b = make_root_node(r_id, vv1, NodeState::Approved);
+
+        assert_eq!(
+            prune(vec![a.clone(), b.clone()], &l_id),
+            (vec![b.clone()], vec![a.clone()])
+        );
+        assert_eq!(prune(vec![b.clone(), a.clone()], &l_id), (vec![b], vec![a]));
     }
 
     #[test]
@@ -339,12 +343,7 @@ mod tests {
                     .zip(versions)
                     .filter(|(_, version)| *version > 0)
                     .collect();
-                // Local nodes are always approved.
-                let state = if writer_index == 0 {
-                    NodeState::Approved
-                } else {
-                    [NodeState::Approved, NodeState::Incomplete][state_index]
-                };
+                let state = [NodeState::Approved, NodeState::Incomplete][state_index];
 
                 let mut node = make_root_node(writer_ids[writer_index], version_vector, state);
                 node.snapshot_id = snapshot_id as SnapshotId;

@@ -486,6 +486,80 @@ async fn do_not_prune_approved_snapshot_superseded_only_by_non_approved_ones() {
     );
 }
 
+// The local branch can contain a non-approved snapshot (e.g., received from another replica that
+// uses the same writer id). Such snapshot is treated as non-local for the purpose of pruning, but
+// the local branch itself must still never be pruned.
+#[tokio::test]
+async fn do_not_prune_local_branch_with_non_approved_snapshot() {
+    let mut rng: StdRng = rand::make_rng();
+    let (_base_dir, shared) = setup(&mut rng).await;
+    let secrets = shared
+        .credentials
+        .read()
+        .unwrap()
+        .secrets
+        .clone()
+        .into_write_secrets()
+        .unwrap();
+
+    let local_id = shared.credentials.read().unwrap().writer_id;
+    let remote_id = sign::PublicKey::generate(&mut rng);
+
+    // Local: complete snapshot
+    let local_vv_0 = VersionVector::first(local_id);
+    SnapshotWriter::begin(shared.vault.store(), &Snapshot::generate(&mut rng, 2))
+        .await
+        .save_nodes(&secrets.write_keys, local_id, local_vv_0.clone())
+        .await
+        .commit()
+        .await;
+
+    // Local: newer, incomplete snapshot
+    let local_vv_1 = local_vv_0.incremented(local_id);
+    SnapshotWriter::begin(shared.vault.store(), &Snapshot::generate(&mut rng, 2))
+        .await
+        .save_root_nodes(&secrets.write_keys, local_id, local_vv_1.clone())
+        .await
+        .save_inner_nodes()
+        .await
+        // Do not save leaf nodes, to keep the snapshot incomplete.
+        .commit()
+        .await;
+
+    // Remote: complete snapshot, newer than both local ones
+    SnapshotWriter::begin(shared.vault.store(), &Snapshot::generate(&mut rng, 2))
+        .await
+        .save_nodes(
+            &secrets.write_keys,
+            remote_id,
+            local_vv_1.incremented(remote_id),
+        )
+        .await
+        .commit()
+        .await;
+
+    // Prune
+    let (unlock_tx, _unlock_rx) = unlock::channel();
+    prune::run(&shared, &unlock_tx, &Counter::new())
+        .await
+        .unwrap();
+
+    // Verify all local snapshots are still present
+    assert_matches!(
+        shared
+            .vault
+            .store()
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&local_id)
+            .try_collect::<Vec<_>>()
+            .await
+            .as_deref(),
+        Ok([_, _])
+    );
+}
+
 async fn setup(rng: &mut StdRng) -> (TempDir, Shared) {
     crate::test_utils::init_log();
 
