@@ -317,7 +317,6 @@ async fn do_not_prune_incomplete_snapshots_if_no_newer_snapshot_is_complete() {
 // becomes outdated, all its snapshots must be pruned, including the incomplete one (it's also
 // outdated and there might be no other prune run to remove it).
 #[tokio::test]
-#[ignore]
 async fn prune_outdated_branch_with_newer_incomplete_snapshot() {
     let mut rng: StdRng = rand::make_rng();
     let (_base_dir, shared) = setup(&mut rng).await;
