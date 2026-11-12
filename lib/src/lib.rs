@@ -22,6 +22,7 @@ mod iterator;
 mod joint_directory;
 mod joint_entry;
 mod network;
+mod ord;
 mod progress;
 mod repository;
 mod store;
@@ -31,7 +32,6 @@ mod test_utils;
 mod time;
 #[cfg_attr(test, macro_use)]
 mod version_vector;
-mod versioned;
 
 pub use self::{
     access_control::{

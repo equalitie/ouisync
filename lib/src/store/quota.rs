@@ -1,5 +1,5 @@
 use super::{error::Error as StoreError, root_node};
-use crate::{crypto::Hash, db, future::TryStreamExt as _, protocol::StorageSize, versioned};
+use crate::{crypto::Hash, db, future::TryStreamExt as _, ord, protocol::StorageSize};
 use sqlx::{QueryBuilder, Row};
 use thiserror::Error;
 
@@ -51,7 +51,9 @@ async fn load_candidate_latest_root_hashes(
         .try_collect_into(&mut nodes)
         .await?;
 
-    let nodes = versioned::keep_maximal(nodes, ());
+    let nodes = ord::partial_max_by(nodes, |a, b| {
+        a.proof.version_vector.partial_cmp(&b.proof.version_vector)
+    });
 
     let mut hashes: Vec<_> = nodes.into_iter().map(|node| node.proof.hash).collect();
     hashes.sort();

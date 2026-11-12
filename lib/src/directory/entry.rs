@@ -13,7 +13,6 @@ use crate::{
     protocol::Locator,
     store::ReadTransaction,
     version_vector::VersionVector,
-    versioned::{BranchItem, Versioned},
 };
 use std::fmt;
 
@@ -102,18 +101,6 @@ impl<'a> EntryRef<'a> {
             Self::Directory(r) => &r.inner,
             Self::Tombstone(r) => &r.inner,
         }
-    }
-}
-
-impl Versioned for EntryRef<'_> {
-    fn version_vector(&self) -> &VersionVector {
-        EntryRef::version_vector(self)
-    }
-}
-
-impl BranchItem for EntryRef<'_> {
-    fn branch_id(&self) -> &PublicKey {
-        EntryRef::branch_id(self)
     }
 }
 

@@ -12,15 +12,15 @@ use crate::{
     error::{Error, Result},
     file::File,
     iterator::{Accumulate, SortedUnion},
-    store,
+    ord, store,
     version_vector::VersionVector,
-    versioned::{self, PreferBranch},
 };
 use async_recursion::async_recursion;
 use camino::{Utf8Component, Utf8Path};
 use either::Either;
 use std::{
     borrow::Cow,
+    cmp::Ordering,
     collections::{BTreeMap, VecDeque},
     fmt, iter, mem,
 };
@@ -692,7 +692,31 @@ impl<'a> Merge<'a> {
         let mut tombstone: Option<EntryTombstoneData> = None;
 
         // Note that doing this will remove files that have been removed by tombstones as well.
-        let entries = versioned::keep_maximal(entries, PreferBranch(local_branch.map(Branch::id)));
+        let local_id = local_branch.map(Branch::id);
+        let entries = ord::partial_max_by(entries, |a, b| {
+            // 1. Compare by version vector
+            //
+            // 2. Break ties by preferring the entry from the local branch
+            //
+            // 3. If both are local or none is, arbitrarily compare by the branch ids to achieve
+            // consistent ordering across replicas.
+            a.version_vector()
+                .partial_cmp(b.version_vector())
+                .map(|ordering| {
+                    ordering
+                        .then_with(|| {
+                            match (
+                                Some(a.branch_id()) == local_id,
+                                Some(b.branch_id()) == local_id,
+                            ) {
+                                (true, false) => Ordering::Greater,
+                                (false, true) => Ordering::Less,
+                                _ => Ordering::Equal,
+                            }
+                        })
+                        .then_with(|| a.branch_id().cmp(b.branch_id()))
+                })
+        });
 
         for entry in entries {
             match entry {

@@ -7,7 +7,7 @@ use crate::{
     error::{Error, Result},
     event::{self, Event, EventScope, Lagged, Payload},
     joint_directory::{JointDirectory, JointEntryRef, MissingVersionStrategy},
-    store, versioned,
+    store,
 };
 use async_recursion::async_recursion;
 use futures_util::{StreamExt, stream};
@@ -374,8 +374,10 @@ mod merge {
 
 /// Remove outdated branches and snapshots.
 mod prune {
+    use std::cmp::Ordering;
+
     use super::*;
-    use crate::{protocol::NodeState, versioned::PreferBranch};
+    use crate::{ord, protocol::NodeState};
     use futures_util::TryStreamExt;
 
     pub(super) async fn run(
@@ -394,8 +396,23 @@ mod prune {
 
         let writer_id = shared.credentials.read().unwrap().writer_id;
 
-        let (uptodate, outdated): (Vec<_>, Vec<_>) =
-            versioned::partition(all, PreferBranch(Some(&writer_id)));
+        let (uptodate, outdated): (_, Vec<_>) = ord::partial_partition_by(all, |a, b| {
+            a.proof
+                .version_vector
+                .partial_cmp(&b.proof.version_vector)
+                .map(|ordering| {
+                    ordering.then_with(|| {
+                        match (
+                            a.proof.writer_id == writer_id,
+                            b.proof.writer_id == writer_id,
+                        ) {
+                            (true, false) => Ordering::Greater,
+                            (false, true) => Ordering::Less,
+                            _ => a.proof.writer_id.cmp(&b.proof.writer_id),
+                        }
+                    })
+                })
+        });
 
         // For the purpose of pruning, any approved snapshot is always considered more up-to-date
         // than any non-approved one even if the approved's version vector is happens-before the
@@ -778,16 +795,14 @@ mod trash {
 mod utils {
     use futures_util::{Stream, StreamExt};
     use portable_atomic::{AtomicU64, Ordering};
-    use std::{
-        pin::pin,
-    };
+    use std::pin::pin;
     use tokio::select;
 
     /// Control how the next job should run
     pub(super) enum Command {
         // Wait for the current job to finish before starting a new one
         Wait,
-        // Interrupt the current job and start a new one immediatelly
+        // Interrupt the current job and start a new one immediately
         Interrupt,
     }
 
