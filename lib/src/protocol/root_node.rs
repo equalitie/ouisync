@@ -69,6 +69,13 @@ pub(crate) fn prune(
 //
 // 3. Otherwise they are uncomparable.
 //
+// Additionally, two non-approved nodes from different branches are always uncomparable, regardless
+// of their version vectors. This is because a non-approved node might never become approved (e.g.,
+// due to the peer disconnecting before we receive all its nodes) so it can't be considered to
+// supersede a node from another branch. As a consequence, a node is pruned only if there is an
+// approved node greater than it, so when a whole branch is pruned, all its snapshots (including the
+// older approved ones) are superseded by an approved node.
+//
 // Note this means an older approved node is kept when its branch has a newer, non-approved one. Both
 // are pruned only when there is an approved node that is newer than both of them, either in the
 // same branch or in a different one.
@@ -81,6 +88,10 @@ fn compare_for_prune(a: &RootNode, b: &RootNode, local_id: &PublicKey) -> Option
 
     fn is_local(node: &RootNode, local_id: &PublicKey) -> bool {
         node.proof.writer_id == *local_id
+    }
+
+    if !is_approved(a) && !is_approved(b) && a.proof.writer_id != b.proof.writer_id {
+        return None;
     }
 
     let orderings = [
@@ -259,6 +270,32 @@ mod tests {
         let a = make_root_node(l_id, VersionVector::first(l_id), NodeState::Incomplete);
 
         prune(vec![a], &l_id);
+    }
+
+    #[test]
+    fn prune_different_branches_keeps_unapproved_when_newer_is_not_approved() {
+        let l_id = PublicKey::random();
+        let a_id = PublicKey::random();
+        let b_id = PublicKey::random();
+
+        let vv0 = VersionVector::first(a_id);
+        let vv1 = vv0.clone().incremented(b_id);
+
+        for a_state in [NodeState::Incomplete, NodeState::Complete] {
+            for b_state in [NodeState::Incomplete, NodeState::Complete] {
+                let a = make_root_node(a_id, vv0.clone(), a_state);
+                let b = make_root_node(b_id, vv1.clone(), b_state);
+
+                assert_eq!(
+                    prune(vec![a.clone(), b.clone()], &l_id),
+                    (vec![a.clone(), b.clone()], vec![])
+                );
+                assert_eq!(
+                    prune(vec![b.clone(), a.clone()], &l_id),
+                    (vec![b, a], vec![])
+                );
+            }
+        }
     }
 
     #[test]

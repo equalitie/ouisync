@@ -399,6 +399,93 @@ async fn prune_outdated_branch_with_newer_incomplete_snapshot() {
     );
 }
 
+// A branch has an approved snapshot and a newer incomplete one. Another branch has an incomplete
+// snapshot which is newer than both of them. The approved snapshot must not be pruned because the
+// only snapshots that supersede it are not approved (and might never be).
+#[tokio::test]
+async fn do_not_prune_approved_snapshot_superseded_only_by_non_approved_ones() {
+    let mut rng: StdRng = rand::make_rng();
+    let (_base_dir, shared) = setup(&mut rng).await;
+    let secrets = shared
+        .credentials
+        .read()
+        .unwrap()
+        .secrets
+        .clone()
+        .into_write_secrets()
+        .unwrap();
+
+    let local_id = shared.credentials.read().unwrap().writer_id;
+    let remote_id_a = sign::PublicKey::generate(&mut rng);
+    let remote_id_b = sign::PublicKey::generate(&mut rng);
+
+    // Remote A: complete snapshot
+    let vv_a0 = VersionVector::first(remote_id_a);
+    SnapshotWriter::begin(shared.vault.store(), &Snapshot::generate(&mut rng, 2))
+        .await
+        .save_nodes(&secrets.write_keys, remote_id_a, vv_a0.clone())
+        .await
+        .commit()
+        .await;
+
+    // Remote A: newer, incomplete snapshot
+    let vv_a1 = vv_a0.incremented(remote_id_a);
+    SnapshotWriter::begin(shared.vault.store(), &Snapshot::generate(&mut rng, 2))
+        .await
+        .save_root_nodes(&secrets.write_keys, remote_id_a, vv_a1.clone())
+        .await
+        .save_inner_nodes()
+        .await
+        // Do not save leaf nodes, to keep the snapshot incomplete.
+        .commit()
+        .await;
+
+    // Remote B: incomplete snapshot, newer than both snapshots of A
+    let vv_b = vv_a1.incremented(remote_id_b);
+    SnapshotWriter::begin(shared.vault.store(), &Snapshot::generate(&mut rng, 2))
+        .await
+        .save_root_nodes(&secrets.write_keys, remote_id_b, vv_b)
+        .await
+        .save_inner_nodes()
+        .await
+        // Do not save leaf nodes, to keep the snapshot incomplete.
+        .commit()
+        .await;
+
+    // Local: complete snapshot, concurrent with all the remote ones
+    SnapshotWriter::begin(shared.vault.store(), &Snapshot::generate(&mut rng, 2))
+        .await
+        .save_nodes(
+            &secrets.write_keys,
+            local_id,
+            VersionVector::first(local_id),
+        )
+        .await
+        .commit()
+        .await;
+
+    // Prune
+    let (unlock_tx, _unlock_rx) = unlock::channel();
+    prune::run(&shared, &unlock_tx, &Counter::new())
+        .await
+        .unwrap();
+
+    // Verify all snapshots of A are still present
+    assert_matches!(
+        shared
+            .vault
+            .store()
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_root_nodes_by_writer(&remote_id_a)
+            .try_collect::<Vec<_>>()
+            .await
+            .as_deref(),
+        Ok([_, _])
+    );
+}
+
 async fn setup(rng: &mut StdRng) -> (TempDir, Shared) {
     crate::test_utils::init_log();
 
