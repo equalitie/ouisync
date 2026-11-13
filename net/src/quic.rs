@@ -393,6 +393,8 @@ impl quinn::AsyncUdpSocket for CustomUdpSocket {
         bufs: &mut [std::io::IoSliceMut<'_>],
         metas: &mut [quinn::udp::RecvMeta],
     ) -> Poll<io::Result<usize>> {
+        let mut recoverable_errors = 0;
+
         loop {
             if let Err(e) = ready!(self.io.poll_recv_ready(cx)) {
                 self.died.store(true, Ordering::Release);
@@ -413,6 +415,17 @@ impl quinn::AsyncUdpSocket for CustomUdpSocket {
                 // actually readable yet) - `try_io` already cleared it, so looping back to
                 // `poll_recv_ready` is correct: it'll wait for the next real readiness event.
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+                // Recoverable errors are reported only once (the `recv` call which returns them
+                // also clears them) so retrying won't spin. Still, cap the number of retries in
+                // case some platform keeps returning one of them, to not spin forever.
+                Err(e)
+                    if is_recoverable_recv_error(&e)
+                        && recoverable_errors < MAX_CONSECUTIVE_RECOVERABLE_RECV_ERRORS =>
+                {
+                    tracing::debug!(error = ?e, "recoverable QUIC socket recv error");
+                    recoverable_errors += 1;
+                    continue;
+                }
                 // Any other error (e.g. the network interface going down while the app is
                 // backgrounded) is a real failure, not a spurious wakeup. `try_io` doesn't clear
                 // readiness for these, so looping back to `poll_recv_ready` would immediately
@@ -422,6 +435,7 @@ impl quinn::AsyncUdpSocket for CustomUdpSocket {
                 // so the owner knows this endpoint needs to be rebuilt - quinn never does this on
                 // its own once its driver sees a fatal error.
                 Err(e) => {
+                    tracing::warn!(error = ?e, "fatal QUIC socket recv error");
                     self.died.store(true, Ordering::Release);
                     return Poll::Ready(Err(e));
                 }
@@ -601,13 +615,79 @@ impl SideChannelSender {
     }
 }
 
+/// Max number of recoverable errors `CustomUdpSocket::poll_recv` retries in a row before treating
+/// the error as fatal.
+const MAX_CONSECUTIVE_RECOVERABLE_RECV_ERRORS: usize = 32;
+
+/// Whether the error returned from receiving on the UDP socket is recoverable, that is, it doesn't
+/// mean the socket stopped working.
+///
+/// TODO: Temporary lack of memory / buffer space in the kernel (`ENOMEM`, `ENOBUFS`, `WSAENOBUFS`)
+/// is in fact recoverable too. But unlike the errors below it's a condition which lasts for some
+/// time, not a one-off event, so retrying immediately would just hit the retry limit. Handling it
+/// properly would require backing off with a timer which would complicate the code, and these
+/// errors are rare on recv, so they are treated as fatal for now.
+fn is_recoverable_recv_error(error: &io::Error) -> bool {
+    match error.kind() {
+        // ICMP errors caused by previously sent packets (e.g., "port unreachable" when the peer
+        // went offline, reported as `WSAECONNRESET` on Windows).
+        io::ErrorKind::ConnectionReset
+        | io::ErrorKind::ConnectionRefused
+        | io::ErrorKind::HostUnreachable
+        | io::ErrorKind::NetworkUnreachable => true,
+        // ICMP "TTL expired" caused by a previously sent packet.
+        #[cfg(windows)]
+        _ if error.raw_os_error()
+            == Some(windows_sys::Win32::Networking::WinSock::WSAENETRESET) =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
 //------------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::Ipv4Addr;
+    use futures_util::future;
+    use std::{net::Ipv4Addr, time::Duration};
     use tokio::task;
+
+    // Sending to a closed port triggers an ICMP "port unreachable" which some platforms (e.g.,
+    // Windows) report as an error on the next recv. That must not kill the endpoint.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn send_to_closed_port() {
+        let (connector, _acceptor, _) =
+            configure((Ipv4Addr::LOCALHOST, 0).into(), Default::default()).unwrap();
+
+        let closed_addr = {
+            let socket = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            socket.local_addr().unwrap()
+        };
+
+        // The handshake never completes, so don't wait for it. Just give it some time to send the
+        // initial packets and receive the ICMP responses.
+        let connect = task::spawn(connector.connect(closed_addr));
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        connect.abort();
+
+        assert!(!connector.is_dead());
+
+        // The endpoint still works.
+        let (_connector, acceptor, _) =
+            configure((Ipv4Addr::LOCALHOST, 0).into(), Default::default()).unwrap();
+        let addr = *acceptor.local_addr();
+
+        task::spawn(async move {
+            let _connection = acceptor.accept().await.unwrap().await.unwrap();
+            future::pending::<()>().await;
+        });
+
+        connector.connect(addr).await.unwrap();
+        assert!(!connector.is_dead());
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn side_channel() {

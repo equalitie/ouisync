@@ -30,6 +30,9 @@ tokio-util         = { workspace = true, features = ["compat"] }
 tracing            = { workspace = true }
 yamux              = "0.14.1"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys        = { version = "0.60.2", features = ["Win32_Networking_WinSock"] }
+
 [dev-dependencies]
 anyhow             = { workspace = true }
 assert_matches     = { workspace = true }
