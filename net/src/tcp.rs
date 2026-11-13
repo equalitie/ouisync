@@ -294,7 +294,7 @@ pub(super) struct TcpListener(tokio::net::TcpListener);
 
 impl TcpListener {
     /// Configures a TCP socket with the given options and binds it to the given address. If the
-    /// port is taken, uses a random one,
+    /// port is taken, uses a random one, unless `options` has strict port enabled.
     pub fn bind(addr: SocketAddr, options: SocketOptions) -> io::Result<Self> {
         let socket = Socket::new(Domain::for_address(addr), Type::STREAM, None)?;
         socket.set_nonblocking(true)?;
@@ -305,7 +305,7 @@ impl TcpListener {
         }
 
         set_keep_alive(&socket)?;
-        socket::bind_with_fallback(&socket, addr)?;
+        socket::bind(&socket, addr, options)?;
 
         // Marks the socket as ready for accepting incoming connections. This needs to be set
         // for TCP listeners otherwise we get "Invalid argument" error when calling `accept`.

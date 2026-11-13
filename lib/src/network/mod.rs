@@ -700,12 +700,12 @@ impl Inner {
 
         // TODO: Would be preferable to only rebind those stacks that actually need rebinding.
         //
-        // Also force a rebind if a currently bound stack has died (e.g. its UDP socket hit a
+        // Also force a rebind if a currently bound stack has failed (e.g. its UDP socket hit a
         // fatal error because the network interface went down while the app was backgrounded):
         // such a stack never recovers on its own, and comparing addresses alone would otherwise
         // treat "bind to the same address again" as a no-op forever.
         if !self.gateway.addresses().any_stack_needs_rebind(&bind)
-            && !self.gateway.any_stack_is_dead()
+            && !self.gateway.any_stack_has_failed()
         {
             return;
         }

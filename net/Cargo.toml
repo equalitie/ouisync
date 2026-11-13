@@ -44,5 +44,9 @@ test-strategy      = { workspace = true }
 tokio              = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
+[features]
+# Exposes utilities for testing the users of this crate (e.g. `quic::Connector::kill`).
+test-utils = []
+
 [lints]
 workspace = true
