@@ -31,7 +31,7 @@ tracing            = { workspace = true }
 yamux              = "0.14.1"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys        = { version = "0.60.2", features = ["Win32_Networking_WinSock"] }
+windows-sys        = { version = "0.60.2", features = ["Win32_Networking_WinSock", "Win32_System_IO"] }
 
 [dev-dependencies]
 anyhow             = { workspace = true }

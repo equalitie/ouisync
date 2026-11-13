@@ -358,6 +358,9 @@ impl CustomUdpSocket {
         let socket = crate::udp::UdpSocket::bind_with_options(addr, options)?;
         let socket = socket.into_std()?;
 
+        #[cfg(windows)]
+        disable_icmp_errors(&socket);
+
         let state = quinn::udp::UdpSocketState::new((&socket).into())?;
 
         Ok(Self {
@@ -643,6 +646,46 @@ fn is_recoverable_recv_error(error: &io::Error) -> bool {
             true
         }
         _ => false,
+    }
+}
+
+/// By default, Windows reports ICMP "port unreachable" and "TTL expired" caused by a previously
+/// sent packet as `WSAECONNRESET` / `WSAENETRESET` on the next recv. These are meaningless for
+/// QUIC (and common in P2P, e.g. when a peer goes offline), so disable them.
+#[cfg(windows)]
+fn disable_icmp_errors(socket: &std::net::UdpSocket) {
+    use std::{os::windows::io::AsRawSocket, ptr};
+    use windows_sys::Win32::Networking::WinSock::{
+        SIO_UDP_CONNRESET, SIO_UDP_NETRESET, SOCKET_ERROR, WSAIoctl,
+    };
+
+    for (name, code) in [
+        ("SIO_UDP_CONNRESET", SIO_UDP_CONNRESET),
+        ("SIO_UDP_NETRESET", SIO_UDP_NETRESET),
+    ] {
+        let enable: u32 = 0;
+        let mut bytes_returned: u32 = 0;
+
+        // SAFETY: The socket is valid for the duration of the call and the pointers point to
+        // properly sized and aligned local variables. No overlapped I/O is used.
+        let res = unsafe {
+            WSAIoctl(
+                socket.as_raw_socket() as _,
+                code,
+                (&raw const enable).cast(),
+                size_of_val(&enable) as u32,
+                ptr::null_mut(),
+                0,
+                &mut bytes_returned,
+                ptr::null_mut(),
+                None,
+            )
+        };
+
+        // Ignore errors - the recoverable ones are handled in `CustomUdpSocket::poll_recv` anyway.
+        if res == SOCKET_ERROR {
+            tracing::warn!(error = ?io::Error::last_os_error(), "failed to disable {name}");
+        }
     }
 }
 
