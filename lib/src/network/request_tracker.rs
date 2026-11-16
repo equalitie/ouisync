@@ -1019,6 +1019,13 @@ impl Worker {
         // Note: we are using recursion, but the graph is only a few layers deep (currently 5) so
         // there is no danger of stack overflow.
         for child_key in children {
+            // The child might have been removed while updating its siblings. This can happen when
+            // there are multiple children requesting the same node with different variants:
+            // updating one replaces the other in this client and cancels it.
+            if self.requests.get(child_key).is_none() {
+                continue;
+            }
+
             self.update_request(client_id, child_key, initial_state);
         }
     }
