@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Implemented performance optimizations resulting in 2x - 3x speedup of syncing (depending on
   scenario).
+- Fix multiple bugs in the sync protocol that prevented replicas to reach 100% sync in some cases.
 
 ## [v0.10.2](https://github.com/equalitie/ouisync/compare/v0.10.1...v0.10.2)
 
