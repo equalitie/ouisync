@@ -76,7 +76,7 @@ use crate::{
 };
 use backoff::{ExponentialBackoffBuilder, backoff::Backoff};
 use btdht::{self, INFO_HASH_LEN, InfoHash};
-use deadlock::BlockingMutex;
+use deadlock::{AsyncMutex, BlockingMutex};
 use futures_util::future;
 use net::{
     quic,
@@ -200,6 +200,7 @@ impl NetworkBuilder {
             our_addresses: BlockingMutex::new(HashSet::default()),
             stats_tracker: StatsTracker::default(),
             addr_filter: self.addr_filter,
+            bind_lock: AsyncMutex::new(()),
         });
 
         inner.spawn(inner.clone().handle_incoming_connections(incoming_rx));
@@ -665,6 +666,8 @@ struct Inner {
     our_addresses: BlockingMutex<HashSet<PeerAddr>>,
     stats_tracker: StatsTracker,
     addr_filter: AddrFilter,
+    // Serializes changes to the gateway stacks (and the subsequent `on_stacks_changed`).
+    bind_lock: AsyncMutex<()>,
 }
 
 struct Registry {
@@ -703,6 +706,7 @@ impl Inner {
 
     async fn bind(self: &Arc<Self>, bind: &[BindAddr]) {
         let bind = StackBindAddrs::from(bind);
+        let _bind_guard = self.bind_lock.lock().await;
 
         // TODO: Would be preferable to only rebind those stacks that actually need rebinding.
         //
@@ -719,6 +723,12 @@ impl Inner {
         // Gateway
         self.span.in_scope(|| self.gateway.bind(&bind));
 
+        self.on_stacks_changed().await;
+    }
+
+    /// Updates everything that depends on the gateway stacks (STUN, DHT, port forwarding, local
+    /// discovery, existing connections). Needs to be called after the stacks change.
+    async fn on_stacks_changed(self: &Arc<Self>) {
         let conn = self.gateway.connectivity();
 
         // STUN
