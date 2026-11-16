@@ -4,7 +4,7 @@ import PackageDescription
 
 let package = Package(
     name: "OuisyncLib",
-    platforms: [.macOS(.v13), .iOS(.v16)],
+    platforms: [.macOS(.v12), .iOS(.v15)],
     products: [
         .library(name: "OuisyncLib",
                  type: .static,
