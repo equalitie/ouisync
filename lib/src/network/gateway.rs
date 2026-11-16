@@ -11,6 +11,7 @@ use net::{
     SocketOptions, quic, tcp,
     unified::{Acceptor, Connection},
 };
+use portable_atomic::{AtomicU64, Ordering};
 use scoped_task::ScopedJoinHandle;
 use std::net::{IpAddr, SocketAddr};
 use thiserror::Error;
@@ -130,7 +131,7 @@ impl Gateway {
 
         let mut backoff = create_backoff();
 
-        let mut hole_punching_task = None;
+        let mut hole_punching = HolePunching::default();
         let mut prev_conn = Connectivity::Disabled;
         let mut stacks_rx = self.stacks.subscribe();
 
@@ -164,9 +165,7 @@ impl Gateway {
 
                 prev_conn = next_conn;
 
-                if hole_punching_task.is_none() {
-                    hole_punching_task = stacks.start_punching_holes(addr);
-                }
+                hole_punching.update(&stacks, addr);
 
                 stacks.connect(addr)
             };
@@ -257,6 +256,8 @@ impl ConnectError {
 }
 
 struct Stacks {
+    // Unique id of this set of stacks. Used to detect when the stacks change.
+    id: u64,
     quic_v4: Option<QuicStack>,
     quic_v6: Option<QuicStack>,
     tcp_v4: Option<TcpStack>,
@@ -264,8 +265,14 @@ struct Stacks {
 }
 
 impl Stacks {
+    fn next_id() -> u64 {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        NEXT_ID.fetch_add(1, Ordering::Relaxed)
+    }
+
     fn unbound() -> Self {
         Self {
+            id: Self::next_id(),
             quic_v4: None,
             quic_v6: None,
             tcp_v4: None,
@@ -295,6 +302,7 @@ impl Stacks {
         };
 
         Self {
+            id: Self::next_id(),
             quic_v4,
             quic_v6,
             tcp_v4,
@@ -474,6 +482,31 @@ impl Stacks {
         }
 
         closer
+    }
+}
+
+/// Hole punching task for a single peer. Restarted when the stacks change, so it doesn't keep using
+/// a replaced socket.
+#[derive(Default)]
+struct HolePunching {
+    // The task and the id of the stacks it was started with.
+    current: Option<(u64, ScopedJoinHandle<()>)>,
+}
+
+impl HolePunching {
+    fn update(&mut self, stacks: &Stacks, addr: PeerAddr) {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|(stacks_id, _)| *stacks_id == stacks.id)
+        {
+            return;
+        }
+
+        // Dropping the previous task (if any) aborts it.
+        self.current = stacks
+            .start_punching_holes(addr)
+            .map(|task| (stacks.id, task));
     }
 }
 
@@ -1016,6 +1049,40 @@ mod tests {
         time::timeout(Duration::from_secs(5), connection.closed())
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn hole_punching_restarts_when_stacks_change() {
+        let gateway = Gateway::new(mpsc::channel(1).0);
+        gateway
+            .bind(&StackBindAddrs::from(&[quic_addr(BindPort::Random)][..]))
+            .await;
+
+        // Hole punching is only done for global addresses. The task sleeps before sending anything,
+        // so no packets are actually sent during this test.
+        let peer_addr = PeerAddr::Quic((Ipv4Addr::new(1, 1, 1, 1), 1234).into());
+        let task_id = |hole_punching: &HolePunching| {
+            hole_punching
+                .current
+                .as_ref()
+                .map(|(_, task)| task.0.id())
+                .unwrap()
+        };
+
+        let mut hole_punching = HolePunching::default();
+        hole_punching.update(&gateway.stacks.borrow(), peer_addr);
+        let first_task_id = task_id(&hole_punching);
+
+        // Same stacks - not restarted.
+        hole_punching.update(&gateway.stacks.borrow(), peer_addr);
+        assert_eq!(task_id(&hole_punching), first_task_id);
+
+        // Stacks changed - restarted.
+        gateway
+            .bind(&StackBindAddrs::from(&[quic_addr(BindPort::Random)][..]))
+            .await;
+        hole_punching.update(&gateway.stacks.borrow(), peer_addr);
+        assert_ne!(task_id(&hole_punching), first_task_id);
     }
 
     #[test]
