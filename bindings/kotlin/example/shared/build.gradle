@@ -14,7 +14,7 @@ kotlin {
     android {
         namespace = 'org.equalitie.ouisync.kotlin.example.shared'
         compileSdk = 37
-        minSdk = 26
+        minSdk = 23
 
         compilerOptions {
             jvmTarget = JvmTarget.JVM_17
