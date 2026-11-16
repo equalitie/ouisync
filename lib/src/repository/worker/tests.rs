@@ -1,11 +1,10 @@
 use super::{
     super::{Credentials, RepositoryMonitor, Shared},
     prune, unlock,
-    utils::Counter,
 };
 use crate::{
-    access_control::AccessSecrets, crypto::sign, db, protocol::test_utils::Snapshot,
-    store::SnapshotWriter, version_vector::VersionVector,
+    access_control::AccessSecrets, crypto::sign, db, event::Payload,
+    protocol::test_utils::Snapshot, store::SnapshotWriter, version_vector::VersionVector,
 };
 use assert_matches::assert_matches;
 use futures_util::TryStreamExt;
@@ -123,9 +122,7 @@ async fn prune_sanity_check() {
 
     // Prune
     let (unlock_tx, _unlock_rx) = unlock::channel();
-    prune::run(&shared, &unlock_tx, &Counter::new())
-        .await
-        .unwrap();
+    prune::run(&shared, &unlock_tx).await.unwrap();
 
     // Verify only the latest snapshots of A and B are present
     let mut reader = shared.vault.store().acquire_read().await.unwrap();
@@ -224,9 +221,7 @@ async fn do_not_prune_complete_snapshots_if_no_newer_snapshot_is_complete() {
 
     // Prune
     let (unlock_tx, _unlock_rx) = unlock::channel();
-    prune::run(&shared, &unlock_tx, &Counter::new())
-        .await
-        .unwrap();
+    prune::run(&shared, &unlock_tx).await.unwrap();
 
     // Verify all snapshots are still present
     assert_matches!(
@@ -293,9 +288,7 @@ async fn do_not_prune_incomplete_snapshots_if_no_newer_snapshot_is_complete() {
 
     // Prune
     let (unlock_tx, _unlock_rx) = unlock::channel();
-    prune::run(&shared, &unlock_tx, &Counter::new())
-        .await
-        .unwrap();
+    prune::run(&shared, &unlock_tx).await.unwrap();
 
     // Verify all snapshots are still present
     assert_matches!(
@@ -379,9 +372,7 @@ async fn prune_outdated_branch_with_newer_incomplete_snapshot() {
 
     // Prune
     let (unlock_tx, _unlock_rx) = unlock::channel();
-    prune::run(&shared, &unlock_tx, &Counter::new())
-        .await
-        .unwrap();
+    prune::run(&shared, &unlock_tx).await.unwrap();
 
     // Verify all remote snapshots have been removed
     assert_matches!(
@@ -466,9 +457,7 @@ async fn do_not_prune_approved_snapshot_superseded_only_by_non_approved_ones() {
 
     // Prune
     let (unlock_tx, _unlock_rx) = unlock::channel();
-    prune::run(&shared, &unlock_tx, &Counter::new())
-        .await
-        .unwrap();
+    prune::run(&shared, &unlock_tx).await.unwrap();
 
     // Verify all snapshots of A are still present
     assert_matches!(
@@ -540,9 +529,7 @@ async fn do_not_prune_local_branch_with_non_approved_snapshot() {
 
     // Prune
     let (unlock_tx, _unlock_rx) = unlock::channel();
-    prune::run(&shared, &unlock_tx, &Counter::new())
-        .await
-        .unwrap();
+    prune::run(&shared, &unlock_tx).await.unwrap();
 
     // Verify all local snapshots are still present
     assert_matches!(
@@ -558,6 +545,58 @@ async fn do_not_prune_local_branch_with_non_approved_snapshot() {
             .as_deref(),
         Ok([_, _])
     );
+}
+
+// Removing an outdated branch emits `BranchRemoved` (which, among other things, restarts the scan
+// job, which might otherwise fail due to the branch being removed while being scanned).
+#[tokio::test]
+async fn prune_outdated_branch_emits_branch_removed_event() {
+    let mut rng: StdRng = rand::make_rng();
+    let (_base_dir, shared) = setup(&mut rng).await;
+    let secrets = shared
+        .credentials
+        .read()
+        .unwrap()
+        .secrets
+        .clone()
+        .into_write_secrets()
+        .unwrap();
+
+    let local_id = shared.credentials.read().unwrap().writer_id;
+    let remote_id = sign::PublicKey::generate(&mut rng);
+
+    // Remote: complete snapshot
+    let remote_vv = VersionVector::first(remote_id);
+    SnapshotWriter::begin(shared.vault.store(), &Snapshot::generate(&mut rng, 2))
+        .await
+        .save_nodes(&secrets.write_keys, remote_id, remote_vv.clone())
+        .await
+        .commit()
+        .await;
+
+    // Local: complete snapshot, newer than the remote one
+    let local_vv = remote_vv.incremented(local_id);
+    SnapshotWriter::begin(shared.vault.store(), &Snapshot::generate(&mut rng, 2))
+        .await
+        .save_nodes(&secrets.write_keys, local_id, local_vv)
+        .await
+        .commit()
+        .await;
+
+    let mut event_rx = shared.vault.event_tx.subscribe();
+
+    // Prune
+    let (unlock_tx, _unlock_rx) = unlock::channel();
+    prune::run(&shared, &unlock_tx).await.unwrap();
+
+    let mut removed = Vec::new();
+    while let Ok(event) = event_rx.try_recv() {
+        if let Payload::BranchRemoved(branch_id) = event.payload {
+            removed.push(branch_id);
+        }
+    }
+
+    assert_eq!(removed, [remote_id]);
 }
 
 async fn setup(rng: &mut StdRng) -> (TempDir, Shared) {

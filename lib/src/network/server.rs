@@ -249,7 +249,9 @@ impl Inner {
                 self.handle_block_received_event(block_id).await;
                 Ok(())
             }
-            Payload::SnapshotRejected(_) | Payload::MaintenanceCompleted => Ok(()),
+            Payload::SnapshotRejected(_)
+            | Payload::BranchRemoved(_)
+            | Payload::MaintenanceCompleted => Ok(()),
         }
     }
 

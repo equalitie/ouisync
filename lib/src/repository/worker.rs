@@ -1,4 +1,4 @@
-use self::utils::{Command, Counter, unlock};
+use self::utils::{Command, unlock};
 use super::Shared;
 use crate::{
     blob::{BlobId, BlockIds},
@@ -24,7 +24,6 @@ mod tests;
 /// - find missing blocks
 pub(super) async fn run(shared: Arc<Shared>) {
     let event_scope = EventScope::new();
-    let prune_counter = Counter::new();
 
     let local_branch = shared
         .local_branch()
@@ -55,7 +54,10 @@ pub(super) async fn run(shared: Arc<Shared>) {
                     })
                     | Err(Lagged) => Some(Command::Wait),
                     Ok(Event {
-                        payload: Payload::SnapshotRejected(_) | Payload::MaintenanceCompleted,
+                        payload:
+                            Payload::SnapshotRejected(_)
+                            | Payload::BranchRemoved(_)
+                            | Payload::MaintenanceCompleted,
                         ..
                     }) => None,
                 })
@@ -73,7 +75,7 @@ pub(super) async fn run(shared: Arc<Shared>) {
         let commands = stream::select(events, unlocks);
 
         utils::run(
-            || maintain(&shared, local_branch.as_ref(), &unlock_tx, &prune_counter),
+            || maintain(&shared, local_branch.as_ref(), &unlock_tx),
             commands,
         )
         .await;
@@ -81,8 +83,9 @@ pub(super) async fn run(shared: Arc<Shared>) {
 
     // Scan
     let scan = async {
-        // - On `SnapshotApproved` from outside of this scope restart the current job to avoid
-        //   unnecessary traversal of potentially outdated branches.
+        // - On `SnapshotApproved` from outside of this scope or on `BranchRemoved` restart the
+        //   current job to avoid unnecessary traversal of potentially outdated or removed
+        //   branches.
         // - On `SnapshotApproved` from this scope, let the current job run to completion and then
         //   restart it. This is because such event can only come from `merge` which does not
         //   change the set of missing and required blocks.
@@ -96,6 +99,10 @@ pub(super) async fn run(shared: Arc<Shared>) {
                         scope,
                     }) if scope != event_scope => Some(Command::Interrupt),
                     Ok(Event {
+                        payload: Payload::BranchRemoved(_),
+                        ..
+                    }) => Some(Command::Interrupt),
+                    Ok(Event {
                         payload: Payload::SnapshotApproved(_) | Payload::BlockReceived { .. },
                         ..
                     })
@@ -107,7 +114,7 @@ pub(super) async fn run(shared: Arc<Shared>) {
                 })
             });
 
-        utils::run(|| scan(&shared, &prune_counter), commands).await;
+        utils::run(|| scan(&shared), commands).await;
     };
 
     // Run them in parallel so missing blocks are found as soon as possible
@@ -117,12 +124,7 @@ pub(super) async fn run(shared: Arc<Shared>) {
     }
 }
 
-async fn maintain(
-    shared: &Shared,
-    local_branch: Option<&Branch>,
-    unlock_tx: &unlock::Sender,
-    prune_counter: &Counter,
-) {
+async fn maintain(shared: &Shared, local_branch: Option<&Branch>, unlock_tx: &unlock::Sender) {
     let mut status = JobStatus::Skipped;
 
     // Merge branches
@@ -141,7 +143,7 @@ async fn maintain(
         .vault
         .monitor
         .prune_job
-        .run(prune::run(shared, unlock_tx, prune_counter))
+        .run(prune::run(shared, unlock_tx))
         .await;
     status.merge(result.unwrap_or_default());
 
@@ -162,13 +164,13 @@ async fn maintain(
     }
 }
 
-async fn scan(shared: &Shared, prune_counter: &Counter) {
+async fn scan(shared: &Shared) {
     // Find missing blocks
     shared
         .vault
         .monitor
         .scan_job
-        .run(scan::run(shared, prune_counter))
+        .run(scan::run(shared))
         .await
         .ok();
 }
@@ -219,26 +221,10 @@ mod scan {
     use super::*;
     use tracing::instrument;
 
-    pub(super) async fn run(shared: &Shared, prune_counter: &Counter) -> Result<()> {
-        loop {
-            let prune_count_before = prune_counter.get();
-
-            match run_once(shared).await {
-                Ok(()) => return Ok(()),
-                // `BranchNotFound` and `LocatorNotFound` might be caused by a branch being pruned
-                // concurrently as it's being scanned. Check the prune counter to confirm the prune
-                // happened and if so, restart the scan.
-                Err(Error::Store(store::Error::BranchNotFound | store::Error::LocatorNotFound))
-                    if prune_counter.get() != prune_count_before =>
-                {
-                    continue;
-                }
-                Err(error) => return Err(error),
-            }
-        }
-    }
-
-    async fn run_once(shared: &Shared) -> Result<()> {
+    // Note: if a branch is removed concurrently with this scan, it might fail with
+    // `BranchNotFound` or `LocatorNotFound`. That's fine because the removal emits
+    // `BranchRemoved` which restarts the scan.
+    pub(super) async fn run(shared: &Shared) -> Result<()> {
         shared.vault.block_tracker.clear_required();
 
         let branches = shared.load_branches().await?;
@@ -378,11 +364,7 @@ mod prune {
     use crate::protocol::{self, NodeState};
     use futures_util::TryStreamExt;
 
-    pub(super) async fn run(
-        shared: &Shared,
-        unlock_tx: &unlock::Sender,
-        prune_counter: &Counter,
-    ) -> Result<JobStatus> {
+    pub(super) async fn run(shared: &Shared, unlock_tx: &unlock::Sender) -> Result<JobStatus> {
         let all: Vec<_> = shared
             .vault
             .store()
@@ -423,11 +405,15 @@ mod prune {
                 }
             };
 
-            prune_counter.increment();
-
             let mut tx = shared.vault.store().begin_write().await?;
             tx.remove_branch(&node).await?;
-            tx.commit().await?;
+
+            // Using `commit_and_then` to make sure the event is sent even if this task is cancelled
+            // right after the commit.
+            let event_tx = shared.vault.event_tx.clone();
+            let branch_id = node.proof.writer_id;
+            tx.commit_and_then(move || event_tx.send(Payload::BranchRemoved(branch_id)))
+                .await?;
 
             tracing::trace!(
                 branch_id = ?node.proof.writer_id,
@@ -760,7 +746,6 @@ mod trash {
 
 mod utils {
     use futures_util::{Stream, StreamExt};
-    use portable_atomic::{AtomicU64, Ordering};
     use std::pin::pin;
     use tokio::select;
 
@@ -876,23 +861,6 @@ mod utils {
                     rx,
                 },
             )
-        }
-    }
-
-    #[derive(Default)]
-    pub(super) struct Counter(AtomicU64);
-
-    impl Counter {
-        pub fn new() -> Self {
-            Self::default()
-        }
-
-        pub fn get(&self) -> u64 {
-            self.0.load(Ordering::Relaxed)
-        }
-
-        pub fn increment(&self) {
-            self.0.fetch_add(1, Ordering::Relaxed);
         }
     }
 }

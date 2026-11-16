@@ -16,6 +16,8 @@ pub enum Payload {
     SnapshotRejected(PublicKey),
     /// A block with the specified id was received from a remote replica.
     BlockReceived(BlockId),
+    /// The specified branch was removed (because it became outdated).
+    BranchRemoved(PublicKey),
     /// The `maintain` worker job successfully completed. It won't perform any more work until
     /// triggered again by any of the above events.
     /// This event is useful mostly for diagnostics or testing and can be safely ignored in other
