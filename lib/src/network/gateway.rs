@@ -1,4 +1,9 @@
-use super::{ip, peer_addr::PeerAddr, seen_peers::SeenPeer};
+use super::{
+    bind_addr::{BindAddr, BindIp, BindPort},
+    ip,
+    peer_addr::PeerAddr,
+    seen_peers::SeenPeer,
+};
 use backoff::{ExponentialBackoffBuilder, backoff::Backoff};
 use futures_util::future::Either;
 use net::{
@@ -62,7 +67,7 @@ impl Gateway {
     }
 
     /// Binds the gateway to the specified addresses. Rebinds if already bound.
-    pub fn bind(&self, bind: &StackAddresses) {
+    pub fn bind(&self, bind: &StackBindAddrs) {
         let next = Stacks::bind(bind, self.incoming_tx.clone());
 
         let prev = self.stacks.send_replace(next);
@@ -263,7 +268,7 @@ impl Stacks {
         }
     }
 
-    fn bind(bind: &StackAddresses, incoming_tx: mpsc::Sender<(Connection, PeerAddr)>) -> Self {
+    fn bind(bind: &StackBindAddrs, incoming_tx: mpsc::Sender<(Connection, PeerAddr)>) -> Self {
         let quic_v4 = bind
             .quic_v4
             .and_then(|addr| QuicStack::new(addr, incoming_tx.clone()));
@@ -465,13 +470,13 @@ struct QuicStack {
 
 impl QuicStack {
     fn new(
-        bind_addr: SocketAddr,
+        bind_addr: StackBindAddr,
         incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
     ) -> Option<Self> {
         let span = tracing::info_span!("quic", addr = field::Empty);
 
         let (connector, acceptor, side_channel_maker) =
-            match quic::configure(bind_addr, SocketOptions::default().with_reuse_addr()) {
+            match quic::configure(bind_addr.socket_addr(), bind_addr.socket_options()) {
                 Ok((connector, acceptor, side_channel_maker)) => {
                     span.record(
                         "addr",
@@ -484,7 +489,8 @@ impl QuicStack {
                 Err(error) => {
                     tracing::warn!(
                         parent: &span,
-                        bind_addr = %PeerAddr::Quic(bind_addr),
+                        bind_addr = %PeerAddr::Quic(bind_addr.socket_addr()),
+                        bind_port = ?bind_addr.port,
                         ?error,
                         "Failed to configure stack"
                     );
@@ -523,32 +529,37 @@ struct TcpStack {
 
 impl TcpStack {
     fn new(
-        bind_addr: SocketAddr,
+        bind_addr: StackBindAddr,
         incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
     ) -> Option<Self> {
         let span = tracing::info_span!("tcp", addr = field::Empty);
 
-        let (connector, acceptor) =
-            match tcp::configure(bind_addr, SocketOptions::default().with_reuse_addr()) {
-                Ok((connector, acceptor)) => {
-                    span.record(
-                        "addr",
-                        field::display(PeerAddr::Tcp(*acceptor.local_addr())),
-                    );
-                    tracing::info!(parent: &span, "Stack configured");
+        let (connector, acceptor) = match tcp::configure(
+            bind_addr.socket_addr(),
+            // Allows binding to the same port again while the previous socket's connections
+            // are in `TIME_WAIT`.
+            bind_addr.socket_options().with_reuse_addr(),
+        ) {
+            Ok((connector, acceptor)) => {
+                span.record(
+                    "addr",
+                    field::display(PeerAddr::Tcp(*acceptor.local_addr())),
+                );
+                tracing::info!(parent: &span, "Stack configured");
 
-                    (connector, acceptor)
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        parent: &span,
-                        bind_addr = %PeerAddr::Tcp(bind_addr),
-                        ?error,
-                        "Failed to configure stack",
-                    );
-                    return None;
-                }
-            };
+                (connector, acceptor)
+            }
+            Err(error) => {
+                tracing::warn!(
+                    parent: &span,
+                    bind_addr = %PeerAddr::Tcp(bind_addr.socket_addr()),
+                    bind_port = ?bind_addr.port,
+                    ?error,
+                    "Failed to configure stack",
+                );
+                return None;
+            }
+        };
 
         let listener_local_addr = *acceptor.local_addr();
         let listener_task =
@@ -608,11 +619,13 @@ pub(super) struct StackAddresses {
 }
 
 impl StackAddresses {
-    pub(super) fn any_stack_needs_rebind(&self, new_stack_addresses: &StackAddresses) -> bool {
-        needs_rebind(&self.quic_v4, &new_stack_addresses.quic_v4)
-            || needs_rebind(&self.quic_v6, &new_stack_addresses.quic_v6)
-            || needs_rebind(&self.tcp_v4, &new_stack_addresses.tcp_v4)
-            || needs_rebind(&self.tcp_v6, &new_stack_addresses.tcp_v6)
+    pub(super) fn any_stack_needs_rebind(&self, bind: &StackBindAddrs) -> bool {
+        let required = |addr: &Option<StackBindAddr>| addr.map(|addr| addr.required_socket_addr());
+
+        needs_rebind(&self.quic_v4, &required(&bind.quic_v4))
+            || needs_rebind(&self.quic_v6, &required(&bind.quic_v6))
+            || needs_rebind(&self.tcp_v4, &required(&bind.tcp_v4))
+            || needs_rebind(&self.tcp_v6, &required(&bind.tcp_v6))
     }
 
     fn is_empty(&self) -> bool {
@@ -671,31 +684,73 @@ fn needs_rebind(old_addr: &Option<SocketAddr>, new_addr: &Option<SocketAddr>) ->
     }
 }
 
-impl From<&[PeerAddr]> for StackAddresses {
-    fn from(addrs: &[PeerAddr]) -> Self {
-        let quic_v4 = addrs.iter().find_map(|addr| match addr {
-            PeerAddr::Quic(addr @ SocketAddr::V4(_)) => Some(*addr),
-            _ => None,
-        });
-        let quic_v6 = addrs.iter().find_map(|addr| match addr {
-            PeerAddr::Quic(addr @ SocketAddr::V6(_)) => Some(*addr),
-            _ => None,
-        });
-        let tcp_v4 = addrs.iter().find_map(|addr| match addr {
-            PeerAddr::Tcp(addr @ SocketAddr::V4(_)) => Some(*addr),
-            _ => None,
-        });
-        let tcp_v6 = addrs.iter().find_map(|addr| match addr {
-            PeerAddr::Tcp(addr @ SocketAddr::V6(_)) => Some(*addr),
-            _ => None,
-        });
+/// Addresses to bind the stacks to.
+#[derive(Debug)]
+pub(super) struct StackBindAddrs {
+    quic_v4: Option<StackBindAddr>,
+    quic_v6: Option<StackBindAddr>,
+    tcp_v4: Option<StackBindAddr>,
+    tcp_v6: Option<StackBindAddr>,
+}
 
-        StackAddresses {
-            quic_v4,
-            quic_v6,
-            tcp_v4,
-            tcp_v6,
+impl From<&[BindAddr]> for StackBindAddrs {
+    fn from(addrs: &[BindAddr]) -> Self {
+        let find = |is_quic: bool, is_ipv4: bool| {
+            addrs.iter().find_map(|addr| {
+                let (ip, quic) = match addr.ip {
+                    BindIp::Quic(ip) => (ip, true),
+                    BindIp::Tcp(ip) => (ip, false),
+                };
+
+                (quic == is_quic && ip.is_ipv4() == is_ipv4).then_some(StackBindAddr {
+                    ip,
+                    port: addr.port,
+                })
+            })
+        };
+
+        Self {
+            quic_v4: find(true, true),
+            quic_v6: find(true, false),
+            tcp_v4: find(false, true),
+            tcp_v6: find(false, false),
         }
+    }
+}
+
+/// Address to bind a single stack to.
+#[derive(Clone, Copy, Debug)]
+struct StackBindAddr {
+    ip: IpAddr,
+    port: BindPort,
+}
+
+impl StackBindAddr {
+    /// Address to bind the socket to.
+    fn socket_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.ip, self.port.get())
+    }
+
+    fn socket_options(&self) -> SocketOptions {
+        let options = SocketOptions::default();
+
+        match self.port {
+            BindPort::Strict(_) => options.with_strict_port(),
+            BindPort::Preferred(_) | BindPort::Random => options,
+        }
+    }
+
+    /// Address an already bound stack needs to have for it to not need rebinding. Port `0` means
+    /// any port.
+    fn required_socket_addr(&self) -> SocketAddr {
+        let port = match self.port {
+            BindPort::Strict(port) => port.get(),
+            // Rebinding just to try the preferred port again isn't worth interrupting the
+            // existing connections.
+            BindPort::Preferred(_) | BindPort::Random => 0,
+        };
+
+        SocketAddr::new(self.ip, port)
     }
 }
 
@@ -737,5 +792,99 @@ impl Connectivity {
             | (Self::Full, Self::LocalOnly) => true,
             (_, _) => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{net::Ipv4Addr, num::NonZeroU16};
+
+    fn quic_addr(port: BindPort) -> BindAddr {
+        BindAddr {
+            ip: BindIp::Quic(Ipv4Addr::LOCALHOST.into()),
+            port,
+        }
+    }
+
+    fn port(port: u16) -> NonZeroU16 {
+        NonZeroU16::new(port).unwrap()
+    }
+
+    fn bound_quic_port(gateway: &Gateway) -> Option<u16> {
+        gateway
+            .listener_local_addrs()
+            .into_iter()
+            .find(|addr| addr.is_quic())
+            .map(|addr| addr.port())
+    }
+
+    #[tokio::test]
+    async fn bind_strict_port() {
+        let taken = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let taken_port = taken.local_addr().unwrap().port();
+
+        let gateway = Gateway::new(mpsc::channel(1).0);
+
+        // Port taken
+        gateway.bind(&StackBindAddrs::from(
+            &[quic_addr(BindPort::Strict(port(taken_port)))][..],
+        ));
+        assert_eq!(bound_quic_port(&gateway), None);
+
+        // Port free
+        drop(taken);
+        gateway.bind(&StackBindAddrs::from(
+            &[quic_addr(BindPort::Strict(port(taken_port)))][..],
+        ));
+        assert_eq!(bound_quic_port(&gateway), Some(taken_port));
+    }
+
+    #[tokio::test]
+    async fn bind_preferred_port() {
+        let taken = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let taken_port = taken.local_addr().unwrap().port();
+
+        let gateway = Gateway::new(mpsc::channel(1).0);
+
+        // Port taken - falls back to a random one
+        gateway.bind(&StackBindAddrs::from(
+            &[quic_addr(BindPort::Preferred(port(taken_port)))][..],
+        ));
+        let bound_port = bound_quic_port(&gateway).unwrap();
+        assert_ne!(bound_port, taken_port);
+
+        // Port free
+        drop(taken);
+        gateway.bind(&StackBindAddrs::from(
+            &[quic_addr(BindPort::Preferred(port(taken_port)))][..],
+        ));
+        assert_eq!(bound_quic_port(&gateway), Some(taken_port));
+    }
+
+    #[test]
+    fn needs_rebind_by_bind_port() {
+        let bound = StackAddresses {
+            quic_v4: Some((Ipv4Addr::UNSPECIFIED, 5000).into()),
+            quic_v6: None,
+            tcp_v4: None,
+            tcp_v6: None,
+        };
+
+        let check = |port| {
+            bound.any_stack_needs_rebind(&StackBindAddrs::from(
+                &[BindAddr {
+                    ip: BindIp::Quic(Ipv4Addr::UNSPECIFIED.into()),
+                    port,
+                }][..],
+            ))
+        };
+
+        assert!(!check(BindPort::Random));
+        assert!(!check(BindPort::Preferred(port(5000))));
+        // Not worth rebinding just to try a different preferred port.
+        assert!(!check(BindPort::Preferred(port(6000))));
+        assert!(!check(BindPort::Strict(port(5000))));
+        assert!(check(BindPort::Strict(port(6000))));
     }
 }

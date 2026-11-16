@@ -1,6 +1,6 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, num::NonZeroU16};
 
-use ouisync::{Network, PeerAddr};
+use ouisync::{BindAddr, BindPort, Network, PeerAddr};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -34,7 +34,7 @@ pub(crate) async fn bind_with_reuse_ports(
     addrs: &[PeerAddr],
 ) {
     let mut last_used_ports = LastUsedPorts::load(config).await;
-    let addrs: Vec<_> = addrs
+    let addrs: Vec<BindAddr> = addrs
         .iter()
         .map(|addr| last_used_ports.apply(*addr))
         .collect();
@@ -93,21 +93,25 @@ impl LastUsedPorts {
         }
     }
 
-    /// If `addr`'s port is not zero, replace it with the corresponding last used port.
-    fn apply(&self, mut addr: PeerAddr) -> PeerAddr {
-        if addr.port() != 0 {
-            return addr;
+    /// Converts `addr` to `BindAddr`. If `addr`'s port is zero (random), prefers the
+    /// corresponding last used port (if any). Otherwise binds strictly to `addr`'s port.
+    fn apply(&self, addr: PeerAddr) -> BindAddr {
+        let mut bind_addr = BindAddr::from(addr);
+
+        if bind_addr.port == BindPort::Random {
+            let last_used_port = match addr {
+                PeerAddr::Quic(SocketAddr::V4(_)) => self.quic_v4,
+                PeerAddr::Quic(SocketAddr::V6(_)) => self.quic_v6,
+                PeerAddr::Tcp(SocketAddr::V4(_)) => self.tcp_v4,
+                PeerAddr::Tcp(SocketAddr::V6(_)) => self.tcp_v6,
+            };
+
+            if let Some(port) = NonZeroU16::new(last_used_port) {
+                bind_addr.port = BindPort::Preferred(port);
+            }
         }
 
-        let new_port = match addr {
-            PeerAddr::Quic(SocketAddr::V4(_)) => self.quic_v4,
-            PeerAddr::Quic(SocketAddr::V6(_)) => self.quic_v6,
-            PeerAddr::Tcp(SocketAddr::V4(_)) => self.tcp_v4,
-            PeerAddr::Tcp(SocketAddr::V6(_)) => self.tcp_v6,
-        };
-
-        addr.set_port(new_port);
-        addr
+        bind_addr
     }
 
     fn extract(&mut self, addrs: &[PeerAddr]) {
@@ -150,5 +154,47 @@ impl LastUsedPorts {
         }) {
             self.tcp_v6 = port;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn last_used_ports_apply() {
+        let ports = LastUsedPorts {
+            quic_v4: 1000,
+            quic_v6: 0,
+            tcp_v4: 2000,
+            tcp_v6: 0,
+        };
+
+        let port = |port| NonZeroU16::new(port).unwrap();
+
+        // Random port requested and last used port known => prefer the last used port.
+        assert_eq!(
+            ports
+                .apply(PeerAddr::Quic((Ipv4Addr::UNSPECIFIED, 0).into()))
+                .port,
+            BindPort::Preferred(port(1000))
+        );
+
+        // Random port requested and no last used port => random.
+        assert_eq!(
+            ports
+                .apply(PeerAddr::Quic((Ipv6Addr::UNSPECIFIED, 0).into()))
+                .port,
+            BindPort::Random
+        );
+
+        // Specific port requested => strict, regardless of the last used port.
+        assert_eq!(
+            ports
+                .apply(PeerAddr::Tcp((Ipv4Addr::UNSPECIFIED, 3000).into()))
+                .port,
+            BindPort::Strict(port(3000))
+        );
     }
 }

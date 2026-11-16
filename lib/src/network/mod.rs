@@ -1,4 +1,5 @@
 mod addr_filter;
+mod bind_addr;
 mod choke;
 mod client;
 mod connection;
@@ -33,6 +34,7 @@ mod upnp;
 
 pub use self::{
     addr_filter::AddrFilter,
+    bind_addr::{BindAddr, BindIp, BindPort},
     connection::PeerInfoCollector,
     dht::{DEFAULT_DHT_ROUTERS, DhtContactsStoreTrait, DhtLookupStream, DhtPin},
     event::{NetworkEvent, NetworkEventReceiver, NetworkEventStream},
@@ -56,7 +58,7 @@ use self::{
     constants::REQUEST_TIMEOUT,
     dht::DhtDiscovery,
     event::ProtocolVersions,
-    gateway::{Connectivity, Gateway, StackAddresses},
+    gateway::{Connectivity, Gateway, StackBindAddrs},
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     peer_addr::PeerPort,
@@ -234,10 +236,14 @@ impl Network {
     /// Binds the network to the specified addresses.
     /// Rebinds if already bound. Unbinds and disables the network if `addrs` is empty.
     ///
+    /// The addresses can be either [BindAddr] or [PeerAddr]. For [PeerAddr], port `0` means
+    /// [BindPort::Random] and any other port [BindPort::Strict].
+    ///
     /// NOTE: currently at most one address per protocol (QUIC/TCP) and family (IPv4/IPv6) is used
     /// and the rest are ignored, but this might change in the future.
-    pub async fn bind(&self, addrs: &[PeerAddr]) {
-        self.inner.bind(addrs).await
+    pub async fn bind(&self, addrs: &[impl Into<BindAddr> + Copy]) {
+        let addrs: Vec<BindAddr> = addrs.iter().copied().map(Into::into).collect();
+        self.inner.bind(&addrs).await
     }
 
     pub fn listener_local_addrs(&self) -> Vec<PeerAddr> {
@@ -695,8 +701,8 @@ impl Inner {
         self.registry.lock().unwrap().peers.is_none()
     }
 
-    async fn bind(self: &Arc<Self>, bind: &[PeerAddr]) {
-        let bind = StackAddresses::from(bind);
+    async fn bind(self: &Arc<Self>, bind: &[BindAddr]) {
+        let bind = StackBindAddrs::from(bind);
 
         // TODO: Would be preferable to only rebind those stacks that actually need rebinding.
         //
