@@ -721,7 +721,7 @@ impl Inner {
         }
 
         // Gateway
-        self.span.in_scope(|| self.gateway.bind(&bind));
+        self.gateway.bind(&bind).instrument(self.span.clone()).await;
 
         self.on_stacks_changed().await;
     }

@@ -5,7 +5,8 @@ use super::{
     seen_peers::SeenPeer,
 };
 use backoff::{ExponentialBackoffBuilder, backoff::Backoff};
-use futures_util::future::Either;
+use deadlock::BlockingMutex;
+use futures_util::future::{self, Either};
 use net::{
     SocketOptions, quic, tcp,
     unified::{Acceptor, Connection},
@@ -67,7 +68,13 @@ impl Gateway {
     }
 
     /// Binds the gateway to the specified addresses. Rebinds if already bound.
-    pub fn bind(&self, bind: &StackBindAddrs) {
+    pub async fn bind(&self, bind: &StackBindAddrs) {
+        // Close the current stacks before binding the new ones, so the new ones can be bound to the
+        // same ports. The closed stacks stay in place until replaced below, so that the observers
+        // don't see a temporary unbound state.
+        let closer = self.stacks.borrow().closer();
+        closer.close().await;
+
         let next = Stacks::bind(bind, self.incoming_tx.clone());
 
         let prev = self.stacks.send_replace(next);
@@ -99,8 +106,6 @@ impl Gateway {
                 next_conn
             );
         }
-
-        prev.close();
     }
 
     pub fn connectivity(&self) -> Connectivity {
@@ -450,13 +455,57 @@ impl Stacks {
         }
     }
 
-    fn close(&self) {
-        if let Some(stack) = &self.quic_v4 {
-            stack.close();
+    /// Returns a `StacksCloser` which closes all the stacks, releasing their ports.
+    fn closer(&self) -> StacksCloser {
+        let mut closer = StacksCloser {
+            quic_connectors: Vec::new(),
+            tcp_listener_tasks: Vec::new(),
+        };
+
+        for stack in [&self.quic_v4, &self.quic_v6].into_iter().flatten() {
+            stack.listener_task.abort();
+            closer.quic_connectors.push(stack.connector.clone());
         }
 
-        if let Some(stack) = &self.quic_v6 {
-            stack.close();
+        for stack in [&self.tcp_v4, &self.tcp_v6].into_iter().flatten() {
+            closer
+                .tcp_listener_tasks
+                .extend(stack.listener_task.lock().unwrap().take());
+        }
+
+        closer
+    }
+}
+
+/// How long to wait for the peers to be notified about closed QUIC connections when closing a QUIC
+/// stack.
+const QUIC_GRACEFUL_CLOSE_TIMEOUT: Duration = Duration::from_millis(500);
+
+struct StacksCloser {
+    quic_connectors: Vec<quic::Connector>,
+    tcp_listener_tasks: Vec<ScopedJoinHandle<()>>,
+}
+
+impl StacksCloser {
+    async fn close(self) {
+        future::join_all(self.quic_connectors.iter().map(|connector| async move {
+            // A failed socket can't notify the peers anyway.
+            if !connector.has_failed() {
+                connector.graceful_close();
+                time::timeout(QUIC_GRACEFUL_CLOSE_TIMEOUT, connector.wait_idle())
+                    .await
+                    .ok();
+            }
+
+            connector.hard_close();
+        }))
+        .await;
+
+        // The TCP listener is owned by the listener task, so wait for the task to be dropped to
+        // make sure the listener is closed.
+        for task in self.tcp_listener_tasks {
+            task.abort();
+            task.await.ok();
         }
     }
 }
@@ -511,11 +560,6 @@ impl QuicStack {
         })
     }
 
-    fn close(&self) {
-        self.listener_task.abort();
-        self.connector.graceful_close();
-    }
-
     fn has_failed(&self) -> bool {
         self.connector.has_failed()
     }
@@ -523,7 +567,8 @@ impl QuicStack {
 
 struct TcpStack {
     listener_local_addr: SocketAddr,
-    _listener_task: ScopedJoinHandle<()>,
+    // In `Option` so it can be taken out (see `Stacks::closer`).
+    listener_task: BlockingMutex<Option<ScopedJoinHandle<()>>>,
     connector: tcp::Connector,
 }
 
@@ -567,7 +612,7 @@ impl TcpStack {
 
         Some(Self {
             listener_local_addr,
-            _listener_task: listener_task,
+            listener_task: BlockingMutex::new(Some(listener_task)),
             connector,
         })
     }
@@ -807,6 +852,13 @@ mod tests {
         }
     }
 
+    fn tcp_addr(port: BindPort) -> BindAddr {
+        BindAddr {
+            ip: BindIp::Tcp(Ipv4Addr::LOCALHOST.into()),
+            port,
+        }
+    }
+
     fn port(port: u16) -> NonZeroU16 {
         NonZeroU16::new(port).unwrap()
     }
@@ -819,6 +871,14 @@ mod tests {
             .map(|addr| addr.port())
     }
 
+    fn bound_tcp_port(gateway: &Gateway) -> Option<u16> {
+        gateway
+            .listener_local_addrs()
+            .into_iter()
+            .find(|addr| addr.is_tcp())
+            .map(|addr| addr.port())
+    }
+
     #[tokio::test]
     async fn bind_strict_port() {
         let taken = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -827,16 +887,20 @@ mod tests {
         let gateway = Gateway::new(mpsc::channel(1).0);
 
         // Port taken
-        gateway.bind(&StackBindAddrs::from(
-            &[quic_addr(BindPort::Strict(port(taken_port)))][..],
-        ));
+        gateway
+            .bind(&StackBindAddrs::from(
+                &[quic_addr(BindPort::Strict(port(taken_port)))][..],
+            ))
+            .await;
         assert_eq!(bound_quic_port(&gateway), None);
 
         // Port free
         drop(taken);
-        gateway.bind(&StackBindAddrs::from(
-            &[quic_addr(BindPort::Strict(port(taken_port)))][..],
-        ));
+        gateway
+            .bind(&StackBindAddrs::from(
+                &[quic_addr(BindPort::Strict(port(taken_port)))][..],
+            ))
+            .await;
         assert_eq!(bound_quic_port(&gateway), Some(taken_port));
     }
 
@@ -848,18 +912,110 @@ mod tests {
         let gateway = Gateway::new(mpsc::channel(1).0);
 
         // Port taken - falls back to a random one
-        gateway.bind(&StackBindAddrs::from(
-            &[quic_addr(BindPort::Preferred(port(taken_port)))][..],
-        ));
+        gateway
+            .bind(&StackBindAddrs::from(
+                &[quic_addr(BindPort::Preferred(port(taken_port)))][..],
+            ))
+            .await;
         let bound_port = bound_quic_port(&gateway).unwrap();
         assert_ne!(bound_port, taken_port);
 
         // Port free
         drop(taken);
-        gateway.bind(&StackBindAddrs::from(
-            &[quic_addr(BindPort::Preferred(port(taken_port)))][..],
-        ));
+        gateway
+            .bind(&StackBindAddrs::from(
+                &[quic_addr(BindPort::Preferred(port(taken_port)))][..],
+            ))
+            .await;
         assert_eq!(bound_quic_port(&gateway), Some(taken_port));
+    }
+
+    #[tokio::test]
+    async fn rebind_to_same_strict_ports() {
+        let gateway = Gateway::new(mpsc::channel(1).0);
+
+        gateway
+            .bind(&StackBindAddrs::from(
+                &[quic_addr(BindPort::Random), tcp_addr(BindPort::Random)][..],
+            ))
+            .await;
+        let quic_port = bound_quic_port(&gateway).unwrap();
+        let tcp_port = bound_tcp_port(&gateway).unwrap();
+
+        // The old stacks are closed before binding the new ones, so the ports are free.
+        gateway
+            .bind(&StackBindAddrs::from(
+                &[
+                    quic_addr(BindPort::Strict(port(quic_port))),
+                    tcp_addr(BindPort::Strict(port(tcp_port))),
+                ][..],
+            ))
+            .await;
+        assert_eq!(bound_quic_port(&gateway), Some(quic_port));
+        assert_eq!(bound_tcp_port(&gateway), Some(tcp_port));
+    }
+
+    #[tokio::test]
+    async fn rebind_failed_quic_stack_to_same_port() {
+        let gateway = Gateway::new(mpsc::channel(1).0);
+
+        gateway
+            .bind(&StackBindAddrs::from(&[quic_addr(BindPort::Random)][..]))
+            .await;
+        let quic_port = bound_quic_port(&gateway).unwrap();
+
+        // A failed socket keeps its port until closed.
+        let connector = gateway
+            .stacks
+            .borrow()
+            .quic_v4
+            .as_ref()
+            .unwrap()
+            .connector
+            .clone();
+        let on_failure = connector.on_failure();
+        connector.kill();
+        time::timeout(Duration::from_secs(5), on_failure)
+            .await
+            .unwrap();
+
+        gateway
+            .bind(&StackBindAddrs::from(
+                &[quic_addr(BindPort::Strict(port(quic_port)))][..],
+            ))
+            .await;
+        assert_eq!(bound_quic_port(&gateway), Some(quic_port));
+    }
+
+    #[tokio::test]
+    async fn rebind_notifies_quic_peers() {
+        let (incoming_tx, mut incoming_rx) = mpsc::channel(1);
+        let gateway = Gateway::new(incoming_tx);
+
+        gateway
+            .bind(&StackBindAddrs::from(&[quic_addr(BindPort::Random)][..]))
+            .await;
+        let quic_port = bound_quic_port(&gateway).unwrap();
+
+        let (client, _client_acceptor, _) =
+            quic::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default()).unwrap();
+        let connection = client
+            .connect((Ipv4Addr::LOCALHOST, quic_port).into())
+            .await
+            .unwrap();
+        let _accepted = incoming_rx.recv().await.unwrap();
+
+        gateway
+            .bind(&StackBindAddrs::from(
+                &[quic_addr(BindPort::Strict(port(quic_port)))][..],
+            ))
+            .await;
+
+        // The peer is notified about the closed connection instead of having to wait for the idle
+        // timeout (20s).
+        time::timeout(Duration::from_secs(5), connection.closed())
+            .await
+            .unwrap();
     }
 
     #[test]

@@ -36,6 +36,7 @@ const DISABLE_SEGMENTATION_OFFLOAD: bool = true;
 const DISABLE_SEGMENTATION_OFFLOAD: bool = false;
 
 //------------------------------------------------------------------------------
+#[derive(Clone)]
 pub struct Connector {
     endpoint: quinn::Endpoint,
     socket: Arc<CustomUdpSocket>,
