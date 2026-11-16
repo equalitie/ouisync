@@ -784,6 +784,89 @@ async fn in_flight_with_children() {
     worker.step();
 }
 
+// A request can have multiple children that request the same node but with different variants
+// (e.g., when the node's block presence changed between two responses to the request). When a
+// client which tracks one such child gets the parent request again, updating the other child
+// replaces the tracked one, which removes it if the client was the only one tracking it. The
+// removed child must then be skipped instead of updated.
+//
+//         p
+//       /   \
+//     x0     x1       (same node, different variants)
+//     |      |
+//     b      a        (`x0` tracked by `b`, `x1` tracked by `a`)
+//
+// The child would be removed only when the other variant is updated first and the order in which
+// the children are visited is not deterministic, so use multiple such pairs.
+#[tokio::test]
+async fn update_request_with_children_of_different_variants() {
+    crate::test_utils::init_log();
+
+    let mut rng = StdRng::seed_from_u64(0);
+    let (tracker, mut worker) = build(TrafficMonitor::new(&NoopRecorder));
+
+    let variant_0 = RequestVariant::new(MultiBlockPresence::None, MultiBlockPresence::None);
+    let variant_1 = RequestVariant::new(MultiBlockPresence::None, MultiBlockPresence::Full);
+
+    let preceding_request_key = MessageKey::ChildNodes(rng.random());
+    let parent_request = Request::ChildNodes(rng.random(), DebugRequest::start());
+    let parent_request_key = MessageKey::from(&parent_request);
+
+    let (children_0, children_1): (Vec<_>, Vec<_>) = (0..16)
+        .map(|_| {
+            let request = Request::ChildNodes(rng.random(), DebugRequest::start());
+
+            (
+                CandidateRequest::new(request.clone()).variant(variant_0),
+                CandidateRequest::new(request).variant(variant_1),
+            )
+        })
+        .unzip();
+
+    let (client_a, mut request_rx_a) = tracker.new_client();
+    let (client_b, mut request_rx_b) = tracker.new_client();
+    client_a.unchoke();
+    client_b.unchoke();
+
+    // `a` requests the parent and receives a response with the first variant of the children.
+    client_a.initial(CandidateRequest::new(parent_request.clone()));
+    drain(&mut worker, &mut request_rx_a);
+    client_a.receive(parent_request_key);
+    client_a.success(parent_request_key, children_0.clone());
+    worker.step();
+
+    // `b` starts tracking the first variant of the children too.
+    for child in &children_0 {
+        client_b.initial(child.clone());
+    }
+    drain(&mut worker, &mut request_rx_b);
+
+    // `a` receives another response to the parent, this time with the second variant of the
+    // children. This makes `b` the only one tracking the first variant.
+    client_a.receive(parent_request_key);
+    client_a.success(parent_request_key, children_1);
+    drain(&mut worker, &mut request_rx_a);
+
+    // `b` gets the parent as a followup of some other request.
+    client_b.receive(preceding_request_key);
+    client_b.success(
+        preceding_request_key,
+        vec![CandidateRequest::new(parent_request)],
+    );
+    worker.step();
+
+    fn drain(worker: &mut Worker, request_rx: &mut RequestTrackerReceiver) {
+        loop {
+            worker.step();
+
+            match request_rx.try_recv() {
+                Ok(_) | Err(TryRecvError::InProgress) => continue,
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            }
+        }
+    }
+}
+
 // TODO: test idle after failures
 
 /// Generate `count + 1` copies of the same snapshot. The first one will have all the blocks
