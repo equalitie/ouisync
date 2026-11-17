@@ -108,6 +108,10 @@ opt-level = 3
 # the upstream updates.
 xpc-connection     = { git = "https://github.com/madadam/xpc-connection-rs" }
 xpc-connection-sys = { git = "https://github.com/madadam/xpc-connection-rs" }
+# Upstream calls `getifaddrs` / `freeifaddrs` which are only available on Android API level 24+.
+# This version looks them up at runtime and falls back to a netlink-based implementation when they
+# are not available.
+if-addrs           = { git = "https://github.com/madadam/if-addrs", branch = "old-android" }
 
 [workspace.lints.clippy]
 large_enum_variant = "allow"
