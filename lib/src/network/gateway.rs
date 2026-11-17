@@ -148,7 +148,7 @@ impl Gateway {
                 stacks_rx.wait_for(|stacks| stacks.allows_connection_to(&addr));
 
             // Ensure `stacks` is not borrowed across `await`.
-            let connect = {
+            let (stacks_id, connect) = {
                 let stacks = select! {
                     result = wait_for_connectivity => {
                         // unwrap is OK here because `self.stacks` still lives.
@@ -167,7 +167,7 @@ impl Gateway {
 
                 hole_punching.update(&stacks, addr);
 
-                stacks.connect(addr)
+                (stacks.id, stacks.connect(addr))
             };
 
             match connect.await {
@@ -190,8 +190,20 @@ impl Gateway {
                 }
                 Err(error) => {
                     if error.is_localy_closed() {
-                        // Connector locally closed - no point in retrying.
-                        return None;
+                        // The connector has been closed because its stack is being replaced (see
+                        // `Gateway::bind`). Wait for the replacement and try again with it.
+                        let replaced = select! {
+                            result = stacks_rx.wait_for(|stacks| stacks.id != stacks_id) => {
+                                result.is_ok()
+                            }
+                            _ = peer.on_unseen() => false,
+                        };
+
+                        if replaced {
+                            continue;
+                        } else {
+                            return None;
+                        }
                     }
 
                     match backoff.next_backoff() {
@@ -876,6 +888,7 @@ impl Connectivity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::network::seen_peers::SeenPeers;
     use std::{net::Ipv4Addr, num::NonZeroU16};
 
     fn quic_addr(port: BindPort) -> BindAddr {
@@ -1083,6 +1096,48 @@ mod tests {
             .await;
         hole_punching.update(&gateway.stacks.borrow(), peer_addr);
         assert_ne!(task_id(&hole_punching), first_task_id);
+    }
+
+    #[tokio::test]
+    async fn connect_survives_rebind() {
+        let gateway = Gateway::new(mpsc::channel(1).0);
+        gateway
+            .bind(&StackBindAddrs::from(&[quic_addr(BindPort::Random)][..]))
+            .await;
+
+        // Reserve a port where nobody answers yet, so the first connection attempt is still in
+        // progress when the gateway gets rebound.
+        let silent = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let peer_addr = silent.local_addr().unwrap();
+
+        let seen_peers = SeenPeers::new();
+        let peer = seen_peers.insert(PeerAddr::Quic(peer_addr)).unwrap();
+
+        // Timeout for the whole thing because if the connecting side gives up, the accepting side
+        // would wait forever.
+        let (connection, _accepted) = time::timeout(Duration::from_secs(10), async {
+            tokio::join!(gateway.connect_with_retries(&peer), async {
+                time::sleep(Duration::from_millis(200)).await;
+
+                gateway
+                    .bind(&StackBindAddrs::from(&[quic_addr(BindPort::Random)][..]))
+                    .await;
+
+                // Now start answering.
+                drop(silent);
+                let (connector, acceptor, _) =
+                    quic::configure(peer_addr, SocketOptions::default().with_strict_port())
+                        .unwrap();
+                let connection = acceptor.accept().await.unwrap().await.unwrap();
+
+                // Keep everything alive until the end of the test.
+                (connector, acceptor, connection)
+            })
+        })
+        .await
+        .unwrap();
+
+        assert!(connection.is_some());
     }
 
     #[test]
