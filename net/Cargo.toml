@@ -25,10 +25,13 @@ slab               = { workspace = true }
 socket2            = "0.6.1" # To be able to setsockopts before a socket is bound
 stun_codec         = "0.3.4"
 thiserror          = "1.0.31"
-tokio              = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync"] }
+tokio              = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-util         = { workspace = true, features = ["compat"] }
 tracing            = { workspace = true }
 yamux              = "0.14.1"
+
+[target.'cfg(unix)'.dependencies]
+libc               = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys        = { version = "0.60.2", features = ["Win32_Networking_WinSock", "Win32_System_IO"] }

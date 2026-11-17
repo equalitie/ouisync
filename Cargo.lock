@@ -3038,6 +3038,7 @@ dependencies = [
  "futures-util",
  "hex_fmt",
  "itertools",
+ "libc",
  "num_enum",
  "ouisync-macros",
  "pin-project-lite",
