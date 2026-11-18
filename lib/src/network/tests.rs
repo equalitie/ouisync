@@ -700,6 +700,44 @@ mod reconnect {
         wait_until_active(&network, client_addr).await;
     }
 
+    // A failed handshake (e.g. because the peer dropped the connection) is retried instead of giving
+    // up on the peer.
+    #[tokio::test]
+    async fn outgoing_connection_is_retried_after_failed_handshake() {
+        let (_server, server_acceptor, _) =
+            quic::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default()).unwrap();
+        let server_addr = PeerAddr::Quic(*server_acceptor.local_addr());
+
+        let server_task = tokio::spawn(async move {
+            // Drop the first connection, which makes the handshake fail.
+            drop(server_acceptor.accept().await.unwrap().await.unwrap());
+
+            // Accept the second one.
+            let connection =
+                Connection::Quic(server_acceptor.accept().await.unwrap().await.unwrap());
+            perform_handshake(
+                &connection,
+                VERSION,
+                &SecretRuntimeId::random(),
+                ConnectionDirection::Incoming,
+            )
+            .await
+            .unwrap();
+
+            // Keep everything alive until the end of the test.
+            (server_acceptor, connection)
+        });
+
+        let network = Network::new();
+        network
+            .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+            .await;
+        network.add_user_provided_peer(&server_addr);
+
+        wait_until_active(&network, server_addr).await;
+        server_task.abort();
+    }
+
     async fn wait_until_active(network: &Network, addr: PeerAddr) {
         time::timeout(Duration::from_secs(10), async {
             while !network
