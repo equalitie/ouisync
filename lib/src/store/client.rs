@@ -1,7 +1,7 @@
 use tracing::instrument;
 
 use super::{
-    Error,
+    Error, block,
     block_expiration_tracker::BlockExpirationTracker,
     block_id_cache::BlockIdCache,
     block_ids, index, inner_node, leaf_node,
@@ -216,31 +216,55 @@ impl ClientWriter {
         let valid_parent_hashes =
             index::filter_existing_parents(&mut self.db, &parent_hashes).await?;
 
-        // Non-orphaned nodes
+        // Block ids referenced from the non-orphaned nodes.
+        let mut valid_block_ids = Vec::with_capacity(node_count);
+
+        for nodes in node_sets {
+            if !valid_parent_hashes.contains(&nodes.hash()) {
+                tracing::warn!("parent node not found");
+                continue;
+            }
+
+            valid_block_ids.extend(nodes.iter().map(|node| &node.block_id));
+        }
+
+        // Blocks that are already stored locally. This happens when an updated snapshot reuses
+        // unchanged blocks of a previous one (same locator, same content => same block id) and
+        // they share a leaf set with a changed block, so the leaf set gets a new parent hash and
+        // its unchanged leaves are received again. No offer is created for such blocks (they are
+        // not missing), so their new leaf nodes must be saved as present. Saving them as missing
+        // would leave them missing forever: the snapshot never becomes complete, the sync progress
+        // never reaches 100% and older snapshots are retained as fallback.
+        let stored_block_ids = block::filter_existing(&mut self.db, &valid_block_ids).await?;
+
+        // Non-orphaned nodes, with the block presence reflecting the local store.
         let mut valid_nodes = Vec::with_capacity(node_count);
-        // Block ids that are marked as present or expired in the incoming nodes.
+        // Block ids that are marked as present or expired in the incoming nodes and that are not
+        // stored locally.
         let mut present_or_expired_block_ids = Vec::with_capacity(node_count);
 
         for nodes in node_sets {
             let parent_hash = nodes.hash();
 
             if !valid_parent_hashes.contains(&parent_hash) {
-                tracing::warn!("parent node not found");
                 continue;
             }
 
-            valid_nodes.extend(nodes.iter().map(|node| (parent_hash, node.into_missing())));
-            present_or_expired_block_ids.extend(
-                nodes
-                    .iter()
-                    .filter(|node| {
-                        matches!(
-                            node.block_presence,
-                            SingleBlockPresence::Present | SingleBlockPresence::Expired
-                        )
-                    })
-                    .map(|node| &node.block_id),
-            );
+            for node in nodes.iter() {
+                if stored_block_ids.contains(&node.block_id) {
+                    valid_nodes.push((parent_hash, node.into_present()));
+                    continue;
+                }
+
+                valid_nodes.push((parent_hash, node.into_missing()));
+
+                if matches!(
+                    node.block_presence,
+                    SingleBlockPresence::Present | SingleBlockPresence::Expired
+                ) {
+                    present_or_expired_block_ids.push(node.block_id);
+                }
+            }
         }
 
         // Block ids that are present or expired remotely but missing locally.
@@ -259,6 +283,17 @@ impl ClientWriter {
 
         let affected_parent_hashes = leaf_node::save(&mut self.db, &valid_nodes).await?;
         self.summary_updates.extend(affected_parent_hashes);
+
+        // Repair leaf nodes that earlier versions saved as missing although their block is stored
+        // (see above). `set_present` only touches nodes not already marked present.
+        let stored_block_ids: Vec<_> = stored_block_ids.into_iter().collect();
+        for (block_id, updates) in leaf_node::set_present(&mut self.db, &stored_block_ids).await? {
+            for update in updates {
+                self.summary_updates.push(update.parent);
+                self.block_id_cache_updates
+                    .push((update.encoded_locator, block_id));
+            }
+        }
 
         let statuses = node_sets
             .iter()
@@ -1459,5 +1494,92 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(remote_node.summary.state, NodeState::Approved);
+    }
+
+    // Receive a complete remote snapshot, then an updated one that adds a block to the same leaf
+    // set. The unchanged leaf (same locator and block id) is received again under a new parent.
+    // Its block is already stored, so it must be saved as present and the updated snapshot must
+    // become complete once only the new block is received.
+    #[tokio::test]
+    async fn receive_updated_snapshot_reusing_stored_block() {
+        let mut rng = StdRng::seed_from_u64(0);
+        let (_base_dir, pool) = db::create_temp().await.unwrap();
+        let store = Store::new(pool);
+        let secrets = WriteSecrets::generate(&mut rng);
+        let remote_id = PublicKey::generate(&mut rng);
+
+        let (old_locator, old_block): (Hash, Block) = rng.random();
+        let snapshot_v1 = Snapshot::from_present_blocks([(old_locator, old_block.clone())]);
+        let vv1 = VersionVector::first(remote_id);
+
+        SnapshotWriter::begin(&store, &snapshot_v1)
+            .await
+            .save_nodes(&secrets.write_keys, remote_id, vv1.clone())
+            .await
+            .save_blocks()
+            .await
+            .commit()
+            .await;
+
+        // Buckets are selected by the leading locator bytes, so changing only the last byte keeps
+        // the new locator in the same leaf set as the old one.
+        let mut new_locator: [u8; Hash::SIZE] = old_locator.into();
+        new_locator[Hash::SIZE - 1] ^= 1;
+        let new_locator = Hash::from(new_locator);
+        let new_block: Block = rng.random();
+        let new_block_id = new_block.id;
+
+        let snapshot_v2 = Snapshot::from_present_blocks([
+            (old_locator, old_block.clone()),
+            (new_locator, new_block.clone()),
+        ]);
+        let (leaf_parent, _) = snapshot_v2.leaf_sets().next().unwrap();
+        assert_eq!(snapshot_v2.leaf_sets().count(), 1);
+        assert!(snapshot_v1.get_leaf_set(leaf_parent).is_none());
+
+        SnapshotWriter::begin(&store, &snapshot_v2)
+            .await
+            .save_nodes(&secrets.write_keys, remote_id, vv1.incremented(remote_id))
+            .await
+            .commit()
+            .await;
+
+        let leaf_nodes = store
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_leaf_nodes(leaf_parent)
+            .await
+            .unwrap();
+        assert_eq!(
+            leaf_nodes.get(&old_locator).unwrap().block_presence,
+            SingleBlockPresence::Present
+        );
+        assert_eq!(
+            leaf_nodes.get(&new_locator).unwrap().block_presence,
+            SingleBlockPresence::Missing
+        );
+
+        // Receive only the new block.
+        let mut writer = store.begin_client_write().await.unwrap();
+        writer.save_blocks(&[new_block]).await.unwrap();
+        writer.commit().await.unwrap();
+
+        let root_node = store
+            .acquire_read()
+            .await
+            .unwrap()
+            .load_latest_approved_root_node(&remote_id, RootNodeFilter::Any)
+            .await
+            .unwrap();
+        assert_eq!(root_node.proof.hash, *snapshot_v2.root_hash());
+        assert_eq!(root_node.summary.block_presence, MultiBlockPresence::Full);
+
+        let mut reader = store.acquire_read().await.unwrap();
+        let mut content = BlockContent::new();
+        reader
+            .read_block(&new_block_id, &mut content)
+            .await
+            .unwrap();
     }
 }

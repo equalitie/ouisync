@@ -1,9 +1,12 @@
 use super::error::Error;
 use crate::{
     db::{self, MAX_BIND_PARAMS},
+    future::TryStreamExt as _,
     protocol::{BLOCK_SIZE, Block, BlockContent, BlockId, BlockNonce},
 };
+use futures_util::TryStreamExt as _;
 use sqlx::{QueryBuilder, Row, Sqlite};
+use std::collections::HashSet;
 
 /// Reads a block from the store into a buffer.
 ///
@@ -129,6 +132,34 @@ pub(super) async fn count(conn: &mut db::Connection) -> Result<u64, Error> {
             .await?
             .get(0),
     ))
+}
+
+/// Returns those of the given block ids whose blocks are stored locally.
+pub(super) async fn filter_existing(
+    conn: &mut db::Connection,
+    ids: &[BlockId],
+) -> Result<HashSet<BlockId>, Error> {
+    let mut output = HashSet::with_capacity(ids.len());
+
+    for ids_chunk in ids.chunks(MAX_BIND_PARAMS) {
+        let mut builder = QueryBuilder::new("SELECT id FROM blocks WHERE id IN (");
+
+        let mut separated = builder.separated(", ");
+        for id in ids_chunk {
+            separated.push_bind(id);
+        }
+        separated.push_unseparated(")");
+
+        builder
+            .build()
+            .persistent(false)
+            .fetch(&mut *conn)
+            .map_ok(|row| row.get::<BlockId, _>(0))
+            .try_collect_into(&mut output)
+            .await?;
+    }
+
+    Ok(output)
 }
 
 /// Checks whether the block exists in the store.
