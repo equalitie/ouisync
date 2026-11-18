@@ -100,6 +100,20 @@ impl Acceptor {
     pub fn local_addr(&self) -> &SocketAddr {
         &self.local_addr
     }
+
+    /// For tests only: simulates the listener failing, to test how the users of this acceptor
+    /// handle `accept` returning an error. Not meant for closing the acceptor (to close it, drop
+    /// it, which also cancels any pending `accept`).
+    ///
+    /// It shuts down the listening socket, which makes `accept` fail with `EINVAL`. Linux only,
+    /// because on other platforms that's not guaranteed to make `accept` fail (e.g. Windows
+    /// documents `shutdown` as failing on unconnected sockets).
+    #[cfg(all(target_os = "linux", any(test, feature = "test-utils")))]
+    pub fn kill(&self) {
+        socket2::SockRef::from(&self.listener.0)
+            .shutdown(std::net::Shutdown::Both)
+            .ok();
+    }
 }
 
 /// Max number of errors caused by individual incoming connections that `Acceptor::accept` skips in a

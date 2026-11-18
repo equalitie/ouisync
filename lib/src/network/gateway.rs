@@ -13,7 +13,10 @@ use net::{
 };
 use portable_atomic::{AtomicU64, Ordering};
 use scoped_task::ScopedJoinHandle;
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    net::{IpAddr, SocketAddr},
+    num::NonZeroU16,
+};
 use thiserror::Error;
 use tokio::{
     select,
@@ -26,6 +29,9 @@ use tracing::{Instrument, Span, field};
 /// Established incoming and outgoing connections.
 pub(super) struct Gateway {
     stacks: watch::Sender<Stacks>,
+    // Addresses the stacks should be bound to. Can differ from the actual addresses of `stacks`
+    // when binding a stack failed or when a stack failed later.
+    wanted: watch::Sender<StackBindAddrs>,
     incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
 }
 
@@ -39,6 +45,7 @@ impl Gateway {
 
         Self {
             stacks,
+            wanted: watch::Sender::new(StackBindAddrs::default()),
             incoming_tx,
         }
     }
@@ -70,10 +77,12 @@ impl Gateway {
 
     /// Binds the gateway to the specified addresses. Rebinds if already bound.
     pub async fn bind(&self, bind: &StackBindAddrs) {
+        self.wanted.send_replace(*bind);
+
         // Close the current stacks before binding the new ones, so the new ones can be bound to the
         // same ports. The closed stacks stay in place until replaced below, so that the observers
         // don't see a temporary unbound state.
-        let closer = self.stacks.borrow().closer();
+        let closer = self.stacks.borrow().closer(StackSlot::ALL);
         closer.close().await;
 
         let next = Stacks::bind(bind, self.incoming_tx.clone());
@@ -107,6 +116,106 @@ impl Gateway {
                 next_conn
             );
         }
+
+        drop(next);
+        self.update_wanted_ports();
+    }
+
+    /// Closes the stack in the given slot (if any) and binds a new one to the wanted address. The
+    /// other stacks are left alone. Returns whether the slot now has a working stack.
+    #[allow(
+        dead_code,
+        reason = "used by the automatic rebinding added in the next commit"
+    )]
+    pub async fn rebind_stack(&self, slot: StackSlot) -> bool {
+        let Some(bind_addr) = self.wanted.borrow().get(slot) else {
+            return false;
+        };
+
+        // Close the current stack first, so the new one can be bound to the same port.
+        let closer = self.stacks.borrow().closer([slot]);
+        closer.close().await;
+
+        let bound = match slot {
+            StackSlot::QuicV4 | StackSlot::QuicV6 => {
+                let stack = QuicStack::new(bind_addr, self.incoming_tx.clone());
+                let bound = stack.is_some();
+
+                self.stacks.send_modify(|stacks| {
+                    *stacks.quic_mut(slot) = stack;
+                    stacks.id = Stacks::next_id();
+                });
+
+                bound
+            }
+            StackSlot::TcpV4 | StackSlot::TcpV6 => {
+                let stack = TcpStack::new(bind_addr, self.incoming_tx.clone());
+                let bound = stack.is_some();
+
+                self.stacks.send_modify(|stacks| {
+                    *stacks.tcp_mut(slot) = stack;
+                    stacks.id = Stacks::next_id();
+                });
+
+                bound
+            }
+        };
+
+        if bound {
+            tracing::info!(?slot, "Rebound stack");
+            self.update_wanted_ports();
+        }
+
+        bound
+    }
+
+    /// Slots of the stacks that are wanted but either not bound or failed.
+    #[allow(
+        dead_code,
+        reason = "used by the automatic rebinding added in the next commit"
+    )]
+    pub fn missing_stacks(&self) -> Vec<StackSlot> {
+        let wanted = self.wanted.borrow();
+        let stacks = self.stacks.borrow();
+
+        StackSlot::ALL
+            .into_iter()
+            .filter(|slot| wanted.get(*slot).is_some() && !stacks.is_working(*slot))
+            .collect()
+    }
+
+    /// Updates the wanted ports of the stacks bound to a random or preferred port to their actual
+    /// ports, so that they are bound to the same ports again when rebound.
+    fn update_wanted_ports(&self) {
+        let stacks = self.stacks.borrow();
+
+        self.wanted.send_if_modified(|wanted| {
+            let mut modified = false;
+
+            for slot in StackSlot::ALL {
+                let Some(wanted_addr) = wanted.get_mut(slot) else {
+                    continue;
+                };
+
+                if matches!(wanted_addr.port, BindPort::Strict(_)) {
+                    continue;
+                }
+
+                let Some(port) = stacks
+                    .listener_local_addr(slot)
+                    .and_then(|addr| NonZeroU16::new(addr.port()))
+                else {
+                    continue;
+                };
+
+                if wanted_addr.port != BindPort::Preferred(port) {
+                    wanted_addr.port = BindPort::Preferred(port);
+                    modified = true;
+                }
+            }
+
+            modified
+        });
     }
 
     pub fn connectivity(&self) -> Connectivity {
@@ -341,6 +450,75 @@ impl Stacks {
     fn any_stack_has_failed(&self) -> bool {
         self.quic_v4.as_ref().is_some_and(QuicStack::has_failed)
             || self.quic_v6.as_ref().is_some_and(QuicStack::has_failed)
+            || self.tcp_v4.as_ref().is_some_and(TcpStack::has_failed)
+            || self.tcp_v6.as_ref().is_some_and(TcpStack::has_failed)
+    }
+
+    /// Whether the slot has a bound stack that hasn't failed.
+    #[allow(
+        dead_code,
+        reason = "used by the automatic rebinding added in the next commit"
+    )]
+    fn is_working(&self, slot: StackSlot) -> bool {
+        match slot {
+            StackSlot::QuicV4 | StackSlot::QuicV6 => {
+                self.quic(slot).is_some_and(|stack| !stack.has_failed())
+            }
+            StackSlot::TcpV4 | StackSlot::TcpV6 => {
+                self.tcp(slot).is_some_and(|stack| !stack.has_failed())
+            }
+        }
+    }
+
+    fn listener_local_addr(&self, slot: StackSlot) -> Option<SocketAddr> {
+        match slot {
+            StackSlot::QuicV4 | StackSlot::QuicV6 => {
+                self.quic(slot).map(|stack| stack.listener_local_addr)
+            }
+            StackSlot::TcpV4 | StackSlot::TcpV6 => {
+                self.tcp(slot).map(|stack| stack.listener_local_addr)
+            }
+        }
+    }
+
+    fn quic(&self, slot: StackSlot) -> Option<&QuicStack> {
+        match slot {
+            StackSlot::QuicV4 => self.quic_v4.as_ref(),
+            StackSlot::QuicV6 => self.quic_v6.as_ref(),
+            StackSlot::TcpV4 | StackSlot::TcpV6 => None,
+        }
+    }
+
+    fn tcp(&self, slot: StackSlot) -> Option<&TcpStack> {
+        match slot {
+            StackSlot::TcpV4 => self.tcp_v4.as_ref(),
+            StackSlot::TcpV6 => self.tcp_v6.as_ref(),
+            StackSlot::QuicV4 | StackSlot::QuicV6 => None,
+        }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "used by the automatic rebinding added in the next commit"
+    )]
+    fn quic_mut(&mut self, slot: StackSlot) -> &mut Option<QuicStack> {
+        match slot {
+            StackSlot::QuicV4 => &mut self.quic_v4,
+            StackSlot::QuicV6 => &mut self.quic_v6,
+            StackSlot::TcpV4 | StackSlot::TcpV6 => unreachable!("not a QUIC slot"),
+        }
+    }
+
+    #[allow(
+        dead_code,
+        reason = "used by the automatic rebinding added in the next commit"
+    )]
+    fn tcp_mut(&mut self, slot: StackSlot) -> &mut Option<TcpStack> {
+        match slot {
+            StackSlot::TcpV4 => &mut self.tcp_v4,
+            StackSlot::TcpV6 => &mut self.tcp_v6,
+            StackSlot::QuicV4 | StackSlot::QuicV6 => unreachable!("not a TCP slot"),
+        }
     }
 
     fn allows_connection_to(&self, addr: &PeerAddr) -> bool {
@@ -475,22 +653,24 @@ impl Stacks {
         }
     }
 
-    /// Returns a `StacksCloser` which closes all the stacks, releasing their ports.
-    fn closer(&self) -> StacksCloser {
+    /// Returns a `StacksCloser` which closes the stacks in the given slots, releasing their ports.
+    fn closer(&self, slots: impl IntoIterator<Item = StackSlot>) -> StacksCloser {
         let mut closer = StacksCloser {
             quic_connectors: Vec::new(),
             tcp_listener_tasks: Vec::new(),
         };
 
-        for stack in [&self.quic_v4, &self.quic_v6].into_iter().flatten() {
-            stack.listener_task.abort();
-            closer.quic_connectors.push(stack.connector.clone());
-        }
+        for slot in slots {
+            if let Some(stack) = self.quic(slot) {
+                stack.listener_task.abort();
+                closer.quic_connectors.push(stack.connector.clone());
+            }
 
-        for stack in [&self.tcp_v4, &self.tcp_v6].into_iter().flatten() {
-            closer
-                .tcp_listener_tasks
-                .extend(stack.listener_task.lock().unwrap().take());
+            if let Some(stack) = self.tcp(slot) {
+                closer
+                    .tcp_listener_tasks
+                    .extend(stack.listener_task.lock().unwrap().take());
+            }
         }
 
         closer
@@ -593,8 +773,12 @@ impl QuicStack {
             };
 
         let listener_local_addr = *acceptor.local_addr();
+        // Failures of the QUIC listener are detected via the connector (see `QuicStack::has_failed`).
         let listener_task = scoped_task::spawn(
-            run_listener(Acceptor::Quic(acceptor), incoming_tx).instrument(span),
+            async move {
+                run_listener(Acceptor::Quic(acceptor), incoming_tx).await;
+            }
+            .instrument(span),
         );
 
         Some(Self {
@@ -615,6 +799,8 @@ struct TcpStack {
     // In `Option` so it can be taken out (see `Stacks::closer`).
     listener_task: BlockingMutex<Option<ScopedJoinHandle<()>>>,
     connector: tcp::Connector,
+    // Set to `true` when the listener stops accepting connections because of an error.
+    failed_tx: watch::Sender<bool>,
 }
 
 impl TcpStack {
@@ -652,24 +838,55 @@ impl TcpStack {
         };
 
         let listener_local_addr = *acceptor.local_addr();
-        let listener_task =
-            scoped_task::spawn(run_listener(Acceptor::Tcp(acceptor), incoming_tx).instrument(span));
+        let failed_tx = watch::Sender::new(false);
+        let listener_task = scoped_task::spawn(
+            run_tcp_listener(acceptor, incoming_tx, failed_tx.clone()).instrument(span),
+        );
 
         Some(Self {
             listener_local_addr,
             listener_task: BlockingMutex::new(Some(listener_task)),
             connector,
+            failed_tx,
         })
+    }
+
+    /// Whether the listener stopped accepting connections because of an error.
+    fn has_failed(&self) -> bool {
+        *self.failed_tx.borrow()
     }
 }
 
-async fn run_listener(listener: Acceptor, tx: mpsc::Sender<(Connection, PeerAddr)>) {
+/// Runs the TCP listener and marks it as failed (via `failed_tx`) if it stops because of an error.
+async fn run_tcp_listener(
+    acceptor: tcp::Acceptor,
+    incoming_tx: mpsc::Sender<(Connection, PeerAddr)>,
+    failed_tx: watch::Sender<bool>,
+) {
+    if run_listener(Acceptor::Tcp(acceptor), incoming_tx).await == ListenerExit::Failed {
+        failed_tx.send_replace(true);
+    }
+}
+
+/// Why `run_listener` finished.
+#[derive(Eq, PartialEq, Debug)]
+enum ListenerExit {
+    /// Accepting failed.
+    Failed,
+    /// Nobody is receiving the incoming connections anymore.
+    Closed,
+}
+
+async fn run_listener(
+    listener: Acceptor,
+    tx: mpsc::Sender<(Connection, PeerAddr)>,
+) -> ListenerExit {
     let mut tasks = JoinSet::new();
 
     loop {
         let connecting = select! {
             connecting = listener.accept() => connecting,
-            _ = tx.closed() => break,
+            _ = tx.closed() => return ListenerExit::Closed,
         };
 
         match connecting {
@@ -694,7 +911,7 @@ async fn run_listener(listener: Acceptor, tx: mpsc::Sender<(Connection, PeerAddr
             }
             Err(error) => {
                 tracing::error!(?error, "Stopped accepting new connections");
-                break;
+                return ListenerExit::Failed;
             }
         }
     }
@@ -775,7 +992,7 @@ fn needs_rebind(old_addr: &Option<SocketAddr>, new_addr: &Option<SocketAddr>) ->
 }
 
 /// Addresses to bind the stacks to.
-#[derive(Debug)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub(super) struct StackBindAddrs {
     quic_v4: Option<StackBindAddr>,
     quic_v6: Option<StackBindAddr>,
@@ -808,8 +1025,32 @@ impl From<&[BindAddr]> for StackBindAddrs {
     }
 }
 
+impl StackBindAddrs {
+    #[allow(
+        dead_code,
+        reason = "used by the automatic rebinding added in the next commit"
+    )]
+    fn get(&self, slot: StackSlot) -> Option<StackBindAddr> {
+        match slot {
+            StackSlot::QuicV4 => self.quic_v4,
+            StackSlot::QuicV6 => self.quic_v6,
+            StackSlot::TcpV4 => self.tcp_v4,
+            StackSlot::TcpV6 => self.tcp_v6,
+        }
+    }
+
+    fn get_mut(&mut self, slot: StackSlot) -> Option<&mut StackBindAddr> {
+        match slot {
+            StackSlot::QuicV4 => self.quic_v4.as_mut(),
+            StackSlot::QuicV6 => self.quic_v6.as_mut(),
+            StackSlot::TcpV4 => self.tcp_v4.as_mut(),
+            StackSlot::TcpV6 => self.tcp_v6.as_mut(),
+        }
+    }
+}
+
 /// Address to bind a single stack to.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct StackBindAddr {
     ip: IpAddr,
     port: BindPort,
@@ -842,6 +1083,19 @@ impl StackBindAddr {
 
         SocketAddr::new(self.ip, port)
     }
+}
+
+/// Identifies one of the (up to four) stacks.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum StackSlot {
+    QuicV4,
+    QuicV6,
+    TcpV4,
+    TcpV6,
+}
+
+impl StackSlot {
+    pub const ALL: [Self; 4] = [Self::QuicV4, Self::QuicV6, Self::TcpV4, Self::TcpV6];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1138,6 +1392,165 @@ mod tests {
         .unwrap();
 
         assert!(connection.is_some());
+    }
+
+    #[tokio::test]
+    async fn rebind_only_the_failed_stack() {
+        let (incoming_tx, mut incoming_rx) = mpsc::channel(1);
+        let gateway = Gateway::new(incoming_tx);
+
+        gateway
+            .bind(&StackBindAddrs::from(
+                &[quic_addr(BindPort::Random), tcp_addr(BindPort::Random)][..],
+            ))
+            .await;
+        let quic_port = bound_quic_port(&gateway).unwrap();
+        let tcp_port = bound_tcp_port(&gateway).unwrap();
+
+        // Open a TCP connection which should survive rebinding the QUIC stack.
+        let _client = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, tcp_port)).unwrap();
+        let (accepted, _) = incoming_rx.recv().await.unwrap();
+
+        let tcp_listener_task_id = |gateway: &Gateway| {
+            gateway
+                .stacks
+                .borrow()
+                .tcp_v4
+                .as_ref()
+                .unwrap()
+                .listener_task
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .0
+                .id()
+        };
+        let tcp_task_id = tcp_listener_task_id(&gateway);
+
+        let connector = gateway
+            .stacks
+            .borrow()
+            .quic_v4
+            .as_ref()
+            .unwrap()
+            .connector
+            .clone();
+        let on_failure = connector.on_failure();
+        connector.kill();
+        time::timeout(Duration::from_secs(5), on_failure)
+            .await
+            .unwrap();
+
+        assert_eq!(gateway.missing_stacks(), [StackSlot::QuicV4]);
+
+        assert!(gateway.rebind_stack(StackSlot::QuicV4).await);
+        assert_eq!(gateway.missing_stacks(), []);
+        assert_eq!(bound_quic_port(&gateway), Some(quic_port));
+        assert_eq!(bound_tcp_port(&gateway), Some(tcp_port));
+
+        // The TCP stack wasn't touched and the TCP connection is still open.
+        assert_eq!(tcp_listener_task_id(&gateway), tcp_task_id);
+        assert!(
+            time::timeout(Duration::from_millis(200), accepted.closed())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn rebind_strict_port_taken() {
+        let taken = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let taken_port = taken.local_addr().unwrap().port();
+
+        let gateway = Gateway::new(mpsc::channel(1).0);
+        gateway
+            .bind(&StackBindAddrs::from(
+                &[quic_addr(BindPort::Strict(port(taken_port)))][..],
+            ))
+            .await;
+        assert_eq!(gateway.missing_stacks(), [StackSlot::QuicV4]);
+
+        // Still taken
+        assert!(!gateway.rebind_stack(StackSlot::QuicV4).await);
+        assert_eq!(gateway.missing_stacks(), [StackSlot::QuicV4]);
+        assert_eq!(bound_quic_port(&gateway), None);
+
+        // Free
+        drop(taken);
+        assert!(gateway.rebind_stack(StackSlot::QuicV4).await);
+        assert_eq!(gateway.missing_stacks(), []);
+        assert_eq!(bound_quic_port(&gateway), Some(taken_port));
+    }
+
+    #[tokio::test]
+    async fn wanted_port_follows_actual_port() {
+        let taken = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let taken_port = taken.local_addr().unwrap().port();
+
+        let gateway = Gateway::new(mpsc::channel(1).0);
+        gateway
+            .bind(&StackBindAddrs::from(
+                &[
+                    quic_addr(BindPort::Preferred(port(taken_port))),
+                    tcp_addr(BindPort::Random),
+                ][..],
+            ))
+            .await;
+
+        let quic_port = bound_quic_port(&gateway).unwrap();
+        let tcp_port = bound_tcp_port(&gateway).unwrap();
+        assert_ne!(quic_port, taken_port);
+
+        let wanted = *gateway.wanted.borrow();
+        assert_eq!(
+            wanted.get(StackSlot::QuicV4).unwrap().port,
+            BindPort::Preferred(port(quic_port))
+        );
+        assert_eq!(
+            wanted.get(StackSlot::TcpV4).unwrap().port,
+            BindPort::Preferred(port(tcp_port))
+        );
+    }
+
+    #[cfg(target_os = "linux")] // See `tcp::Acceptor::kill`.
+    #[tokio::test]
+    async fn tcp_listener_failure_is_detected() {
+        let (_connector, acceptor) =
+            tcp::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default()).unwrap();
+        acceptor.kill();
+
+        let failed_tx = watch::Sender::new(false);
+        time::timeout(
+            Duration::from_secs(5),
+            run_tcp_listener(acceptor, mpsc::channel(1).0, failed_tx.clone()),
+        )
+        .await
+        .unwrap();
+        assert!(*failed_tx.borrow());
+    }
+
+    #[tokio::test]
+    async fn failed_tcp_stack_is_missing_and_rebindable() {
+        let gateway = Gateway::new(mpsc::channel(1).0);
+        gateway
+            .bind(&StackBindAddrs::from(&[tcp_addr(BindPort::Random)][..]))
+            .await;
+        let tcp_port = bound_tcp_port(&gateway).unwrap();
+
+        gateway
+            .stacks
+            .borrow()
+            .tcp_v4
+            .as_ref()
+            .unwrap()
+            .failed_tx
+            .send_replace(true);
+        assert_eq!(gateway.missing_stacks(), [StackSlot::TcpV4]);
+
+        assert!(gateway.rebind_stack(StackSlot::TcpV4).await);
+        assert_eq!(gateway.missing_stacks(), []);
+        assert_eq!(bound_tcp_port(&gateway), Some(tcp_port));
     }
 
     #[test]
