@@ -1092,12 +1092,13 @@ impl Inner {
                 self.on_protocol_mismatch(their_version);
                 return false;
             }
+            // Not a peer we can talk to.
+            Err(HandshakeError::BadMagic) => return false,
+            // Possibly temporary failures (e.g. the peer dropped the connection because it was
+            // still holding a stale one from us), so try again.
             Err(
-                HandshakeError::Timeout
-                | HandshakeError::BadMagic
-                | HandshakeError::Io(_)
-                | HandshakeError::Connection(_),
-            ) => return false,
+                HandshakeError::Timeout | HandshakeError::Io(_) | HandshakeError::Connection(_),
+            ) => return true,
         };
 
         // prevent self-connections.
