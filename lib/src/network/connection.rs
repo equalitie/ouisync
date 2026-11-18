@@ -14,7 +14,7 @@ use std::{
     sync::Arc,
     time::SystemTime,
 };
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 /// Container for known connections.
 pub(super) struct ConnectionSet {
@@ -49,6 +49,7 @@ impl ConnectionSet {
                         source,
                         stats_tracker: StatsTracker::default(),
                         on_release: DropAwaitable::new(),
+                        close_requested: Arc::new(Notify::new()),
                     });
 
                     (
@@ -111,6 +112,34 @@ impl ConnectionSet {
 
     pub fn subscribe(&self) -> watch::Receiver<HashMap<ConnectionKey, ConnectionData>> {
         self.connections.subscribe()
+    }
+
+    /// If the connection with the given address and direction is active, requests it to be closed
+    /// (see `ConnectionPermit::close_requested`) and returns `true`. Otherwise returns `false`.
+    ///
+    /// A connection which is not active yet (e.g. still handshaking) is not requested to close. It
+    /// continues normally and only completes once it gets closed. If it's stale (the peer's socket
+    /// failed), its handshake times out soon anyway.
+    ///
+    /// The request is not lost even when it's made before the connection starts waiting for it,
+    /// because `Notify::notify_one` stores a permit which the next `Notify::notified` consumes.
+    /// Each connection has its own `Notify`, so the permit can't leak to another connection.
+    pub fn request_close_if_active(&self, addr: PeerAddr, dir: ConnectionDirection) -> bool {
+        let connections = self.connections.borrow();
+
+        let Some(data) = connections.get(&ConnectionKey { addr, dir }) else {
+            return false;
+        };
+
+        match data.state {
+            InnerPeerState::Active { .. } => {
+                data.close_requested.notify_one();
+                true
+            }
+            InnerPeerState::Known | InnerPeerState::Connecting | InnerPeerState::Handshaking => {
+                false
+            }
+        }
     }
 }
 
@@ -192,6 +221,13 @@ impl ConnectionPermit {
         });
     }
 
+    /// Completes when closing this connection has been requested (see
+    /// `ConnectionSet::request_close_if_active`).
+    pub fn close_requested(&self) -> impl Future<Output = ()> + Send + 'static {
+        let notify = self.with(|data| data.close_requested.clone());
+        async move { notify.notified().await }
+    }
+
     /// Returns a `AwaitDrop` that gets notified when this permit gets released.
     pub fn released(&self) -> AwaitDrop {
         self.with(|data| data.on_release.subscribe())
@@ -260,6 +296,7 @@ pub(super) struct ConnectionData {
     source: PeerSource,
     stats_tracker: StatsTracker,
     on_release: DropAwaitable,
+    close_requested: Arc<Notify>,
 }
 
 impl ConnectionData {

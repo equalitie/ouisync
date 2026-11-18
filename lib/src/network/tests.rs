@@ -644,3 +644,110 @@ where
         }
     }
 }
+
+mod reconnect {
+    use super::super::{
+        Network, PeerAddr, PeerState, SecretRuntimeId, VERSION, peer_source::ConnectionDirection,
+        perform_handshake,
+    };
+    use net::{SocketOptions, quic, unified::Connection};
+    use std::net::Ipv4Addr;
+    use tokio::time::{self, Duration};
+
+    // A new incoming connection from the same address as an existing active one replaces it. This
+    // happens when the peer's socket failed (so it couldn't notify us about the connection being
+    // closed) and it reconnected from the same port before we noticed (which can take until the
+    // idle timeout).
+    #[tokio::test]
+    async fn incoming_connection_replaces_existing_one_from_same_address() {
+        let network = Network::new();
+        network
+            .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+            .await;
+        let network_addr = *network.listener_local_addrs()[0].socket_addr();
+
+        let (client, client_acceptor, _) =
+            quic::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default()).unwrap();
+        let client_addr = PeerAddr::Quic(*client_acceptor.local_addr());
+        let client_runtime_id = SecretRuntimeId::random();
+
+        let connection_1 = Connection::Quic(client.connect(network_addr).await.unwrap());
+        perform_handshake(
+            &connection_1,
+            VERSION,
+            &client_runtime_id,
+            ConnectionDirection::Outgoing,
+        )
+        .await
+        .unwrap();
+        wait_until_active(&network, client_addr).await;
+
+        // New connection from the same address while the first one is still open.
+        let connection_2 = Connection::Quic(client.connect(network_addr).await.unwrap());
+        perform_handshake(
+            &connection_2,
+            VERSION,
+            &client_runtime_id,
+            ConnectionDirection::Outgoing,
+        )
+        .await
+        .unwrap();
+
+        // The first one gets closed.
+        time::timeout(Duration::from_secs(5), connection_1.closed())
+            .await
+            .unwrap();
+        wait_until_active(&network, client_addr).await;
+    }
+
+    // A failed handshake (e.g. because the peer dropped the connection) is retried instead of giving
+    // up on the peer.
+    #[tokio::test]
+    async fn outgoing_connection_is_retried_after_failed_handshake() {
+        let (_server, server_acceptor, _) =
+            quic::configure((Ipv4Addr::LOCALHOST, 0).into(), SocketOptions::default()).unwrap();
+        let server_addr = PeerAddr::Quic(*server_acceptor.local_addr());
+
+        let server_task = tokio::spawn(async move {
+            // Drop the first connection, which makes the handshake fail.
+            drop(server_acceptor.accept().await.unwrap().await.unwrap());
+
+            // Accept the second one.
+            let connection =
+                Connection::Quic(server_acceptor.accept().await.unwrap().await.unwrap());
+            perform_handshake(
+                &connection,
+                VERSION,
+                &SecretRuntimeId::random(),
+                ConnectionDirection::Incoming,
+            )
+            .await
+            .unwrap();
+
+            // Keep everything alive until the end of the test.
+            (server_acceptor, connection)
+        });
+
+        let network = Network::new();
+        network
+            .bind(&[PeerAddr::Quic((Ipv4Addr::LOCALHOST, 0).into())])
+            .await;
+        network.add_user_provided_peer(&server_addr);
+
+        wait_until_active(&network, server_addr).await;
+        server_task.abort();
+    }
+
+    async fn wait_until_active(network: &Network, addr: PeerAddr) {
+        time::timeout(Duration::from_secs(10), async {
+            while !network
+                .peer_info(addr)
+                .is_some_and(|info| matches!(info.state, PeerState::Active { .. }))
+            {
+                time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+}

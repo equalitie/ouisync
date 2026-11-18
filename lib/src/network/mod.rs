@@ -93,6 +93,7 @@ use std::{
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
+    select,
     sync::{mpsc, watch},
     task::{AbortHandle, JoinSet},
     time::Duration,
@@ -896,26 +897,72 @@ impl Inner {
                         break;
                     }
 
+                    self.spawn_incoming_connection(connection, permit);
+                }
+                ReserveResult::Occupied(on_release, _their_source, permit_id) => {
+                    // A new connection from the same address as an already active one most likely
+                    // means the peer considers the existing connection gone (e.g. its socket
+                    // failed and it reconnected from the same port) but we haven't noticed yet
+                    // (which can take until the idle timeout). Replace the existing connection
+                    // with the new one.
+                    if !self
+                        .connections
+                        .request_close_if_active(addr, ConnectionDirection::Incoming)
+                    {
+                        tracing::debug!(
+                            ?addr,
+                            ?permit_id,
+                            "dropping accepted duplicate connection"
+                        );
+                        continue;
+                    }
+
+                    tracing::debug!(
+                        ?addr,
+                        ?permit_id,
+                        "replacing existing connection with a new one from the same address"
+                    );
+
                     let this = self.clone();
 
-                    let monitor = self.span.in_scope(|| {
-                        ConnectionMonitor::new(
-                            &self.connections_monitor,
-                            &permit.addr(),
-                            permit.source(),
-                        )
-                    });
-                    monitor.mark_as_connecting(permit.id());
-
                     self.spawn(async move {
-                        this.handle_connection(connection, permit, &monitor).await;
+                        on_release.await;
+
+                        match this.connections.reserve(addr, PeerSource::Listener) {
+                            ReserveResult::Permit(permit) => {
+                                if !this.is_shutdown() {
+                                    this.spawn_incoming_connection(connection, permit);
+                                }
+                            }
+                            ReserveResult::Occupied(_, _, permit_id) => {
+                                tracing::debug!(
+                                    ?addr,
+                                    ?permit_id,
+                                    "dropping accepted duplicate connection"
+                                );
+                            }
+                        }
                     });
-                }
-                ReserveResult::Occupied(_, _their_source, permit_id) => {
-                    tracing::debug!(?addr, ?permit_id, "dropping accepted duplicate connection");
                 }
             }
         }
+    }
+
+    fn spawn_incoming_connection(
+        self: &Arc<Self>,
+        connection: Connection,
+        permit: ConnectionPermit,
+    ) {
+        let this = self.clone();
+
+        let monitor = self.span.in_scope(|| {
+            ConnectionMonitor::new(&self.connections_monitor, &permit.addr(), permit.source())
+        });
+        monitor.mark_as_connecting(permit.id());
+
+        self.spawn(async move {
+            this.handle_connection(connection, permit, &monitor).await;
+        });
     }
 
     async fn handle_peer_found(self: Arc<Self>, peer: SeenPeer, source: PeerSource) {
@@ -1045,12 +1092,13 @@ impl Inner {
                 self.on_protocol_mismatch(their_version);
                 return false;
             }
+            // Not a peer we can talk to.
+            Err(HandshakeError::BadMagic) => return false,
+            // Possibly temporary failures (e.g. the peer dropped the connection because it was
+            // still holding a stale one from us), so try again.
             Err(
-                HandshakeError::Timeout
-                | HandshakeError::BadMagic
-                | HandshakeError::Io(_)
-                | HandshakeError::Connection(_),
-            ) => return false,
+                HandshakeError::Timeout | HandshakeError::Io(_) | HandshakeError::Connection(_),
+            ) => return true,
         };
 
         // prevent self-connections.
@@ -1116,7 +1164,12 @@ impl Inner {
             key,
         };
 
-        closed.await;
+        select! {
+            _ = closed => (),
+            _ = permit.close_requested() => {
+                tracing::debug!(parent: monitor.span(), "Closing connection replaced by a new one");
+            }
+        }
 
         true
     }
