@@ -23,7 +23,7 @@ use rand::{
 };
 use std::{cmp::Ordering, collections::HashSet, io::SeekFrom, sync::Arc, time::Duration};
 use tokio::{
-    sync::{Barrier, broadcast, mpsc},
+    sync::{Barrier, broadcast, mpsc, watch},
     time::sleep,
 };
 use tracing::{Instrument, instrument};
@@ -774,182 +774,212 @@ fn remote_move_file_to_directory_then_rename_that_directory() {
 #[test]
 fn rename_directory_while_syncing() {
     let mut env = Env::new();
+    let mut rng = rand::rng();
 
-    let (sync_tx, sync_rx) = sync_watch::channel();
-    let (partial_sync_tx, mut partial_sync_rx) = mpsc::channel(1);
+    let peer_count = rng.random_range(2..=4);
+    info!(peer_count);
 
-    env.actor("alice", async move {
-        let (network, repo, _reg) = actor::setup().await;
-        let mut rng = StdRng::from_rng(&mut rand::rng());
+    let peer_names: Vec<_> = (0..peer_count).map(|i| format!("peer-{i}")).collect();
+    let sync_tx = sync_watch::Sender::new();
+    let sync_rxs: Vec<_> = (0..peer_count - 1).map(|_| sync_tx.subscribe()).collect();
+    let partial_sync_tx = watch::Sender::new(0);
 
-        // Generate repo content with at least one directory (apart from the root)
-        let content = loop {
-            let content = rtd::Directory::generate(&mut rng, rtd::GenerateOptions::default());
-            let has_dirs = content
-                .walk()
-                .any(|(_, entry)| matches!(entry, rtd::Entry::Directory(_)));
-            if has_dirs {
-                break content;
+    env.actor(&peer_names[0], {
+        let peer_names = peer_names.clone();
+        let mut rng = StdRng::from_rng(&mut rng);
+        let mut partial_sync_rx = partial_sync_tx.subscribe();
+
+        async move {
+            let (network, repo, _reg) = actor::setup().await;
+
+            // Generate repo content with at least one directory (apart from the root)
+            let content = loop {
+                let content = rtd::Directory::generate(&mut rng, rtd::GenerateOptions::default());
+                let has_dirs = content
+                    .walk()
+                    .any(|(_, entry)| matches!(entry, rtd::Entry::Directory(_)));
+                if has_dirs {
+                    break content;
+                }
+            };
+
+            for name in peer_names.iter().skip(1) {
+                network.add_user_provided_peer(&actor::lookup_addr(name).await);
             }
-        };
 
-        network.add_user_provided_peer(&actor::lookup_addr("bob").await);
+            // Populate this replica with the content
+            utils::copy_all(&content, &repo).await;
 
-        // Populate this replica with the content
-        utils::copy_all(&content, &repo).await;
+            let observer = RepositoryObserver::new(&repo);
 
-        let observer = RepositoryObserver::new(&repo);
+            // Wait until the peers partially sync
+            observer
+                .run_until(partial_sync_rx.wait_for(|count| *count >= peer_count - 1))
+                .await
+                .unwrap();
 
-        // Wait until the peer partially syncs
-        observer.run_until(partial_sync_rx.recv()).await.unwrap();
+            // Pick a random directory and rename it (retry on failure)
+            let (src_dir, dst_dir) = {
+                let mut repo_rx = repo.subscribe();
+                loop {
+                    let src_dir = match utils::collect_entries(&repo).await {
+                        Ok(entries) => entries
+                            .into_iter()
+                            .filter_map(|(path, ty)| match ty {
+                                EntryType::Directory => Some(path),
+                                EntryType::File => None,
+                            })
+                            .choose(&mut rng)
+                            .unwrap(),
+                        Err(error) => {
+                            warn!(?error, "failed to collect repo entries");
+                            common::wait(&mut repo_rx).await;
+                            continue;
+                        }
+                    };
 
-        // Pick a random directory and rename it (retry on failure)
-        let (src_dir, dst_dir) = {
+                    let dst_dir = loop {
+                        let len = rng.random_range(1..=12);
+                        let dst_dir = src_dir
+                            .parent()
+                            .unwrap()
+                            .join(Alphanumeric.sample_string(&mut rng, len));
+                        if dst_dir != src_dir {
+                            break dst_dir;
+                        }
+                    };
+
+                    match repo.move_entry(&src_dir, &dst_dir).await {
+                        Ok(_) => {
+                            info!("renamed {} -> {}", src_dir, dst_dir);
+                            break (src_dir, dst_dir);
+                        }
+                        Err(error) => {
+                            warn!(?error, "failed to rename {} -> {}", src_dir, dst_dir);
+                            common::wait(&mut repo_rx).await;
+                            continue;
+                        }
+                    }
+                }
+            };
+
+            // Wait until full sync
+            observer
+                .run_until(sync_tx.run(&repo))
+                .instrument(info_span!("wait for sync"))
+                .await;
+
+            // Verify the rename
+            assert_matches!(
+                repo.open_directory(src_dir).await,
+                Err(Error::EntryNotFound)
+            );
+            assert_matches!(repo.open_directory(dst_dir).await, Ok(_))
+        }
+    });
+
+    for (name, sync_rx) in peer_names.iter().skip(1).cloned().zip(sync_rxs) {
+        let peer_names = peer_names.clone();
+        let mut rng = StdRng::from_rng(&mut rng);
+        let partial_sync_tx = partial_sync_tx.clone();
+
+        env.actor(&name.clone(), async move {
+            let (network, repo, _reg) = actor::setup().await;
+
+            for peer_name in peer_names {
+                if name == peer_name {
+                    continue;
+                }
+
+                network.add_user_provided_peer(&actor::lookup_addr(&peer_name).await);
+            }
+
+            // Populate this replica with random content
+            let content = rtd::Directory::generate(
+                &mut rng,
+                rtd::GenerateOptions {
+                    min_files: 0,
+                    ..Default::default()
+                },
+            );
+            utils::copy_all(&content, &repo).await;
+
+            let observer = RepositoryObserver::new(&repo);
+
             let mut repo_rx = repo.subscribe();
-            loop {
-                let src_dir = match utils::collect_entries(&repo).await {
-                    Ok(entries) => entries
-                        .into_iter()
-                        .filter_map(|(path, ty)| match ty {
-                            EntryType::Directory => Some(path),
-                            EntryType::File => None,
-                        })
-                        .choose(&mut rng)
-                        .unwrap(),
-                    Err(error) => {
-                        warn!(?error, "failed to collect repo entries");
-                        common::wait(&mut repo_rx).await;
-                        continue;
+
+            // Wait until the sync starts. Depending on whether we have local content, there are two
+            // ways to do this:
+            //
+            // 1. If we do have local content, wait until the merged version vector has at least two
+            // entries. This indicates that we received at least one snapshot from some other
+            // replica that isn't us.
+            //
+            // 2. If we don't have local content, we can't do the above because the version vector
+            // would contain only the peers entry, not ours. Instead we wait until the sync progress
+            // reports the total repo size is non-zero. Because we have no local content that can
+            // only mean we became aware of some other peers content which means we started syncing.
+            // Note we can't do this in the first case because the progress report includes also the
+            // local content and so the check would complete immediately, potentially before the
+            // syncing even starts.
+            observer
+                .run_until(
+                    async {
+                        loop {
+                            // Depending on whether
+                            if content.is_empty() {
+                                let progress = repo.sync_progress().await.unwrap();
+                                if progress.total > 0 {
+                                    break;
+                                }
+                            } else {
+                                let vv = repo.get_merged_version_vector().await.unwrap();
+                                if vv.len() > 1 {
+                                    break;
+                                }
+                            }
+
+                            common::wait(&mut repo_rx).await;
+                        }
                     }
-                };
+                    .instrument(info_span!("wait for sync start")),
+                )
+                .await;
 
-                let dst_dir = loop {
-                    let len = rng.random_range(1..=12);
-                    let dst_dir = src_dir
-                        .parent()
-                        .unwrap()
-                        .join(Alphanumeric.sample_string(&mut rng, len));
-                    if dst_dir != src_dir {
-                        break dst_dir;
-                    }
-                };
+            info!("sync started");
 
-                match repo.move_entry(&src_dir, &dst_dir).await {
-                    Ok(_) => {
-                        info!("renamed {} -> {}", src_dir, dst_dir);
-                        break (src_dir, dst_dir);
-                    }
-                    Err(error) => {
-                        warn!(?error, "failed to rename {} -> {}", src_dir, dst_dir);
-                        common::wait(&mut repo_rx).await;
-                        continue;
-                    }
-                }
-            }
-        };
-
-        // Wait until full sync
-        observer
-            .run_until(sync_tx.run(&repo))
-            .instrument(info_span!("wait for sync"))
-            .await;
-
-        // Verify the rename
-        assert_matches!(
-            repo.open_directory(src_dir).await,
-            Err(Error::EntryNotFound)
-        );
-        assert_matches!(repo.open_directory(dst_dir).await, Ok(_))
-    });
-
-    env.actor("bob", async move {
-        let (_network, repo, _reg) = actor::setup().await;
-        let mut rng = StdRng::from_rng(&mut rand::rng());
-
-        // Populate this replica with random content
-        let content = rtd::Directory::generate(
-            &mut rng,
-            rtd::GenerateOptions {
-                min_files: 0,
-                ..Default::default()
-            },
-        );
-        utils::copy_all(&content, &repo).await;
-
-        let observer = RepositoryObserver::new(&repo);
-
-        let mut repo_rx = repo.subscribe();
-
-        // Wait until the sync starts. Depending on whether we have local content, there are two
-        // ways to do this:
-        //
-        // 1. If we do have local content, wait until the merged version vector has at least two
-        // entries. This indicates that we received at least one snapshot from some other replica
-        // that isn't us.
-        //
-        // 2. If we don't have local content, we can't do the above because the version vector would
-        // contain only the peers entry, not ours. Instead we wait until the sync progress reports
-        // the total repo size is non-zero. Because we have no local content that can only mean we
-        // became aware of the peers content which means we started syncing. Note we can't do this
-        // in the first case because the progress reports also the local content and so the check
-        // would complete immediately, potentially before the syncing even starts.
-        observer
-            .run_until(
-                async {
-                    loop {
-                        // Depending on whether
-                        if content.is_empty() {
+            // Wait until partially synced
+            let threshold = rng.random_range(0.0..=1.0);
+            observer
+                .run_until(
+                    async {
+                        loop {
                             let progress = repo.sync_progress().await.unwrap();
-                            if progress.total > 0 {
+                            if progress.ratio() >= threshold {
+                                info!("sync threshold reached: {}", progress.percent());
                                 break;
                             }
-                        } else {
-                            let vv = repo.get_merged_version_vector().await.unwrap();
-                            if vv.len() > 1 {
-                                break;
-                            }
+
+                            common::wait(&mut repo_rx).await;
                         }
-
-                        common::wait(&mut repo_rx).await;
                     }
-                }
-                .instrument(info_span!("wait for sync start")),
-            )
-            .await;
+                    .instrument(info_span!(
+                        "wait for partial sync",
+                        threshold = %format_args!("{:.0}%", 100.0 * threshold)
+                    )),
+                )
+                .await;
 
-        info!("sync started");
+            // Notify the first peer
+            partial_sync_tx.send_modify(|count| *count += 1);
 
-        // Wait until partially synced
-        let threshold = rng.random_range(0.0..=1.0);
-        observer
-            .run_until(
-                async {
-                    loop {
-                        let progress = repo.sync_progress().await.unwrap();
-                        if progress.ratio() >= threshold {
-                            info!("sync threshold reached: {}", progress.percent());
-                            break;
-                        }
-
-                        common::wait(&mut repo_rx).await;
-                    }
-                }
-                .instrument(info_span!(
-                    "wait for partial sync",
-                    threshold = %format_args!("{:.0}%", 100.0 * threshold)
-                )),
-            )
-            .await;
-
-        // Notify the peer
-        partial_sync_tx.send(()).await.unwrap();
-
-        // Wait until fully synced
-        observer
-            .run_until(sync_rx.run(&repo))
-            .instrument(info_span!("wait for full sync"))
-            .await;
-    });
+            // Wait until fully synced
+            observer
+                .run_until(sync_rx.run(&repo))
+                .instrument(info_span!("wait for full sync"))
+                .await;
+        });
+    }
 }
 
 #[test]
