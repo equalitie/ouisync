@@ -21,6 +21,7 @@ mod peer_info;
 mod peer_source;
 mod peer_state;
 mod protocol;
+mod rebind;
 mod request_tracker;
 mod runtime_id;
 mod seen_peers;
@@ -206,6 +207,7 @@ impl NetworkBuilder {
         inner.spawn(inner.clone().handle_incoming_connections(incoming_rx));
         inner.spawn(inner.clone().run_dht(dht_discovery_rx));
         inner.spawn(inner.clone().run_peer_exchange(pex_discovery_rx));
+        inner.spawn(inner.clone().keep_stacks_bound());
 
         tracing::debug!(this_runtime_id = ?this_runtime_id_public.as_public_key(), "Network created");
 

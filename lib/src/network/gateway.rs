@@ -6,7 +6,10 @@ use super::{
 };
 use backoff::{ExponentialBackoffBuilder, backoff::Backoff};
 use deadlock::BlockingMutex;
-use futures_util::future::{self, Either};
+use futures_util::{
+    FutureExt,
+    future::{self, BoxFuture, Either},
+};
 use net::{
     SocketOptions, quic, tcp,
     unified::{Acceptor, Connection},
@@ -123,10 +126,6 @@ impl Gateway {
 
     /// Closes the stack in the given slot (if any) and binds a new one to the wanted address. The
     /// other stacks are left alone. Returns whether the slot now has a working stack.
-    #[allow(
-        dead_code,
-        reason = "used by the automatic rebinding added in the next commit"
-    )]
     pub async fn rebind_stack(&self, slot: StackSlot) -> bool {
         let Some(bind_addr) = self.wanted.borrow().get(slot) else {
             return false;
@@ -141,6 +140,12 @@ impl Gateway {
                 let stack = QuicStack::new(bind_addr, self.incoming_tx.clone());
                 let bound = stack.is_some();
 
+                // Nothing to change (no stack before, still no stack now). Don't notify the
+                // observers for nothing.
+                if !bound && self.stacks.borrow().quic(slot).is_none() {
+                    return false;
+                }
+
                 self.stacks.send_modify(|stacks| {
                     *stacks.quic_mut(slot) = stack;
                     stacks.id = Stacks::next_id();
@@ -151,6 +156,11 @@ impl Gateway {
             StackSlot::TcpV4 | StackSlot::TcpV6 => {
                 let stack = TcpStack::new(bind_addr, self.incoming_tx.clone());
                 let bound = stack.is_some();
+
+                // See above.
+                if !bound && self.stacks.borrow().tcp(slot).is_none() {
+                    return false;
+                }
 
                 self.stacks.send_modify(|stacks| {
                     *stacks.tcp_mut(slot) = stack;
@@ -170,10 +180,6 @@ impl Gateway {
     }
 
     /// Slots of the stacks that are wanted but either not bound or failed.
-    #[allow(
-        dead_code,
-        reason = "used by the automatic rebinding added in the next commit"
-    )]
     pub fn missing_stacks(&self) -> Vec<StackSlot> {
         let wanted = self.wanted.borrow();
         let stacks = self.stacks.borrow();
@@ -182,6 +188,41 @@ impl Gateway {
             .into_iter()
             .filter(|slot| wanted.get(*slot).is_some() && !stacks.is_working(*slot))
             .collect()
+    }
+
+    /// Waits until some wanted stack is missing (see `missing_stacks`).
+    pub async fn wait_for_missing_stack(&self) {
+        let mut stacks_rx = self.stacks.subscribe();
+        let mut wanted_rx = self.wanted.subscribe();
+
+        loop {
+            if !self.missing_stacks().is_empty() {
+                return;
+            }
+
+            let on_failure = self.stacks.borrow().on_any_failure();
+
+            select! {
+                _ = on_failure => (),
+                _ = stacks_rx.changed() => (),
+                _ = wanted_rx.changed() => (),
+            }
+        }
+    }
+
+    /// Notifies when the wanted addresses change (that is, on `bind`).
+    pub fn subscribe_wanted(&self) -> watch::Receiver<StackBindAddrs> {
+        self.wanted.subscribe()
+    }
+
+    /// Id of the current stacks. Changes whenever the stacks change.
+    pub fn stacks_id(&self) -> u64 {
+        self.stacks.borrow().id
+    }
+
+    #[cfg(test)]
+    pub fn kill_quic_stack(&self, slot: StackSlot) {
+        self.stacks.borrow().quic(slot).unwrap().connector.kill();
     }
 
     /// Updates the wanted ports of the stacks bound to a random or preferred port to their actual
@@ -454,11 +495,38 @@ impl Stacks {
             || self.tcp_v6.as_ref().is_some_and(TcpStack::has_failed)
     }
 
+    /// Completes when any of the stacks fails.
+    fn on_any_failure(&self) -> impl Future<Output = ()> + Send + 'static {
+        let mut futures: Vec<BoxFuture<'static, ()>> = Vec::new();
+
+        for stack in [&self.quic_v4, &self.quic_v6].into_iter().flatten() {
+            futures.push(stack.connector.on_failure().boxed());
+        }
+
+        for stack in [&self.tcp_v4, &self.tcp_v6].into_iter().flatten() {
+            let mut failed_rx = stack.failed_tx.subscribe();
+
+            futures.push(
+                async move {
+                    if failed_rx.wait_for(|failed| *failed).await.is_err() {
+                        // The stack has been dropped without failing.
+                        future::pending().await
+                    }
+                }
+                .boxed(),
+            );
+        }
+
+        async move {
+            if futures.is_empty() {
+                future::pending().await
+            } else {
+                future::select_all(futures).await;
+            }
+        }
+    }
+
     /// Whether the slot has a bound stack that hasn't failed.
-    #[allow(
-        dead_code,
-        reason = "used by the automatic rebinding added in the next commit"
-    )]
     fn is_working(&self, slot: StackSlot) -> bool {
         match slot {
             StackSlot::QuicV4 | StackSlot::QuicV6 => {
@@ -497,10 +565,6 @@ impl Stacks {
         }
     }
 
-    #[allow(
-        dead_code,
-        reason = "used by the automatic rebinding added in the next commit"
-    )]
     fn quic_mut(&mut self, slot: StackSlot) -> &mut Option<QuicStack> {
         match slot {
             StackSlot::QuicV4 => &mut self.quic_v4,
@@ -509,10 +573,6 @@ impl Stacks {
         }
     }
 
-    #[allow(
-        dead_code,
-        reason = "used by the automatic rebinding added in the next commit"
-    )]
     fn tcp_mut(&mut self, slot: StackSlot) -> &mut Option<TcpStack> {
         match slot {
             StackSlot::TcpV4 => &mut self.tcp_v4,
@@ -1026,10 +1086,6 @@ impl From<&[BindAddr]> for StackBindAddrs {
 }
 
 impl StackBindAddrs {
-    #[allow(
-        dead_code,
-        reason = "used by the automatic rebinding added in the next commit"
-    )]
     fn get(&self, slot: StackSlot) -> Option<StackBindAddr> {
         match slot {
             StackSlot::QuicV4 => self.quic_v4,
@@ -1086,7 +1142,7 @@ impl StackBindAddr {
 }
 
 /// Identifies one of the (up to four) stacks.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(super) enum StackSlot {
     QuicV4,
     QuicV6,
