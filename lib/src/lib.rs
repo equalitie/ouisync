@@ -50,7 +50,7 @@ pub use self::{
     joint_directory::{JointDirectory, JointEntryRef},
     joint_entry::JointEntry,
     network::{
-        AddrFilter, DEFAULT_DHT_ROUTERS, DhtContactsStoreTrait, DhtLookupStream, DhtPin,
+        AddrFilter, BindAddr, BindIp, BindPort, DEFAULT_DHT_ROUTERS, DhtContactsStoreTrait, DhtLookupStream, DhtPin,
         NatBehavior, Network, NetworkBuilder, NetworkEvent, NetworkEventReceiver,
         NetworkEventStream, PeerAddr, PeerInfo, PeerInfoCollector, PeerSource, PeerState,
         PublicRuntimeId, RecvStream, Registration, SecretRuntimeId, SendStream, Stats, TopicId,

@@ -1,4 +1,5 @@
 mod addr_filter;
+mod bind_addr;
 mod choke;
 mod client;
 mod connection;
@@ -20,6 +21,7 @@ mod peer_info;
 mod peer_source;
 mod peer_state;
 mod protocol;
+mod rebind;
 mod request_tracker;
 mod runtime_id;
 mod seen_peers;
@@ -33,6 +35,7 @@ mod upnp;
 
 pub use self::{
     addr_filter::AddrFilter,
+    bind_addr::{BindAddr, BindIp, BindPort},
     connection::PeerInfoCollector,
     dht::{DEFAULT_DHT_ROUTERS, DhtContactsStoreTrait, DhtLookupStream, DhtPin},
     event::{NetworkEvent, NetworkEventReceiver, NetworkEventStream},
@@ -56,7 +59,7 @@ use self::{
     constants::REQUEST_TIMEOUT,
     dht::DhtDiscovery,
     event::ProtocolVersions,
-    gateway::{Connectivity, Gateway, StackAddresses},
+    gateway::{Connectivity, Gateway, StackBindAddrs},
     local_discovery::LocalDiscovery,
     message_broker::MessageBroker,
     peer_addr::PeerPort,
@@ -74,7 +77,7 @@ use crate::{
 };
 use backoff::{ExponentialBackoffBuilder, backoff::Backoff};
 use btdht::{self, INFO_HASH_LEN, InfoHash};
-use deadlock::BlockingMutex;
+use deadlock::{AsyncMutex, BlockingMutex};
 use futures_util::future;
 use net::{
     quic,
@@ -198,11 +201,13 @@ impl NetworkBuilder {
             our_addresses: BlockingMutex::new(HashSet::default()),
             stats_tracker: StatsTracker::default(),
             addr_filter: self.addr_filter,
+            bind_lock: AsyncMutex::new(()),
         });
 
         inner.spawn(inner.clone().handle_incoming_connections(incoming_rx));
         inner.spawn(inner.clone().run_dht(dht_discovery_rx));
         inner.spawn(inner.clone().run_peer_exchange(pex_discovery_rx));
+        inner.spawn(inner.clone().keep_stacks_bound());
 
         tracing::debug!(this_runtime_id = ?this_runtime_id_public.as_public_key(), "Network created");
 
@@ -234,10 +239,14 @@ impl Network {
     /// Binds the network to the specified addresses.
     /// Rebinds if already bound. Unbinds and disables the network if `addrs` is empty.
     ///
+    /// The addresses can be either [BindAddr] or [PeerAddr]. For [PeerAddr], port `0` means
+    /// [BindPort::Random] and any other port [BindPort::Strict].
+    ///
     /// NOTE: currently at most one address per protocol (QUIC/TCP) and family (IPv4/IPv6) is used
     /// and the rest are ignored, but this might change in the future.
-    pub async fn bind(&self, addrs: &[PeerAddr]) {
-        self.inner.bind(addrs).await
+    pub async fn bind(&self, addrs: &[impl Into<BindAddr> + Copy]) {
+        let addrs: Vec<BindAddr> = addrs.iter().copied().map(Into::into).collect();
+        self.inner.bind(&addrs).await
     }
 
     pub fn listener_local_addrs(&self) -> Vec<PeerAddr> {
@@ -659,6 +668,8 @@ struct Inner {
     our_addresses: BlockingMutex<HashSet<PeerAddr>>,
     stats_tracker: StatsTracker,
     addr_filter: AddrFilter,
+    // Serializes changes to the gateway stacks (and the subsequent `on_stacks_changed`).
+    bind_lock: AsyncMutex<()>,
 }
 
 struct Registry {
@@ -695,24 +706,31 @@ impl Inner {
         self.registry.lock().unwrap().peers.is_none()
     }
 
-    async fn bind(self: &Arc<Self>, bind: &[PeerAddr]) {
-        let bind = StackAddresses::from(bind);
+    async fn bind(self: &Arc<Self>, bind: &[BindAddr]) {
+        let bind = StackBindAddrs::from(bind);
+        let _bind_guard = self.bind_lock.lock().await;
 
         // TODO: Would be preferable to only rebind those stacks that actually need rebinding.
         //
-        // Also force a rebind if a currently bound stack has died (e.g. its UDP socket hit a
+        // Also force a rebind if a currently bound stack has failed (e.g. its UDP socket hit a
         // fatal error because the network interface went down while the app was backgrounded):
         // such a stack never recovers on its own, and comparing addresses alone would otherwise
         // treat "bind to the same address again" as a no-op forever.
         if !self.gateway.addresses().any_stack_needs_rebind(&bind)
-            && !self.gateway.any_stack_is_dead()
+            && !self.gateway.any_stack_has_failed()
         {
             return;
         }
 
         // Gateway
-        self.span.in_scope(|| self.gateway.bind(&bind));
+        self.gateway.bind(&bind).instrument(self.span.clone()).await;
 
+        self.on_stacks_changed().await;
+    }
+
+    /// Updates everything that depends on the gateway stacks (STUN, DHT, port forwarding, local
+    /// discovery, existing connections). Needs to be called after the stacks change.
+    async fn on_stacks_changed(self: &Arc<Self>) {
         let conn = self.gateway.connectivity();
 
         // STUN

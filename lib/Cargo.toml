@@ -84,6 +84,7 @@ criterion = { workspace = true, features = ["html_reports"] }
 ctor = "1.0.0"
 hdrhistogram = { version = "7.5.4", default-features = false, features = ["sync"] }
 metrics_ext = { path = "../metrics_ext" }
+net = { package = "ouisync-net", path = "../net", features = ["test-utils"] }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
 proptest = { workspace = true }
 rmp = { workspace = true }
