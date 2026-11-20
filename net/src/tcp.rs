@@ -61,40 +61,8 @@ pub struct Acceptor {
 
 impl Acceptor {
     pub async fn accept(&self) -> Result<Connection, Error> {
-        let mut connection_errors = 0;
-
-        loop {
-            let error = match self.listener.accept().await {
-                Ok((stream, addr)) => {
-                    return Ok(Connection::new(stream, yamux::Mode::Server, addr));
-                }
-                Err(error) => error,
-            };
-
-            match AcceptErrorKind::of(&error) {
-                // The pending connection failed, but the listener is fine. Accept the next one.
-                // Cap the number of such errors in a row in case some platform keeps returning one
-                // of them, to not spin forever.
-                AcceptErrorKind::Connection
-                    if connection_errors < MAX_CONSECUTIVE_CONNECTION_ACCEPT_ERRORS =>
-                {
-                    tracing::debug!(?error, "failed to accept incoming connection");
-                    connection_errors += 1;
-                }
-                // Retrying right away would most likely fail again, so wait a bit.
-                AcceptErrorKind::OutOfResources => {
-                    tracing::warn!(
-                        ?error,
-                        "out of resources to accept incoming connection, retrying in {:?}",
-                        ACCEPT_OUT_OF_RESOURCES_DELAY,
-                    );
-                    time::sleep(ACCEPT_OUT_OF_RESOURCES_DELAY).await;
-                }
-                AcceptErrorKind::Connection | AcceptErrorKind::Fatal => {
-                    return Err(error.into());
-                }
-            }
-        }
+        let (stream, addr) = accept_with_retries(|| self.listener.accept()).await?;
+        Ok(Connection::new(stream, yamux::Mode::Server, addr))
     }
 
     pub fn local_addr(&self) -> &SocketAddr {
@@ -116,11 +84,53 @@ impl Acceptor {
     }
 }
 
-/// Max number of errors caused by individual incoming connections that `Acceptor::accept` skips in a
-/// row before treating the error as fatal.
+/// Calls `accept` until it succeeds or fails with an error which means the listener stopped working.
+/// Errors caused by individual incoming connections are skipped and on running out of resources it
+/// waits a bit before trying again. Intended for accepting from TCP listeners.
+pub async fn accept_with_retries<F, Fut, T>(mut accept: F) -> io::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = io::Result<T>>,
+{
+    let mut connection_errors = 0;
+
+    loop {
+        let error = match accept().await {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
+
+        match AcceptErrorKind::of(&error) {
+            // The pending connection failed, but the listener is fine. Accept the next one. Cap
+            // the number of such errors in a row in case some platform keeps returning one of
+            // them, to not spin forever.
+            AcceptErrorKind::Connection
+                if connection_errors < MAX_CONSECUTIVE_CONNECTION_ACCEPT_ERRORS =>
+            {
+                tracing::debug!(?error, "failed to accept incoming connection");
+                connection_errors += 1;
+            }
+            // Retrying right away would most likely fail again, so wait a bit.
+            AcceptErrorKind::OutOfResources => {
+                tracing::warn!(
+                    ?error,
+                    "out of resources to accept incoming connection, retrying in {:?}",
+                    ACCEPT_OUT_OF_RESOURCES_DELAY,
+                );
+                time::sleep(ACCEPT_OUT_OF_RESOURCES_DELAY).await;
+            }
+            AcceptErrorKind::Connection | AcceptErrorKind::Fatal => {
+                return Err(error);
+            }
+        }
+    }
+}
+
+/// Max number of errors caused by individual incoming connections that `accept_with_retries` skips
+/// in a row before treating the error as fatal.
 const MAX_CONSECUTIVE_CONNECTION_ACCEPT_ERRORS: usize = 32;
 
-/// How long `Acceptor::accept` waits before trying again after running out of resources.
+/// How long `accept_with_retries` waits before trying again after running out of resources.
 const ACCEPT_OUT_OF_RESOURCES_DELAY: Duration = Duration::from_secs(1);
 
 enum AcceptErrorKind {

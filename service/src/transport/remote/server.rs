@@ -11,6 +11,7 @@ use futures_util::{
     stream::{SplitSink, SplitStream},
 };
 use ouisync::{AccessSecrets, RepositoryId, ShareToken, crypto::sign::Signature};
+use ouisync_net::tcp::accept_with_retries;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{TlsAcceptor, rustls, server::TlsStream};
 use tokio_tungstenite::{WebSocketStream, tungstenite as ws};
@@ -48,10 +49,21 @@ impl RemoteServer {
         self.local_addr
     }
 
+    /// For tests only: simulates the listener failing by shutting down its socket, which makes
+    /// `accept` fail. Linux only, because on other platforms that's not guaranteed to make `accept`
+    /// fail.
+    #[cfg(all(test, target_os = "linux"))]
+    pub fn kill(&self) {
+        socket2::SockRef::from(&self.tcp_listener)
+            .shutdown(std::net::Shutdown::Both)
+            .ok();
+    }
+
     /// Accept the next remote client connection. The returned value needs to be finalized (
-    /// [AcceptedRemoteConnection::finalize]) before use.
+    /// [AcceptedRemoteConnection::finalize]) before use. Returns an error only when the listener
+    /// stopped working (temporary errors are retried).
     pub async fn accept(&self) -> io::Result<AcceptedRemoteConnection> {
-        let (socket, addr) = self.tcp_listener.accept().await?;
+        let (socket, addr) = accept_with_retries(|| self.tcp_listener.accept()).await?;
 
         Ok(AcceptedRemoteConnection {
             socket,

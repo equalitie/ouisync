@@ -160,7 +160,19 @@ impl Service {
                     }
                 }
                 result = self.state.remote_accept() => {
-                    let conn = result.map_err(Error::Accept)?;
+                    // The remote listener is only used on servers, where stopping the service is
+                    // preferable to rebinding the listener: the failure gets noticed and the
+                    // service restarted by whatever supervises it. Log it loudly, so the cause is
+                    // clear from the log.
+                    let conn = result.map_err(|error| {
+                        tracing::error!(
+                            ?error,
+                            addr = ?self.state.session_get_remote_control_listener_addr(),
+                            "remote control listener failed, stopping the service"
+                        );
+
+                        Error::Accept(error)
+                    })?;
                     self.start_connection(AcceptedConnection::Remote(conn));
                 }
                 Some(_) = self.connections.next() => (),
