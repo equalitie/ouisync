@@ -6,6 +6,7 @@ use super::{ClientError, ReadError, WriteError};
 use crate::protocol::{Message, Request, ResponseResult};
 use bytes::BytesMut;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use ouisync_net::tcp::accept_with_retries;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     io,
@@ -49,9 +50,10 @@ impl LocalServer {
     }
 
     /// Accept the next local client connection. The returned value needs to be finalized (
-    /// [AcceptedLocalConnection::finalize]) before use.
+    /// [AcceptedLocalConnection::finalize]) before use. Returns an error only when the listener
+    /// stopped working (temporary errors are retried).
     pub async fn accept(&self) -> io::Result<AcceptedLocalConnection> {
-        let (socket, _addr) = self.listener.accept().await?;
+        let (socket, _addr) = accept_with_retries(|| self.listener.accept()).await?;
 
         Ok(AcceptedLocalConnection {
             socket,

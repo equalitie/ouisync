@@ -11,6 +11,7 @@ use futures_util::{
     stream::{SplitSink, SplitStream},
 };
 use ouisync::{AccessSecrets, RepositoryId, ShareToken, crypto::sign::Signature};
+use ouisync_net::tcp::accept_with_retries;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{TlsAcceptor, rustls, server::TlsStream};
 use tokio_tungstenite::{WebSocketStream, tungstenite as ws};
@@ -59,9 +60,10 @@ impl RemoteServer {
     }
 
     /// Accept the next remote client connection. The returned value needs to be finalized (
-    /// [AcceptedRemoteConnection::finalize]) before use.
+    /// [AcceptedRemoteConnection::finalize]) before use. Returns an error only when the listener
+    /// stopped working (temporary errors are retried).
     pub async fn accept(&self) -> io::Result<AcceptedRemoteConnection> {
-        let (socket, addr) = self.tcp_listener.accept().await?;
+        let (socket, addr) = accept_with_retries(|| self.tcp_listener.accept()).await?;
 
         Ok(AcceptedRemoteConnection {
             socket,

@@ -12,6 +12,7 @@ use hyper_util::rt::TokioIo;
 use metrics::{Gauge, Key, KeyName, Label, Level, Metadata, Recorder, Unit};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
 use ouisync::{Network, PeerInfoCollector, PeerState, PublicRuntimeId};
+use ouisync_net::tcp::accept_with_retries;
 use scoped_task::ScopedAbortHandle;
 use std::{
     collections::HashMap,
@@ -157,7 +158,7 @@ async fn start(
                 let accept = async {
                     // unwrap is ok because we don't `close` the semaphore.
                     let permit = semaphore.clone().acquire_owned().await.unwrap();
-                    let result = tcp_listener.accept().await;
+                    let result = accept_with_retries(|| tcp_listener.accept()).await;
 
                     match result {
                         Ok((stream, addr)) => Ok((stream, addr, permit)),
@@ -172,8 +173,10 @@ async fn start(
 
                 let (stream, addr, permit) = match result {
                     Ok(conn) => conn,
+                    // Temporary errors are retried by `accept_with_retries`, so this means the
+                    // listener stopped working.
                     Err(error) => {
-                        tracing::error!(?error, "failed to accept new connection");
+                        tracing::error!(?error, "metrics listener failed, stopping it");
                         break;
                     }
                 };
