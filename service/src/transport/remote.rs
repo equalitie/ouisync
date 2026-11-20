@@ -158,6 +158,23 @@ mod tests {
         service.close().await;
     }
 
+    // A remote client which connects but never does the TLS handshake must not block closing the
+    // service.
+    #[tokio::test]
+    async fn close_with_remote_client_not_handshaking() {
+        let (_temp_dir, service, server_addr, _client_config) = setup_service().await;
+        let runner = ServiceRunner::start(service);
+
+        let _client = tokio::net::TcpStream::connect(&server_addr).await.unwrap();
+        // Give the service time to accept the connection.
+        time::sleep(Duration::from_millis(100)).await;
+
+        let mut service = runner.stop().await;
+        time::timeout(Duration::from_secs(5), service.close())
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn create_ok() {
         test_utils::init_log();

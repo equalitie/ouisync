@@ -305,7 +305,7 @@ mod tests {
     use ouisync::WriteSecrets;
     use rcgen::{Certificate, CertificateParams, KeyPair};
     use tempfile::TempDir;
-    use tokio::fs;
+    use tokio::{fs, io::AsyncReadExt};
     use tokio_rustls::rustls::{self, ClientConfig};
 
     use crate::{
@@ -315,6 +315,49 @@ mod tests {
     };
 
     use super::*;
+
+    // A local client which connects but never authenticates must not block closing the service.
+    #[tokio::test]
+    async fn close_with_unauthenticated_local_client() {
+        let temp_dir = TempDir::new().unwrap();
+        let service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let port = service.local_endpoint().port;
+        let runner = ServiceRunner::start(service);
+
+        let _client = tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .unwrap();
+        // Give the service time to accept the connection.
+        time::sleep(Duration::from_millis(100)).await;
+
+        let mut service = runner.stop().await;
+        time::timeout(Duration::from_secs(5), service.close())
+            .await
+            .unwrap();
+    }
+
+    // A local client which connects but never authenticates gets disconnected after a while, to
+    // not hold resources forever.
+    #[tokio::test(start_paused = true)]
+    async fn unauthenticated_local_client_times_out() {
+        let temp_dir = TempDir::new().unwrap();
+        let service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let port = service.local_endpoint().port;
+        let runner = ServiceRunner::start(service);
+
+        let mut client = tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .unwrap();
+
+        // The service closes the connection, so reading returns EOF (or an error).
+        let mut buffer = [0; 1];
+        let result = time::timeout(Duration::from_secs(60), client.read(&mut buffer))
+            .await
+            .unwrap();
+        assert_matches!(result, Ok(0) | Err(_));
+
+        runner.stop().await.close().await;
+    }
 
     #[tokio::test]
     async fn already_running() {
