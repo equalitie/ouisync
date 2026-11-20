@@ -3135,6 +3135,7 @@ dependencies = [
  "sha2",
  "similar-asserts",
  "slab",
+ "socket2 0.6.2",
  "state_monitor",
  "tempfile",
  "thiserror 2.0.18",

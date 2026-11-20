@@ -48,6 +48,16 @@ impl RemoteServer {
         self.local_addr
     }
 
+    /// For tests only: simulates the listener failing by shutting down its socket, which makes
+    /// `accept` fail. Linux only, because on other platforms that's not guaranteed to make `accept`
+    /// fail.
+    #[cfg(all(test, target_os = "linux"))]
+    pub fn kill(&self) {
+        socket2::SockRef::from(&self.tcp_listener)
+            .shutdown(std::net::Shutdown::Both)
+            .ok();
+    }
+
     /// Accept the next remote client connection. The returned value needs to be finalized (
     /// [AcceptedRemoteConnection::finalize]) before use.
     pub async fn accept(&self) -> io::Result<AcceptedRemoteConnection> {

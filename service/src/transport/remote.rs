@@ -127,13 +127,36 @@ mod tests {
     use assert_matches::assert_matches;
     use ouisync::{PeerAddr, WriteSecrets};
     use tempfile::TempDir;
-    use tokio::fs;
+    use tokio::{
+        fs,
+        time::{self, Duration},
+    };
     use tokio_rustls::rustls::{self, ClientConfig};
 
     use crate::{
-        Service,
+        Error, Service,
         test_utils::{self, ServiceRunner},
     };
+
+    // The remote listener failing (e.g. its socket invalidated by the OS when the server's network
+    // interface goes down or gets reconfigured) stops the service with an error, so that whatever
+    // supervises the server notices and restarts it.
+    #[cfg(target_os = "linux")] // See `RemoteServer::kill`.
+    #[tokio::test]
+    async fn remote_listener_failure_stops_service() {
+        test_utils::init_log();
+
+        let (_temp_dir, mut service, _server_addr, _client_config) = setup_service().await;
+
+        service.state().kill_remote_server();
+
+        let result = time::timeout(Duration::from_secs(10), service.run())
+            .await
+            .unwrap();
+        assert_matches!(result, Err(Error::Accept(_)));
+
+        service.close().await;
+    }
 
     #[tokio::test]
     async fn create_ok() {

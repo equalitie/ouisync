@@ -477,6 +477,12 @@ impl State {
         }
     }
 
+    /// For tests only: see `RemoteServer::kill`.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn kill_remote_server(&self) {
+        self.remote_server.lock().unwrap().as_ref().unwrap().kill();
+    }
+
     #[api]
     pub fn session_get_remote_control_listener_addr(&self) -> Option<SocketAddr> {
         self.remote_server
