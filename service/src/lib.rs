@@ -54,6 +54,9 @@ use transport::{
 };
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
+// Max time for a client to complete the connection setup (authentication for local clients, TLS and
+// websocket handshake for remote ones).
+const FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 
 // Don't use comments here so the file can be parsed as json.
 const LOCAL_ENDPOINT_KEY: ConfigKey<LocalEndpoint> = ConfigKey::new("local_endpoint", "").private();
@@ -267,7 +270,17 @@ impl Service {
         let mut closed_rx = self.closed.subscribe();
 
         let task = async move {
-            let Some((reader, writer)) = accepted.finalize().await else {
+            // Don't let a client which never completes the setup hold the connection (and block
+            // `close`) forever.
+            let result = select! {
+                result = time::timeout(FINALIZE_TIMEOUT, accepted.finalize()) => result,
+                _ = closed_rx.wait_for(|closed| *closed) => return,
+            };
+
+            let Some((reader, writer)) = result.unwrap_or_else(|_| {
+                tracing::debug!("client didn't complete the connection setup in time");
+                None
+            }) else {
                 return;
             };
 
