@@ -54,6 +54,9 @@ use transport::{
 };
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
+// Max time for a client to complete the connection setup (authentication for local clients, TLS and
+// websocket handshake for remote ones).
+const FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 
 // Don't use comments here so the file can be parsed as json.
 const LOCAL_ENDPOINT_KEY: ConfigKey<LocalEndpoint> = ConfigKey::new("local_endpoint", "").private();
@@ -267,7 +270,17 @@ impl Service {
         let mut closed_rx = self.closed.subscribe();
 
         let task = async move {
-            let Some((reader, writer)) = accepted.finalize().await else {
+            // Don't let a client which never completes the setup hold the connection (and block
+            // `close`) forever.
+            let result = select! {
+                result = time::timeout(FINALIZE_TIMEOUT, accepted.finalize()) => result,
+                _ = closed_rx.wait_for(|closed| *closed) => return,
+            };
+
+            let Some((reader, writer)) = result.unwrap_or_else(|_| {
+                tracing::debug!("client didn't complete the connection setup in time");
+                None
+            }) else {
                 return;
             };
 
@@ -305,7 +318,7 @@ mod tests {
     use ouisync::WriteSecrets;
     use rcgen::{Certificate, CertificateParams, KeyPair};
     use tempfile::TempDir;
-    use tokio::fs;
+    use tokio::{fs, io::AsyncReadExt};
     use tokio_rustls::rustls::{self, ClientConfig};
 
     use crate::{
@@ -315,6 +328,49 @@ mod tests {
     };
 
     use super::*;
+
+    // A local client which connects but never authenticates must not block closing the service.
+    #[tokio::test]
+    async fn close_with_unauthenticated_local_client() {
+        let temp_dir = TempDir::new().unwrap();
+        let service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let port = service.local_endpoint().port;
+        let runner = ServiceRunner::start(service);
+
+        let _client = tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .unwrap();
+        // Give the service time to accept the connection.
+        time::sleep(Duration::from_millis(100)).await;
+
+        let mut service = runner.stop().await;
+        time::timeout(Duration::from_secs(5), service.close())
+            .await
+            .unwrap();
+    }
+
+    // A local client which connects but never authenticates gets disconnected after a while, to
+    // not hold resources forever.
+    #[tokio::test(start_paused = true)]
+    async fn unauthenticated_local_client_times_out() {
+        let temp_dir = TempDir::new().unwrap();
+        let service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let port = service.local_endpoint().port;
+        let runner = ServiceRunner::start(service);
+
+        let mut client = tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .unwrap();
+
+        // The service closes the connection, so reading returns EOF (or an error).
+        let mut buffer = [0; 1];
+        let result = time::timeout(Duration::from_secs(60), client.read(&mut buffer))
+            .await
+            .unwrap();
+        assert_matches!(result, Ok(0) | Err(_));
+
+        runner.stop().await.close().await;
+    }
 
     #[tokio::test]
     async fn already_running() {
