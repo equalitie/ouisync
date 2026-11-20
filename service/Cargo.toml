@@ -60,6 +60,7 @@ paranoid-android            = "0.2.2"
 
 [dev-dependencies]
 assert_matches              = { workspace = true }
+libc                        = { workspace = true }
 rcgen                       = { workspace = true, features = ["pem"] }
 rmp                         = { workspace = true }
 rmpv                        = "1.3.1"

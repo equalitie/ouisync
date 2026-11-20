@@ -3108,6 +3108,7 @@ dependencies = [
  "hyper 1.8.1",
  "hyper-util",
  "indexmap",
+ "libc",
  "maxminddb",
  "metrics 0.24.6",
  "metrics-exporter-prometheus",
