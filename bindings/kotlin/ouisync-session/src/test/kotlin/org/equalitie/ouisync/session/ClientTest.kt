@@ -11,6 +11,9 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.io.File
 import java.io.IOException
+import java.net.InetAddress
+import java.net.ServerSocket
+import kotlin.concurrent.thread
 import kotlin.io.path.createTempDirectory
 import kotlin.time.Duration.Companion.seconds
 
@@ -88,6 +91,38 @@ class ClientTest {
             assertEquals(Response.Paths(emptyList()), response)
         } finally {
             service.stop()
+        }
+    }
+
+    // A connection closed by the service during authentication (e.g. because the service is being
+    // stopped) is a connection error, so it's retried like any other.
+    @OptIn(kotlin.ExperimentalStdlibApi::class)
+    @Test
+    fun connectionClosedDuringAuthentication() = runTest {
+        val configDir = "$tempDir/config"
+        File(configDir).mkdirs()
+
+        // Fake service which reads the client's challenge and then closes the connection. Reading it
+        // first makes the close clean, so the client sees the end of the stream (not a reset).
+        val server = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
+        val serverThread = thread {
+            try {
+                while (true) {
+                    server.accept().use { socket -> socket.getInputStream().readNBytes(256) }
+                }
+            } catch (e: IOException) {}
+        }
+
+        val authKey = ByteArray(32) { it.toByte() }.toHexString()
+        File("$configDir/local_endpoint.conf")
+            .writeText("""{"port":${server.localPort},"auth_key":"$authKey"}""")
+
+        try {
+            Client.connect(configDir, timeout = 1.seconds)
+            fail("unexpected success")
+        } catch (e: IOException) {} finally {
+            server.close()
+            serverThread.join()
         }
     }
 }

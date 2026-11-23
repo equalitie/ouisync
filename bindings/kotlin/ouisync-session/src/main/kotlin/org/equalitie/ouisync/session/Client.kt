@@ -199,10 +199,6 @@ internal class Client private constructor(private val socket: AsynchronousSocket
                 socket.readExact(buffer)
                 buffer.flip()
 
-                if (buffer.remaining() < HEADER_SIZE) {
-                    throw EOFException()
-                }
-
                 val size = buffer.getInt() - Long.SIZE_BYTES
                 val id = buffer.getLong()
 
@@ -215,10 +211,6 @@ internal class Client private constructor(private val socket: AsynchronousSocket
                 buffer.rewind()
                 socket.readExact(buffer)
                 buffer.flip()
-
-                if (buffer.remaining() < size) {
-                    throw EOFException()
-                }
 
                 val completer = messageMatcher.completer(id)
 
@@ -415,20 +407,13 @@ private class AsynchronousSocket(private val channel: AsynchronousSocketChannel)
 
     suspend fun read(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont -> channel.read(buffer, cont, IOHandler()) }
 
-    suspend fun readExact(buffer: ByteBuffer): Int {
-        var total = 0
-
+    /** Fills the whole buffer. Throws `EOFException` if the connection is closed before that. */
+    suspend fun readExact(buffer: ByteBuffer) {
         while (buffer.hasRemaining()) {
-            val n = read(buffer)
-
-            if (n <= 0) {
-                break
-            } else {
-                total += n
+            if (read(buffer) < 0) {
+                throw EOFException()
             }
         }
-
-        return total
     }
 
     suspend fun write(buffer: ByteBuffer) = writeMutex.withLock { writeUnlocked(buffer) }

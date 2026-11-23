@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' as io;
 
@@ -157,5 +158,46 @@ void main() {
 
     await client.close().timeout(const Duration(seconds: 5));
     await request;
+  });
+
+  // A connection closed by the server during authentication (e.g. because the server is being
+  // stopped) is a connection error, so it's retried like any other.
+  test('connection closed during authentication', () async {
+    final configPath = '${temp.path}/config';
+
+    // Fake server which reads the client's challenge and then closes the connection. Reading it
+    // first makes the close clean, so the client sees the end of the stream (not a reset).
+    final server =
+        await io.ServerSocket.bind(io.InternetAddress.loopbackIPv4, 0);
+    server.listen((socket) {
+      var received = 0;
+      socket.listen((data) {
+        received += data.length;
+
+        if (received >= 256) {
+          unawaited(socket.close());
+        }
+      });
+    });
+
+    await io.Directory(configPath).create(recursive: true);
+    await io.File('$configPath/local_endpoint.conf').writeAsString(
+      json.encode({'port': server.port, 'auth_key': '00' * 32}),
+    );
+
+    final client = await Client.connect(
+      configPath: configPath,
+      connectTimeout: const Duration(seconds: 1),
+    );
+
+    try {
+      await expectLater(
+        client.invoke(RequestSessionGetStoreDirs()),
+        throwsA(isA<io.SocketException>()),
+      );
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 }

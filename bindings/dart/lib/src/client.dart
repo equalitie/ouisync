@@ -449,6 +449,11 @@ class _Reader {
       }
     }
 
+    // The connection has been closed (e.g. the server is being stopped).
+    if (builder.length < length) {
+      throw const SocketException('connection closed');
+    }
+
     final bytes = builder.takeBytes();
     final output = bytes.sublist(0, length);
     builder.add(bytes.sublist(length));
