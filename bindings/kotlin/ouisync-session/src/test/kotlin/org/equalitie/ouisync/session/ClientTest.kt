@@ -71,4 +71,23 @@ class ClientTest {
             service.stop()
         }
     }
+
+    // Connecting before the service has been started for the first time (so the endpoint file
+    // doesn't exist yet) waits for the service.
+    @Test
+    fun connectBeforeServiceStarted() = runTest {
+        val configDir = "$tempDir/config"
+
+        val client = async { Client.connect(configDir, timeout = 10.seconds) }
+        testScheduler.runCurrent()
+
+        val service = Service.start(configDir)
+
+        try {
+            val response = client.await().invoke(Request.SessionGetStoreDirs)
+            assertEquals(Response.Paths(emptyList()), response)
+        } finally {
+            service.stop()
+        }
+    }
 }
