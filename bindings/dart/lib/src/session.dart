@@ -9,10 +9,16 @@ class Session extends api.Session {
   /// Creates a new session in this process.
   /// [configPath] is a path to a directory where configuration files shall be stored. If it
   /// doesn't exists, it will be created.
+  /// Requests fail when the connection to the server can't be (re-)established within
+  /// [connectTimeout] (30 seconds by default). If it's `null`, they wait until it is.
   static Future<Session> create({
     required String configPath,
+    Duration? connectTimeout = defaultConnectTimeout,
   }) =>
-      Client.connect(configPath: configPath).then(Session._);
+      Client.connect(
+        configPath: configPath,
+        connectTimeout: connectTimeout,
+      ).then(Session._);
 
   /// Stream of network events
   Stream<NetworkEvent> get networkEvents =>

@@ -107,4 +107,32 @@ void main() {
       await server.stop();
     }
   });
+
+  // Without a running server, a request fails after the connect timeout. The client stays usable,
+  // so a later request succeeds once the server is running.
+  test('connect timeout', () async {
+    final configPath = '${temp.path}/config';
+    final client = await Client.connect(
+      configPath: configPath,
+      connectTimeout: const Duration(milliseconds: 500),
+    );
+
+    await expectLater(
+      client.invoke(RequestSessionGetStoreDirs()),
+      throwsA(isA<io.FileSystemException>()),
+    );
+
+    final server = Server.create(configPath: configPath);
+    await server.start();
+
+    try {
+      expect(
+        await client.invoke(RequestSessionGetStoreDirs()),
+        isA<ResponsePaths>(),
+      );
+    } finally {
+      await client.close();
+      await server.stop();
+    }
+  });
 }
