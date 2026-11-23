@@ -3,10 +3,9 @@
 #[macro_use]
 mod common;
 
-use crate::common::observer::RepositoryObserver;
-
 use self::common::{
-    DEFAULT_REPO, Env, Proto, actor, dump, swarm::SyncSwarmCase, sync_watch, utils,
+    DEFAULT_REPO, Env, Proto, actor, dump, observer::RepositoryObserver, swarm::SyncSwarmCase,
+    sync_watch, utils,
 };
 use assert_matches::assert_matches;
 use backoff::{ExponentialBackoffBuilder, backoff::Backoff};

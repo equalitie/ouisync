@@ -1,4 +1,6 @@
-use super::{Env, Proto, actor, utils::copy};
+use super::{
+    DEFAULT_TEST_TIMEOUT, Env, Proto, actor, test_timeout, utils::copy, with_test_timeout,
+};
 use camino::{Utf8Path, Utf8PathBuf};
 use ouisync::{Error, Repository, StorageSize, StoreError};
 use ouisync_rand_test_dir as rtd;
@@ -102,6 +104,10 @@ impl SyncSwarmCase {
             })
             .collect();
 
+        // The more peers in the swam the longer the simulation takes. Adjust the timeout
+        // accordingly.
+        let timeout = u32::try_from(num_peers.saturating_sub(1)).unwrap() * test_timeout();
+
         info!(
             num_peers,
             num_repos = contents.len(),
@@ -115,8 +121,7 @@ impl SyncSwarmCase {
                     .iter()
                     .filter_map(|dir| walk_files(dir).map(|(_, file)| file.len()).max())
                     .max()
-                    .unwrap_or(0) as u64
-            )
+                    .unwrap_or(0) as u64),
         );
 
         for actor_index in 0..num_peers {
@@ -171,7 +176,7 @@ impl SyncSwarmCase {
                         let repo = &repos[repo_index].0;
 
                         for (path, test_file) in walk_files(content) {
-                            check(repo, &path, test_file)
+                            with_test_timeout(timeout, check(repo, &path, test_file))
                                 .instrument(info_span!("read", repo = repo_index, file = %path))
                                 .await;
                         }
