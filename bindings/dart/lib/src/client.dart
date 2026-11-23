@@ -28,6 +28,9 @@ class Client {
 
   _SocketState _state = const _Disconnected();
 
+  // Completed when `close` is called. Stops connecting.
+  final _closing = Completer<void>();
+
   var _nextMessageId = 0;
   final _responses = <int, Completer<Object?>>{};
   final _notifications = <int, StreamSink<Object?>>{};
@@ -74,6 +77,10 @@ class Client {
   }
 
   Future<void> close() async {
+    if (!_closing.isCompleted) {
+      _closing.complete();
+    }
+
     while (true) {
       final state = _state;
 
@@ -133,7 +140,7 @@ class Client {
           final Stream<Uint8List> stream;
 
           try {
-            (socket, stream) = await _connector.connect();
+            (socket, stream) = await _connector.connect(_closing.future);
           } catch (_) {
             // Let the next request try again.
             _state = _Disconnected();
@@ -318,11 +325,20 @@ class _Connector {
     this.timeout,
   });
 
-  Future<(Socket, Stream<Uint8List>)> connect() async {
+  /// Connects to the server, retrying until it succeeds, the timeout expires or [cancel]
+  /// completes (in which case it throws `StateError`).
+  Future<(Socket, Stream<Uint8List>)> connect(Future<void> cancel) async {
     final stopwatch = Stopwatch()..start();
     var delay = minDelay;
+    var cancelled = false;
+
+    unawaited(cancel.then((_) => cancelled = true));
 
     while (true) {
+      if (cancelled) {
+        throw StateError('client closed');
+      }
+
       try {
         // Read the endpoint on every attempt, because the server might be listening on a different
         // port than before (e.g. it had to rebind its listener). If the file doesn't exist yet or
@@ -346,7 +362,7 @@ class _Connector {
       }
 
       delay = _minDuration(delay * 2, maxDelay);
-      await Future.delayed(delay);
+      await Future.any([Future<void>.delayed(delay), cancel]);
     }
   }
 

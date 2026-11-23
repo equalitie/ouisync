@@ -135,4 +135,24 @@ void main() {
       await server.stop();
     }
   });
+
+  // Closing the client while it's trying to connect doesn't wait for the connection attempts to
+  // succeed or time out, and the pending request fails.
+  test('close while connecting', () async {
+    final configPath = '${temp.path}/config';
+    final client = await Client.connect(
+      configPath: configPath,
+      connectTimeout: null,
+    );
+
+    // No server is running, so this keeps trying to connect.
+    final request = expectLater(
+      client.invoke(RequestSessionGetStoreDirs()),
+      throwsA(isA<StateError>()),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+
+    await client.close().timeout(const Duration(seconds: 5));
+    await request;
+  });
 }
