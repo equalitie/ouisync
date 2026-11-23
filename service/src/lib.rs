@@ -46,11 +46,11 @@ use std::{
 use tokio::{
     select,
     sync::watch,
-    time::{self, MissedTickBehavior},
+    time::{self, Instant, MissedTickBehavior},
 };
 use transport::{
     AcceptedConnection, ClientError,
-    local::{AuthKey, LocalEndpoint, LocalServer},
+    local::{AcceptedLocalConnection, AuthKey, LocalEndpoint, LocalServer},
 };
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
@@ -63,10 +63,9 @@ const LOCAL_ENDPOINT_KEY: ConfigKey<LocalEndpoint> = ConfigKey::new("local_endpo
 
 pub struct Service {
     state: Arc<State>,
-    // `None` only transiently, between the local listener dying and `run()` rebinding it at the
-    // top of its loop - see `run`/`rebind_local_server`.
+    // `None` between the local listener failing and `run` rebinding it.
     local_server: Option<LocalServer>,
-    // The (resolved) endpoint the local listener binds to. Kept separately so we can rebind to it
+    // The (resolved) endpoint the local listener is bound to. Kept separately so we can rebind to it
     // even while `local_server` is `None`, and so `local_endpoint()` never has to unwrap.
     local_endpoint: LocalEndpoint,
     connections: FuturesUnordered<Pin<Box<dyn Future<Output = ()> + Send>>>,
@@ -128,39 +127,40 @@ impl Service {
         let mut repo_expiration_interval = time::interval(REPOSITORY_EXPIRATION_POLL_INTERVAL);
         repo_expiration_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
+        // Rebinding of the local listener in progress (see `rebind_local_server`). If `run` is
+        // cancelled in the middle of it, the next `run` starts a new one.
+        let mut local_rebind = None;
+
         loop {
-            // If the local listener is gone - the accept arm below dropped it after a fatal error,
-            // or a previous `run()` was cancelled mid-rebind - rebind it before polling it. Doing
-            // this here rather than inline in the accept arm is what keeps `run()` safe to cancel
-            // and restart: a restart that finds `local_server` still `None` recovers here instead
-            // of panicking on an `unwrap`.
-            //
-            // Known limitation: this rebind is awaited inline, so while it retries (capped backoff)
-            // the `select!` below is paused - remote accepts, connection cleanup and repository
-            // expiration don't make progress until it succeeds. That's acceptable because a rebind
-            // normally succeeds on the first try within milliseconds; a rebind that keeps failing
-            // means the local listener is unusable anyway. If that ever needs to run concurrently,
-            // drive the rebind as its own `select!` arm instead.
-            if self.local_server.is_none() {
-                self.rebind_local_server().await;
+            // If the local listener is gone (the accept arm below dropped it after a fatal error, or
+            // a previous `run` was cancelled while rebinding it), start rebinding it. The rebind
+            // runs concurrently with everything else below, so the existing connections keep being
+            // served in the meantime.
+            if self.local_server.is_none() && local_rebind.is_none() {
+                local_rebind = Some(Box::pin(rebind_local_server(
+                    self.local_endpoint,
+                    &self.state.config,
+                )));
             }
 
             select! {
-                result = self.local_server.as_ref().unwrap().accept() => {
+                result = accept_local(self.local_server.as_ref()) => {
                     match result {
                         Ok(conn) => self.start_connection(AcceptedConnection::Local(conn)),
                         // The local listener's socket can be invalidated by the OS independently
                         // of anything we did (e.g. iOS tearing down a backgrounded app's sockets),
-                        // and nothing else will ever recreate it - propagating this with `?` would
-                        // permanently kill the entire service (all local AND remote connections,
-                        // repository expiration, everything), not just local connections, since
-                        // this whole function "never completes (unless it errors)". Drop the dead
-                        // listener so the top of the loop rebinds it.
+                        // and nothing else will ever recreate it. Drop the dead listener so the top
+                        // of the loop starts rebinding it.
                         Err(error) => {
                             tracing::warn!(?error, "local server accept failed, rebinding");
                             self.local_server = None;
                         }
                     }
+                }
+                server = wait_for_rebind(local_rebind.as_mut()) => {
+                    local_rebind = None;
+                    self.local_endpoint = *server.endpoint();
+                    self.local_server = Some(server);
                 }
                 result = self.state.remote_accept() => {
                     // The remote listener is only used on servers, where stopping the service is
@@ -181,36 +181,6 @@ impl Service {
                 Some(_) = self.connections.next() => (),
                 _ = repo_expiration_interval.tick() => {
                     self.state.delete_expired_repositories().await;
-                }
-            }
-        }
-    }
-
-    /// Rebinds the local server listener to the same endpoint it was previously bound to.
-    /// Retries with capped exponential backoff instead of giving up, since giving up here would
-    /// mean no local client (i.e. the app's own UI) could ever talk to this service again until
-    /// restarted.
-    async fn rebind_local_server(&mut self) {
-        // Drop the old listener *before* trying to bind the new one: even though its socket may
-        // already be invalid at the OS level (that's exactly why we're here), our process still
-        // holds a reference to it until it's dropped, which is enough to make the OS refuse to
-        // bind a new socket to the same port (`AddrInUse`).
-        self.local_server = None;
-
-        let mut delay = Duration::from_millis(50);
-        const MAX_DELAY: Duration = Duration::from_secs(5);
-
-        loop {
-            match LocalServer::bind(self.local_endpoint).await {
-                Ok(server) => {
-                    tracing::info!(port = server.endpoint().port, "local server rebound");
-                    self.local_server = Some(server);
-                    return;
-                }
-                Err(error) => {
-                    tracing::warn!(?error, ?delay, "local server rebind failed, retrying");
-                    time::sleep(delay).await;
-                    delay = (delay * 2).min(MAX_DELAY);
                 }
             }
         }
@@ -297,6 +267,110 @@ impl Service {
         };
 
         self.connections.push(Box::pin(task));
+    }
+}
+
+/// Accepts the next connection on the local listener, or waits forever if there is none.
+async fn accept_local(server: Option<&LocalServer>) -> io::Result<AcceptedLocalConnection> {
+    match server {
+        Some(server) => server.accept().await,
+        None => future::pending().await,
+    }
+}
+
+/// Waits for the rebinding of the local listener to complete, or forever if there is none.
+async fn wait_for_rebind<F>(rebind: Option<&mut F>) -> LocalServer
+where
+    F: Future<Output = LocalServer> + Unpin,
+{
+    match rebind {
+        Some(rebind) => rebind.await,
+        None => future::pending().await,
+    }
+}
+
+/// Binds a new local listener, preferably to the same port as before. If that port has been taken
+/// in the meantime, binds to a random one instead and writes it to the endpoint file, so the
+/// clients can find it. Retries with capped exponential backoff instead of giving up, since giving
+/// up here would mean no local client (i.e. the app's own UI) could ever talk to this service again
+/// until restarted.
+///
+/// The old listener needs to be dropped before calling this, otherwise its port counts as taken.
+async fn rebind_local_server(endpoint: LocalEndpoint, config: &ConfigStore) -> LocalServer {
+    const MIN_DELAY: Duration = Duration::from_millis(50);
+    const MAX_DELAY: Duration = Duration::from_secs(5);
+    // Failing for longer than this is logged as an error, at most once per this interval.
+    const ERROR_LOG_INTERVAL: Duration = Duration::from_secs(60);
+
+    let started = Instant::now();
+    let mut delay = MIN_DELAY;
+    let mut attempts = 0;
+    let mut error_logged_at: Option<Instant> = None;
+
+    loop {
+        attempts += 1;
+
+        let result = match LocalServer::bind(endpoint).await {
+            // Someone else took the port. Waiting for it to be freed would likely take long (if it
+            // happens at all), so bind to a random port instead.
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
+                tracing::warn!(
+                    port = endpoint.port,
+                    "local server port taken, using a random one"
+                );
+                LocalServer::bind(LocalEndpoint {
+                    port: 0,
+                    ..endpoint
+                })
+                .await
+            }
+            result => result,
+        };
+
+        match result {
+            Ok(server) => {
+                if server.endpoint().port != endpoint.port
+                    && let Err(error) = config
+                        .entry(LOCAL_ENDPOINT_KEY)
+                        .set(server.endpoint())
+                        .await
+                {
+                    tracing::error!(
+                        ?error,
+                        "failed to save the new local endpoint, local clients won't find it"
+                    );
+                }
+
+                tracing::info!(
+                    port = server.endpoint().port,
+                    attempts,
+                    elapsed = ?started.elapsed(),
+                    "local server rebound"
+                );
+
+                return server;
+            }
+            Err(error) => {
+                let elapsed = started.elapsed();
+
+                if elapsed < ERROR_LOG_INTERVAL {
+                    tracing::warn!(?error, ?delay, "local server rebind failed, retrying");
+                } else if error_logged_at
+                    .is_none_or(|logged_at| logged_at.elapsed() >= ERROR_LOG_INTERVAL)
+                {
+                    tracing::error!(
+                        ?error,
+                        attempts,
+                        ?elapsed,
+                        "local server still can't be rebound, retrying"
+                    );
+                    error_logged_at = Some(Instant::now());
+                }
+
+                time::sleep(delay).await;
+                delay = (delay * 2).min(MAX_DELAY);
+            }
+        }
     }
 }
 
@@ -398,15 +472,20 @@ mod tests {
         let mut service = Service::init(temp_dir.path().join("config")).await.unwrap();
         let port = service.local_endpoint().port;
 
-        // Exercise the same rebind path `run()` takes on an accept error, without needing to
-        // simulate the OS invalidating the fd (which is OS/platform specific) - this still
-        // covers the tricky part: binding to the *same* port while the old (still live, not yet
-        // dropped) listener technically still holds it.
-        time::timeout(Duration::from_secs(5), service.rebind_local_server())
-            .await
-            .expect("rebind_local_server timed out");
+        // Exercise the same rebind path `run()` takes on an accept error (drop the old listener
+        // and bind a new one), without needing to simulate the OS invalidating the fd (which is
+        // OS/platform specific). The port is free, so the new listener gets the same one.
+        service.local_server = None;
 
-        assert_eq!(service.local_endpoint().port, port);
+        let server = time::timeout(
+            Duration::from_secs(5),
+            super::rebind_local_server(service.local_endpoint, &service.state.config),
+        )
+        .await
+        .expect("rebind_local_server timed out");
+
+        assert_eq!(server.endpoint().port, port);
+        service.local_server = Some(server);
 
         let runner = ServiceRunner::start(service);
 
