@@ -1,5 +1,6 @@
 package org.equalitie.ouisync.session
 
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import org.equalitie.ouisync.service.Service
 import org.equalitie.ouisync.service.initLog
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.Test
 import java.io.File
 import java.io.IOException
 import kotlin.io.path.createTempDirectory
+import kotlin.time.Duration.Companion.seconds
 
 class ClientTest {
     lateinit var tempDir: File
@@ -41,5 +43,32 @@ class ClientTest {
             client.invoke(Request.SessionGetStoreDirs)
             fail("unexpected success")
         } catch (e: IOException) {}
+    }
+
+    // While connecting, the client re-reads the endpoint file on every attempt, so it connects to
+    // the port the service actually listens on even when the file was stale at first.
+    @OptIn(kotlin.ExperimentalStdlibApi::class)
+    @Test
+    fun connectWithStaleEndpoint() = runTest {
+        val configDir = "$tempDir/config"
+        File(configDir).mkdirs()
+
+        // Port 0 can't be connected to. The service binds to a random port instead and writes it to
+        // the file (keeping the auth key).
+        val authKey = ByteArray(32) { it.toByte() }.toHexString()
+        File("$configDir/local_endpoint.conf").writeText("""{"port":0,"auth_key":"$authKey"}""")
+
+        val client = async { Client.connect(configDir, timeout = 10.seconds) }
+        // Let the client read the (stale) endpoint file before the service rewrites it.
+        testScheduler.runCurrent()
+
+        val service = Service.start(configDir)
+
+        try {
+            val response = client.await().invoke(Request.SessionGetStoreDirs)
+            assertEquals(Response.Paths(emptyList()), response)
+        } finally {
+            service.stop()
+        }
     }
 }
