@@ -96,9 +96,13 @@ jobs:
               env:
                   RUST_LOG: ouisync=debug,gc=debug,network=debug,sync=debug
 
+            - name: Run net and service integration tests
+              if: matrix.test
+              run: ${{ matrix.cargo-command }} test --package ouisync-net --package ouisync-service --test '*'
+
             - name: Run cli integration tests
               if: matrix.test && matrix.name == 'linux'
-              run: ${{ matrix.cargo-command }} test --package ouisync-cli --test cli
+              run: ${{ matrix.cargo-command }} test --package ouisync-cli --test '*'
 
     check_kotlin_bindings:
         name: check kotlin bindings
