@@ -71,7 +71,6 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
 tokio-util = { workspace = true, features = ["time", "codec"] }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = [ "env-filter" ] }
 xxhash-rust = { version = "0.8.19", default-features = false, features = ["xxh3"] }
 urlencoding = "2.1.0"
 vint64 = "1.0.1"
@@ -94,6 +93,7 @@ similar-asserts = { workspace = true }
 tempfile = { workspace = true }
 test-strategy = { workspace = true }
 tokio = { workspace = true, features = ["process", "test-util"] }
+tracing-subscriber = { workspace = true, features = [ "env-filter" ] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 patchbay = "0.5.0"

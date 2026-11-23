@@ -12,3 +12,6 @@ version.workspace = true
 [dependencies]
 tokio   = { workspace = true, features = [ "macros", "rt-multi-thread" ] }
 reqwest = { workspace = true, features = ["rustls-tls"] }
+
+[lints]
+workspace = true

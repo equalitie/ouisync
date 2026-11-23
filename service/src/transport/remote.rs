@@ -134,7 +134,7 @@ mod tests {
     use tokio_rustls::rustls::{self, ClientConfig};
 
     use crate::{
-        Error, Service,
+        Service,
         test_utils::{self, ServiceRunner},
     };
 
@@ -153,7 +153,7 @@ mod tests {
         let result = time::timeout(Duration::from_secs(10), service.run())
             .await
             .unwrap();
-        assert_matches!(result, Err(Error::Accept(_)));
+        assert_matches!(result, Err(crate::Error::Accept(_)));
 
         service.close().await;
     }

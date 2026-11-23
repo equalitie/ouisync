@@ -13,3 +13,6 @@ metrics-util = { workspace = true, features = ["storage"] }
 tokio        = { workspace = true, features = ["sync"] }
 tracing      = { workspace = true }
 reqwest      = { workspace = true }
+
+[lints]
+workspace = true
