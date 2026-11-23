@@ -59,6 +59,9 @@ class Client {
     return Client._(connector);
   }
 
+  /// Number of requests waiting for a response. Intended for tests.
+  int get pendingRequestCount => _responses.length;
+
   Future<Response> invoke(Request request) async {
     final id = _nextMessageId++;
     return await _invokeWithMessageId(id, request);
@@ -110,11 +113,13 @@ class Client {
     final bytes = encodeLengthDelimited(encodeMessage(id, request));
 
     while (true) {
+      final socket = await _ensureConnected();
+
+      // Register the response only once connected, so it isn't left behind when connecting fails.
+      // No response can arrive before the request is sent below.
       final completer = Completer();
       final response = completer.future;
       _responses[id] = completer;
-
-      final socket = await _ensureConnected();
 
       try {
         socket.add(bytes);

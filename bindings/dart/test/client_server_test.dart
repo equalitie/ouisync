@@ -122,6 +122,9 @@ void main() {
       throwsA(isA<io.FileSystemException>()),
     );
 
+    // The failed request isn't left behind.
+    expect(client.pendingRequestCount, 0);
+
     final server = Server.create(configPath: configPath);
     await server.start();
 
