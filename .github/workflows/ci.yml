@@ -259,7 +259,6 @@ jobs:
                   --lib
                   --release
                   --target ${{ matrix.target }}
-                  --config profile.release.strip=true
 
             # The artifacts have the layout `<target triple>/<library file>`, so they can be merged.
             - name: Collect native library
