@@ -21,6 +21,7 @@ import android.system.ErrnoException
 import android.system.OsConstants
 import android.util.Log
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
@@ -79,7 +80,13 @@ class OuisyncProvider : DocumentsProvider() {
         private val ROOT_ID = "default"
     }
 
-    private val scope = CoroutineScope(SupervisorJob())
+    // Log uncaught exceptions of the launched coroutines (e.g. creating a session or a subscription
+    // failing because the service is being restarted) instead of crashing the whole process.
+    private val scope =
+        CoroutineScope(
+            SupervisorJob() +
+                CoroutineExceptionHandler { _, e -> Log.e(TAG, "uncaught exception", e) },
+        )
 
     // StateFlow that emits new session every time OuisyncService is (re)started.
     private val sessionFlow: StateFlow<Session?> by lazy {

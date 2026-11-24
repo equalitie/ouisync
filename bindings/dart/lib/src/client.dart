@@ -19,10 +19,17 @@ import '../generated/api.g.dart'
 import 'length_delimited_codec.dart';
 import 'message_codec.dart';
 
+/// Default time after which a request fails when the connection to the server can't be
+/// (re-)established.
+const defaultConnectTimeout = Duration(seconds: 30);
+
 class Client {
   final _Connector _connector;
 
   _SocketState _state = const _Disconnected();
+
+  // Completed when `close` is called. Stops connecting.
+  final _closing = Completer<void>();
 
   var _nextMessageId = 0;
   final _responses = <int, Completer<Object?>>{};
@@ -30,23 +37,30 @@ class Client {
 
   Client._(this._connector);
 
+  /// Creates a client of the server with the given [configPath]. The connection is established
+  /// lazily, on the first request, and re-established when lost.
+  ///
+  /// A request fails if the connection can't be (re-)established within [connectTimeout] (e.g.
+  /// because the server isn't running). If it's `null`, the request waits until the connection is
+  /// established.
   static Future<Client> connect({
     required String configPath,
     Duration minReconnectDelay = const Duration(milliseconds: 50),
     Duration maxReconnectDelay = const Duration(seconds: 1),
+    Duration? connectTimeout = defaultConnectTimeout,
   }) async {
-    final (port, authKey) =
-        await _readLocalEndpoint('$configPath/local_endpoint.conf');
-
     final connector = _Connector(
-      port: port,
-      authKey: authKey,
+      endpointPath: '$configPath/local_endpoint.conf',
       minDelay: minReconnectDelay,
       maxDelay: maxReconnectDelay,
+      timeout: connectTimeout,
     );
 
     return Client._(connector);
   }
+
+  /// Number of requests waiting for a response. Intended for tests.
+  int get pendingRequestCount => _responses.length;
 
   Future<Response> invoke(Request request) async {
     final id = _nextMessageId++;
@@ -66,6 +80,10 @@ class Client {
   }
 
   Future<void> close() async {
+    if (!_closing.isCompleted) {
+      _closing.complete();
+    }
+
     while (true) {
       final state = _state;
 
@@ -95,11 +113,13 @@ class Client {
     final bytes = encodeLengthDelimited(encodeMessage(id, request));
 
     while (true) {
+      final socket = await _ensureConnected();
+
+      // Register the response only once connected, so it isn't left behind when connecting fails.
+      // No response can arrive before the request is sent below.
       final completer = Completer();
       final response = completer.future;
       _responses[id] = completer;
-
-      final socket = await _ensureConnected();
 
       try {
         socket.add(bytes);
@@ -121,7 +141,18 @@ class Client {
           final completer = Completer();
           _state = _Transitioning(completer.future);
 
-          final (socket, stream) = await _connector.connect();
+          final Socket socket;
+          final Stream<Uint8List> stream;
+
+          try {
+            (socket, stream) = await _connector.connect(_closing.future);
+          } catch (_) {
+            // Let the next request try again.
+            _state = _Disconnected();
+            completer.complete();
+            rethrow;
+          }
+
           final subscription = stream.transform(LengthDelimitedCodec()).listen(
                 _receive,
                 onError: _receiveError,
@@ -277,48 +308,78 @@ _minDuration(Duration a, Duration b) => (a < b) ? a : b;
 Future<(int, List<int>)> _readLocalEndpoint(String path) async {
   final file = File(path);
   final content = await file.readAsString();
-  final raw = json.decode(content) as Map<String, Object?>;
+  final raw = json.decode(content);
 
-  final port = raw['port'] as int;
-  final authKey = HEX.decode(raw['auth_key'] as String);
-
-  return (port, authKey);
+  if (raw case {'port': int port, 'auth_key': String authKey}) {
+    return (port, HEX.decode(authKey));
+  } else {
+    throw FormatException('invalid local endpoint', content);
+  }
 }
 
 class _Connector {
-  final int port;
-  final List<int> authKey;
+  final String endpointPath;
   final Duration minDelay;
   final Duration maxDelay;
+  final Duration? timeout;
 
   const _Connector({
-    required this.port,
-    required this.authKey,
+    required this.endpointPath,
     this.minDelay = const Duration(milliseconds: 50),
     this.maxDelay = const Duration(seconds: 1),
+    this.timeout,
   });
 
-  Future<(Socket, Stream<Uint8List>)> connect() async {
+  /// Connects to the server, retrying until it succeeds, the timeout expires or [cancel]
+  /// completes (in which case it throws `StateError`).
+  Future<(Socket, Stream<Uint8List>)> connect(Future<void> cancel) async {
+    final stopwatch = Stopwatch()..start();
     var delay = minDelay;
+    var cancelled = false;
+
+    unawaited(cancel.then((_) => cancelled = true));
 
     while (true) {
+      if (cancelled) {
+        throw StateError('client closed');
+      }
+
       try {
+        // Read the endpoint on every attempt, because the server might be listening on a different
+        // port than before (e.g. it had to rebind its listener). If the file doesn't exist yet or
+        // is just being rewritten, the attempt fails and is retried.
+        final (port, authKey) = await _readLocalEndpoint(endpointPath);
+
         final socket = await Socket.connect(InternetAddress.loopbackIPv4, port);
         final stream = socket.asBroadcastStream();
 
-        await _authenticate(stream, socket);
+        await _authenticate(stream, socket, authKey);
 
         return (socket, stream);
       } on SocketException {
-        delay = _minDuration(delay * 2, maxDelay);
-        await Future.delayed(delay);
+        if (_timedOut(stopwatch)) rethrow;
+      } on FileSystemException {
+        // The endpoint file doesn't exist yet or can't be read.
+        if (_timedOut(stopwatch)) rethrow;
+      } on FormatException {
+        // Invalid content of the endpoint file.
+        if (_timedOut(stopwatch)) rethrow;
       }
+
+      delay = _minDuration(delay * 2, maxDelay);
+      await Future.any([Future<void>.delayed(delay), cancel]);
     }
+  }
+
+  bool _timedOut(Stopwatch stopwatch) {
+    final timeout = this.timeout;
+    return timeout != null && stopwatch.elapsed >= timeout;
   }
 
   Future<void> _authenticate(
     Stream<Uint8List> stream,
     IOSink sink,
+    List<int> authKey,
   ) async {
     const challengeSize = 256;
     const proofSize = 32;
@@ -386,6 +447,11 @@ class _Reader {
           break;
         }
       }
+    }
+
+    // The connection has been closed (e.g. the server is being stopped).
+    if (builder.length < length) {
+      throw const SocketException('connection closed');
     }
 
     final bytes = builder.takeBytes();

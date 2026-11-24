@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** Stop publishing the debug variants of the Kotlin packages (`ouisync-service-debug`,
   `ouisync-android-debug`)
 - Fix linking issues on Android in the C++ bindings
+- Binding the network to a specific port no longer silently falls back to a random port when the
+  port is already taken. The listener stays unbound instead and binding is retried until the port is
+  free. Port `0` keeps preferring the last used port and falling back to a random one.
+- Network listeners which stopped working (e.g. when the network interface went down while the app
+  was in the background) are now rebound automatically, on the same port if possible.
 
 [#197]: https://github.com/equalitie/ouisync/pull/197
 [#198]: https://github.com/equalitie/ouisync/pull/198

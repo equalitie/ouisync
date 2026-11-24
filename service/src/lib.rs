@@ -46,21 +46,28 @@ use std::{
 use tokio::{
     select,
     sync::watch,
-    time::{self, MissedTickBehavior},
+    time::{self, Instant, MissedTickBehavior},
 };
 use transport::{
     AcceptedConnection, ClientError,
-    local::{AuthKey, LocalEndpoint, LocalServer},
+    local::{AcceptedLocalConnection, AuthKey, LocalEndpoint, LocalServer},
 };
 
 const REPOSITORY_EXPIRATION_POLL_INTERVAL: Duration = Duration::from_secs(60 * 60);
+// Max time for a client to complete the connection setup (authentication for local clients, TLS and
+// websocket handshake for remote ones).
+const FINALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 
 // Don't use comments here so the file can be parsed as json.
 const LOCAL_ENDPOINT_KEY: ConfigKey<LocalEndpoint> = ConfigKey::new("local_endpoint", "").private();
 
 pub struct Service {
     state: Arc<State>,
-    local_server: LocalServer,
+    // `None` between the local listener failing and `run` rebinding it.
+    local_server: Option<LocalServer>,
+    // The (resolved) endpoint the local listener is bound to. Kept separately so we can rebind to it
+    // even while `local_server` is `None`, and so `local_endpoint()` never has to unwrap.
+    local_endpoint: LocalEndpoint,
     connections: FuturesUnordered<Pin<Box<dyn Future<Output = ()> + Send>>>,
     closed: watch::Sender<bool>,
 }
@@ -91,6 +98,8 @@ impl Service {
 
         local_endpoint_entry.set(local_server.endpoint()).await?;
 
+        let resolved_endpoint = *local_server.endpoint();
+
         tracing::debug!(
             port = local_server.endpoint().port,
             "local server listening"
@@ -101,7 +110,8 @@ impl Service {
 
         Ok(Self {
             state,
-            local_server,
+            local_server: Some(local_server),
+            local_endpoint: resolved_endpoint,
             connections: FuturesUnordered::new(),
             closed: watch::Sender::new(false),
         })
@@ -117,14 +127,55 @@ impl Service {
         let mut repo_expiration_interval = time::interval(REPOSITORY_EXPIRATION_POLL_INTERVAL);
         repo_expiration_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
+        // Rebinding of the local listener in progress (see `rebind_local_server`). If `run` is
+        // cancelled in the middle of it, the next `run` starts a new one.
+        let mut local_rebind = None;
+
         loop {
+            // If the local listener is gone (the accept arm below dropped it after a fatal error, or
+            // a previous `run` was cancelled while rebinding it), start rebinding it. The rebind
+            // runs concurrently with everything else below, so the existing connections keep being
+            // served in the meantime.
+            if self.local_server.is_none() && local_rebind.is_none() {
+                local_rebind = Some(Box::pin(rebind_local_server(
+                    self.local_endpoint,
+                    &self.state.config,
+                )));
+            }
+
             select! {
-                result = self.local_server.accept() => {
-                    let conn = result.map_err(Error::Accept)?;
-                    self.start_connection(AcceptedConnection::Local(conn));
+                result = accept_local(self.local_server.as_ref()) => {
+                    match result {
+                        Ok(conn) => self.start_connection(AcceptedConnection::Local(conn)),
+                        // The local listener's socket can be invalidated by the OS independently
+                        // of anything we did (e.g. iOS tearing down a backgrounded app's sockets),
+                        // and nothing else will ever recreate it. Drop the dead listener so the top
+                        // of the loop starts rebinding it.
+                        Err(error) => {
+                            tracing::warn!(?error, "local server accept failed, rebinding");
+                            self.local_server = None;
+                        }
+                    }
+                }
+                server = wait_for_rebind(local_rebind.as_mut()) => {
+                    local_rebind = None;
+                    self.local_endpoint = *server.endpoint();
+                    self.local_server = Some(server);
                 }
                 result = self.state.remote_accept() => {
-                    let conn = result.map_err(Error::Accept)?;
+                    // The remote listener is only used on servers, where stopping the service is
+                    // preferable to rebinding the listener: the failure gets noticed and the
+                    // service restarted by whatever supervises it. Log it loudly, so the cause is
+                    // clear from the log.
+                    let conn = result.map_err(|error| {
+                        tracing::error!(
+                            ?error,
+                            addr = ?self.state.session_get_remote_control_listener_addr(),
+                            "remote control listener failed, stopping the service"
+                        );
+
+                        Error::Accept(error)
+                    })?;
                     self.start_connection(AcceptedConnection::Remote(conn));
                 }
                 Some(_) = self.connections.next() => (),
@@ -148,7 +199,7 @@ impl Service {
     }
 
     pub fn local_endpoint(&self) -> &LocalEndpoint {
-        self.local_server.endpoint()
+        &self.local_endpoint
     }
 
     pub fn store_dirs(&self) -> Vec<PathBuf> {
@@ -189,7 +240,17 @@ impl Service {
         let mut closed_rx = self.closed.subscribe();
 
         let task = async move {
-            let Some((reader, writer)) = accepted.finalize().await else {
+            // Don't let a client which never completes the setup hold the connection (and block
+            // `close`) forever.
+            let result = select! {
+                result = time::timeout(FINALIZE_TIMEOUT, accepted.finalize()) => result,
+                _ = closed_rx.wait_for(|closed| *closed) => return,
+            };
+
+            let Some((reader, writer)) = result.unwrap_or_else(|_| {
+                tracing::debug!("client didn't complete the connection setup in time");
+                None
+            }) else {
                 return;
             };
 
@@ -206,6 +267,110 @@ impl Service {
         };
 
         self.connections.push(Box::pin(task));
+    }
+}
+
+/// Accepts the next connection on the local listener, or waits forever if there is none.
+async fn accept_local(server: Option<&LocalServer>) -> io::Result<AcceptedLocalConnection> {
+    match server {
+        Some(server) => server.accept().await,
+        None => future::pending().await,
+    }
+}
+
+/// Waits for the rebinding of the local listener to complete, or forever if there is none.
+async fn wait_for_rebind<F>(rebind: Option<&mut F>) -> LocalServer
+where
+    F: Future<Output = LocalServer> + Unpin,
+{
+    match rebind {
+        Some(rebind) => rebind.await,
+        None => future::pending().await,
+    }
+}
+
+/// Binds a new local listener, preferably to the same port as before. If that port has been taken
+/// in the meantime, binds to a random one instead and writes it to the endpoint file, so the
+/// clients can find it. Retries with capped exponential backoff instead of giving up, since giving
+/// up here would mean no local client (i.e. the app's own UI) could ever talk to this service again
+/// until restarted.
+///
+/// The old listener needs to be dropped before calling this, otherwise its port counts as taken.
+async fn rebind_local_server(endpoint: LocalEndpoint, config: &ConfigStore) -> LocalServer {
+    const MIN_DELAY: Duration = Duration::from_millis(50);
+    const MAX_DELAY: Duration = Duration::from_secs(5);
+    // Failing for longer than this is logged as an error, at most once per this interval.
+    const ERROR_LOG_INTERVAL: Duration = Duration::from_secs(60);
+
+    let started = Instant::now();
+    let mut delay = MIN_DELAY;
+    let mut attempts = 0;
+    let mut error_logged_at: Option<Instant> = None;
+
+    loop {
+        attempts += 1;
+
+        let result = match LocalServer::bind(endpoint).await {
+            // Someone else took the port. Waiting for it to be freed would likely take long (if it
+            // happens at all), so bind to a random port instead.
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
+                tracing::warn!(
+                    port = endpoint.port,
+                    "local server port taken, using a random one"
+                );
+                LocalServer::bind(LocalEndpoint {
+                    port: 0,
+                    ..endpoint
+                })
+                .await
+            }
+            result => result,
+        };
+
+        match result {
+            Ok(server) => {
+                if server.endpoint().port != endpoint.port
+                    && let Err(error) = config
+                        .entry(LOCAL_ENDPOINT_KEY)
+                        .set(server.endpoint())
+                        .await
+                {
+                    tracing::error!(
+                        ?error,
+                        "failed to save the new local endpoint, local clients won't find it"
+                    );
+                }
+
+                tracing::info!(
+                    port = server.endpoint().port,
+                    attempts,
+                    elapsed = ?started.elapsed(),
+                    "local server rebound"
+                );
+
+                return server;
+            }
+            Err(error) => {
+                let elapsed = started.elapsed();
+
+                if elapsed < ERROR_LOG_INTERVAL {
+                    tracing::warn!(?error, ?delay, "local server rebind failed, retrying");
+                } else if error_logged_at
+                    .is_none_or(|logged_at| logged_at.elapsed() >= ERROR_LOG_INTERVAL)
+                {
+                    tracing::error!(
+                        ?error,
+                        attempts,
+                        ?elapsed,
+                        "local server still can't be rebound, retrying"
+                    );
+                    error_logged_at = Some(Instant::now());
+                }
+
+                time::sleep(delay).await;
+                delay = (delay * 2).min(MAX_DELAY);
+            }
+        }
     }
 }
 
@@ -227,7 +392,7 @@ mod tests {
     use ouisync::WriteSecrets;
     use rcgen::{Certificate, CertificateParams, KeyPair};
     use tempfile::TempDir;
-    use tokio::fs;
+    use tokio::{fs, io::AsyncReadExt};
     use tokio_rustls::rustls::{self, ClientConfig};
 
     use crate::{
@@ -237,6 +402,49 @@ mod tests {
     };
 
     use super::*;
+
+    // A local client which connects but never authenticates must not block closing the service.
+    #[tokio::test]
+    async fn close_with_unauthenticated_local_client() {
+        let temp_dir = TempDir::new().unwrap();
+        let service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let port = service.local_endpoint().port;
+        let runner = ServiceRunner::start(service);
+
+        let _client = tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .unwrap();
+        // Give the service time to accept the connection.
+        time::sleep(Duration::from_millis(100)).await;
+
+        let mut service = runner.stop().await;
+        time::timeout(Duration::from_secs(5), service.close())
+            .await
+            .unwrap();
+    }
+
+    // A local client which connects but never authenticates gets disconnected after a while, to
+    // not hold resources forever.
+    #[tokio::test(start_paused = true)]
+    async fn unauthenticated_local_client_times_out() {
+        let temp_dir = TempDir::new().unwrap();
+        let service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let port = service.local_endpoint().port;
+        let runner = ServiceRunner::start(service);
+
+        let mut client = tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .unwrap();
+
+        // The service closes the connection, so reading returns EOF (or an error).
+        let mut buffer = [0; 1];
+        let result = time::timeout(Duration::from_secs(60), client.read(&mut buffer))
+            .await
+            .unwrap();
+        assert_matches!(result, Ok(0) | Err(_));
+
+        runner.stop().await.close().await;
+    }
 
     #[tokio::test]
     async fn already_running() {
@@ -252,6 +460,75 @@ mod tests {
         );
 
         service0.close().await;
+    }
+
+    // Regression test for the local listener's socket being invalidated independently of
+    // anything the service did (e.g. iOS tearing down a backgrounded app's sockets): the service
+    // must rebind and keep accepting new local connections on the same port, instead of its
+    // whole run loop dying because one `accept()` call failed.
+    #[tokio::test]
+    async fn rebind_local_server() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let port = service.local_endpoint().port;
+
+        // Exercise the same rebind path `run()` takes on an accept error (drop the old listener
+        // and bind a new one), without needing to simulate the OS invalidating the fd (which is
+        // OS/platform specific). The port is free, so the new listener gets the same one.
+        service.local_server = None;
+
+        let server = time::timeout(
+            Duration::from_secs(5),
+            super::rebind_local_server(service.local_endpoint, &service.state.config),
+        )
+        .await
+        .expect("rebind_local_server timed out");
+
+        assert_eq!(server.endpoint().port, port);
+        service.local_server = Some(server);
+
+        let runner = ServiceRunner::start(service);
+
+        // A fresh connection to the same port must still be accepted after rebinding.
+        tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .expect("failed to connect after rebind");
+
+        let mut service = runner.stop().await;
+        service.close().await;
+    }
+
+    // Regression test for `run()` being cancelled while `rebind_local_server` had already dropped
+    // the old listener (so the `Service` is left with no local listener), then restarted: `run()`
+    // must rebind on entry rather than panic on a missing listener.
+    #[tokio::test]
+    async fn run_rebinds_missing_local_server_on_start() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut service = Service::init(temp_dir.path().join("config")).await.unwrap();
+        let port = service.local_endpoint().port;
+
+        // Simulate the state left behind by a cancel during rebind: the listener is gone.
+        service.local_server = None;
+
+        let runner = ServiceRunner::start(service);
+
+        // The rebind happens inside `run()` right after start, so retry briefly until the listener
+        // comes back up on the same port.
+        let connect = async {
+            loop {
+                match tokio::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await {
+                    Ok(stream) => break stream,
+                    Err(_) => time::sleep(Duration::from_millis(10)).await,
+                }
+            }
+        };
+        time::timeout(Duration::from_secs(5), connect)
+            .await
+            .expect("listener never came back up after restart with a missing listener");
+
+        let mut service = runner.stop().await;
+        assert_eq!(service.local_endpoint().port, port);
+        service.close().await;
     }
 
     #[tokio::test]

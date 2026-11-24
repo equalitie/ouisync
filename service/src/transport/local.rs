@@ -6,6 +6,7 @@ use super::{ClientError, ReadError, WriteError};
 use crate::protocol::{Message, Request, ResponseResult};
 use bytes::BytesMut;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use ouisync_net::tcp::accept_with_retries;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     io,
@@ -49,9 +50,10 @@ impl LocalServer {
     }
 
     /// Accept the next local client connection. The returned value needs to be finalized (
-    /// [AcceptedLocalConnection::finalize]) before use.
+    /// [AcceptedLocalConnection::finalize]) before use. Returns an error only when the listener
+    /// stopped working (temporary errors are retried).
     pub async fn accept(&self) -> io::Result<AcceptedLocalConnection> {
-        let (socket, _addr) = self.listener.accept().await?;
+        let (socket, _addr) = accept_with_retries(|| self.listener.accept()).await?;
 
         Ok(AcceptedLocalConnection {
             socket,
@@ -200,11 +202,12 @@ mod tests {
     use futures_util::SinkExt;
     use ouisync::{AccessSecrets, PeerAddr, ShareToken};
     use tempfile::TempDir;
+    use tokio::time::{self, Duration};
     use tokio_stream::StreamExt;
     use tracing::Instrument;
 
     use crate::{
-        Service,
+        self as service, Service,
         file::FileHandle,
         protocol::{
             Message, MessageId, ProtocolError, RepositoryHandle, Request, Response, ResponseResult,
@@ -215,6 +218,67 @@ mod tests {
     };
 
     use super::{LocalClientReader, LocalClientWriter, LocalEndpoint};
+
+    // When the local listener has to be rebound but its port has been taken in the meantime, the
+    // service binds it to a random port instead and writes the new port to the endpoint file. The
+    // existing connections keep being served while rebinding.
+    #[tokio::test]
+    async fn rebind_to_random_port_when_port_taken() {
+        test_utils::init_log();
+
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().join("config");
+
+        let service = Service::init(config_dir.clone()).await.unwrap();
+        let old_endpoint = *service.local_endpoint();
+        let runner = ServiceRunner::start(service);
+
+        let mut old_client = TestClient::connect(old_endpoint).await;
+        old_client
+            .invoke::<Vec<PathBuf>>(MessageId::next(), Request::SessionGetStoreDirs)
+            .await
+            .unwrap();
+
+        // Simulate the listener failing and its port being taken by someone else before the
+        // service rebinds it.
+        let mut service = runner.stop().await;
+        service.local_server = None;
+        let _taken = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, old_endpoint.port)).unwrap();
+        let runner = ServiceRunner::start(service);
+
+        // The existing connection keeps being served.
+        time::timeout(
+            Duration::from_secs(5),
+            old_client.invoke::<Vec<PathBuf>>(MessageId::next(), Request::SessionGetStoreDirs),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        // A new client finds the new port in the endpoint file. Like the real clients, retry reading
+        // it, because it might be just being rewritten.
+        let new_endpoint = time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(endpoint) = service::local_endpoint(&config_dir).await
+                    && endpoint.port != old_endpoint.port
+                {
+                    break endpoint;
+                }
+
+                time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let mut new_client = TestClient::connect(new_endpoint).await;
+        new_client
+            .invoke::<Vec<PathBuf>>(MessageId::next(), Request::SessionGetStoreDirs)
+            .await
+            .unwrap();
+
+        runner.stop().await.close().await;
+    }
 
     #[tokio::test]
     async fn sanity_check() {

@@ -31,7 +31,7 @@ pub struct UdpSocket(tokio::net::UdpSocket);
 
 impl UdpSocket {
     /// Configures a UDP the socket with the given options and binds it to the given address. If
-    /// the port is taken, uses a random one,
+    /// the port is taken, uses a random one, unless `options` has strict port enabled.
     pub fn bind_with_options(addr: SocketAddr, options: SocketOptions) -> io::Result<Self> {
         let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, None)?;
         socket.set_nonblocking(true)?;
@@ -41,7 +41,7 @@ impl UdpSocket {
             socket.set_reuse_address(true).ok();
         }
 
-        socket::bind_with_fallback(&socket, addr)?;
+        socket::bind(&socket, addr, options)?;
 
         Ok(Self(tokio::net::UdpSocket::from_std(socket.into())?))
     }

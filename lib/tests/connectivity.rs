@@ -1,4 +1,7 @@
 //! Test for connectivity under various network configurations and conditions
+//!
+//! Note: the tests use `patchbay` which requires unprivileged user namespaces enabled, otherwise
+//! they'll fail. See https://github.com/n0-computer/patchbay#requirements
 
 #![cfg(target_os = "linux")]
 

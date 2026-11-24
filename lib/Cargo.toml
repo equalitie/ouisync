@@ -71,7 +71,6 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
 tokio-util = { workspace = true, features = ["time", "codec"] }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = [ "env-filter" ] }
 xxhash-rust = { version = "0.8.19", default-features = false, features = ["xxh3"] }
 urlencoding = "2.1.0"
 vint64 = "1.0.1"
@@ -86,6 +85,7 @@ hdrhistogram = { version = "7.5.4", default-features = false, features = ["sync"
 libsqlite3-sys = "0.30.1"
 metrics_ext = { path = "../metrics_ext" }
 ouisync-rand-test-dir = { path = "../rand-test-dir" }
+net = { package = "ouisync-net", path = "../net", features = ["test-utils"] }
 ouisync-tracing-fmt = { path = "../tracing_fmt" }
 proptest = { workspace = true }
 rmp = { workspace = true }
@@ -95,7 +95,7 @@ similar-asserts = { workspace = true }
 tempfile = { workspace = true }
 test-strategy = { workspace = true }
 tokio = { workspace = true, features = ["process", "test-util"] }
-tracing-subscriber = { workspace = true, features = [ "json" ] }
+tracing-subscriber = { workspace = true, features = [ "json", "env-filter" ] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 patchbay = "0.5.0"

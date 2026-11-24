@@ -127,13 +127,53 @@ mod tests {
     use assert_matches::assert_matches;
     use ouisync::{PeerAddr, WriteSecrets};
     use tempfile::TempDir;
-    use tokio::fs;
+    use tokio::{
+        fs,
+        time::{self, Duration},
+    };
     use tokio_rustls::rustls::{self, ClientConfig};
 
     use crate::{
         Service,
         test_utils::{self, ServiceRunner},
     };
+
+    // The remote listener failing (e.g. its socket invalidated by the OS when the server's network
+    // interface goes down or gets reconfigured) stops the service with an error, so that whatever
+    // supervises the server notices and restarts it.
+    #[cfg(target_os = "linux")] // See `RemoteServer::kill`.
+    #[tokio::test]
+    async fn remote_listener_failure_stops_service() {
+        test_utils::init_log();
+
+        let (_temp_dir, mut service, _server_addr, _client_config) = setup_service().await;
+
+        service.state().kill_remote_server();
+
+        let result = time::timeout(Duration::from_secs(10), service.run())
+            .await
+            .unwrap();
+        assert_matches!(result, Err(crate::Error::Accept(_)));
+
+        service.close().await;
+    }
+
+    // A remote client which connects but never does the TLS handshake must not block closing the
+    // service.
+    #[tokio::test]
+    async fn close_with_remote_client_not_handshaking() {
+        let (_temp_dir, service, server_addr, _client_config) = setup_service().await;
+        let runner = ServiceRunner::start(service);
+
+        let _client = tokio::net::TcpStream::connect(&server_addr).await.unwrap();
+        // Give the service time to accept the connection.
+        time::sleep(Duration::from_millis(100)).await;
+
+        let mut service = runner.stop().await;
+        time::timeout(Duration::from_secs(5), service.close())
+            .await
+            .unwrap();
+    }
 
     #[tokio::test]
     async fn create_ok() {

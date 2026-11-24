@@ -9,12 +9,13 @@ use std::{
     pin::Pin,
     sync::OnceLock,
     task::{Context, Poll},
+    time::Duration,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf, ReadHalf, WriteHalf},
     select,
     sync::{mpsc, oneshot},
-    task,
+    task, time,
 };
 use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::{Instrument, Span};
@@ -60,13 +61,127 @@ pub struct Acceptor {
 
 impl Acceptor {
     pub async fn accept(&self) -> Result<Connection, Error> {
-        let (stream, addr) = self.listener.accept().await?;
-
+        let (stream, addr) = accept_with_retries(|| self.listener.accept()).await?;
         Ok(Connection::new(stream, yamux::Mode::Server, addr))
     }
 
     pub fn local_addr(&self) -> &SocketAddr {
         &self.local_addr
+    }
+
+    /// For tests only: simulates the listener failing, to test how the users of this acceptor
+    /// handle `accept` returning an error. Not meant for closing the acceptor (to close it, drop
+    /// it, which also cancels any pending `accept`).
+    ///
+    /// It shuts down the listening socket, which makes `accept` fail with `EINVAL`. Linux only,
+    /// because on other platforms that's not guaranteed to make `accept` fail (e.g. Windows
+    /// documents `shutdown` as failing on unconnected sockets).
+    #[cfg(all(target_os = "linux", any(test, feature = "test-utils")))]
+    pub fn kill(&self) {
+        socket2::SockRef::from(&self.listener.0)
+            .shutdown(std::net::Shutdown::Both)
+            .ok();
+    }
+}
+
+/// Calls `accept` until it succeeds or fails with an error which means the listener stopped working.
+/// Errors caused by individual incoming connections are skipped and on running out of resources it
+/// waits a bit before trying again. Intended for accepting from TCP listeners.
+pub async fn accept_with_retries<F, Fut, T>(mut accept: F) -> io::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = io::Result<T>>,
+{
+    let mut connection_errors = 0;
+
+    loop {
+        let error = match accept().await {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
+
+        match AcceptErrorKind::of(&error) {
+            // The pending connection failed, but the listener is fine. Accept the next one. Cap
+            // the number of such errors in a row in case some platform keeps returning one of
+            // them, to not spin forever.
+            AcceptErrorKind::Connection
+                if connection_errors < MAX_CONSECUTIVE_CONNECTION_ACCEPT_ERRORS =>
+            {
+                tracing::debug!(?error, "failed to accept incoming connection");
+                connection_errors += 1;
+            }
+            // Retrying right away would most likely fail again, so wait a bit.
+            AcceptErrorKind::OutOfResources => {
+                tracing::warn!(
+                    ?error,
+                    "out of resources to accept incoming connection, retrying in {:?}",
+                    ACCEPT_OUT_OF_RESOURCES_DELAY,
+                );
+                time::sleep(ACCEPT_OUT_OF_RESOURCES_DELAY).await;
+            }
+            AcceptErrorKind::Connection | AcceptErrorKind::Fatal => {
+                return Err(error);
+            }
+        }
+    }
+}
+
+/// Max number of errors caused by individual incoming connections that `accept_with_retries` skips
+/// in a row before treating the error as fatal.
+const MAX_CONSECUTIVE_CONNECTION_ACCEPT_ERRORS: usize = 32;
+
+/// How long `accept_with_retries` waits before trying again after running out of resources.
+const ACCEPT_OUT_OF_RESOURCES_DELAY: Duration = Duration::from_secs(1);
+
+enum AcceptErrorKind {
+    /// The pending connection failed before it could be accepted. The listener is fine.
+    Connection,
+    /// Temporary lack of resources (e.g. file descriptors or memory).
+    OutOfResources,
+    /// The listener stopped working.
+    Fatal,
+}
+
+impl AcceptErrorKind {
+    fn of(error: &io::Error) -> Self {
+        if let Some(kind) = Self::of_raw_os_error(error.raw_os_error()) {
+            return kind;
+        }
+
+        match error.kind() {
+            // See the "Error handling" section of the Linux accept(2) man page.
+            io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::NetworkDown
+            | io::ErrorKind::NetworkUnreachable
+            | io::ErrorKind::HostUnreachable => Self::Connection,
+            io::ErrorKind::OutOfMemory => Self::OutOfResources,
+            _ => Self::Fatal,
+        }
+    }
+
+    #[cfg(unix)]
+    fn of_raw_os_error(code: Option<i32>) -> Option<Self> {
+        match code? {
+            libc::EPROTO => Some(Self::Connection),
+            libc::EMFILE | libc::ENFILE | libc::ENOBUFS => Some(Self::OutOfResources),
+            _ => None,
+        }
+    }
+
+    #[cfg(windows)]
+    fn of_raw_os_error(code: Option<i32>) -> Option<Self> {
+        use windows_sys::Win32::Networking::WinSock::{WSAEMFILE, WSAENOBUFS};
+
+        match code? {
+            WSAEMFILE | WSAENOBUFS => Some(Self::OutOfResources),
+            _ => None,
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn of_raw_os_error(_code: Option<i32>) -> Option<Self> {
+        None
     }
 }
 
@@ -294,7 +409,7 @@ pub(super) struct TcpListener(tokio::net::TcpListener);
 
 impl TcpListener {
     /// Configures a TCP socket with the given options and binds it to the given address. If the
-    /// port is taken, uses a random one,
+    /// port is taken, uses a random one, unless `options` has strict port enabled.
     pub fn bind(addr: SocketAddr, options: SocketOptions) -> io::Result<Self> {
         let socket = Socket::new(Domain::for_address(addr), Type::STREAM, None)?;
         socket.set_nonblocking(true)?;
@@ -305,7 +420,7 @@ impl TcpListener {
         }
 
         set_keep_alive(&socket)?;
-        socket::bind_with_fallback(&socket, addr)?;
+        socket::bind(&socket, addr, options)?;
 
         // Marks the socket as ready for accepting incoming connections. This needs to be set
         // for TCP listeners otherwise we get "Invalid argument" error when calling `accept`.

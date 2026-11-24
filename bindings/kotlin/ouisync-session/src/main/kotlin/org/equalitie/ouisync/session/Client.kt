@@ -54,21 +54,14 @@ import kotlin.time.Duration.Companion.seconds
 
 internal class Client private constructor(private val socket: AsynchronousSocket) {
     companion object {
-        @OptIn(
-            kotlin.ExperimentalStdlibApi::class,
-            kotlin.time.ExperimentalTime::class,
-        )
+        @OptIn(kotlin.time.ExperimentalTime::class)
         suspend fun connect(
             configPath: String,
             timeout: Duration? = null,
             minWait: Duration = 50.milliseconds,
             maxWait: Duration = 1.seconds,
         ): Client {
-            val endpointRaw = File("$configPath/local_endpoint.conf").readText()
-            val endpoint = Json.decodeFromString<LocalEndpoint>(endpointRaw)
-            val authKey = endpoint.authKey.hexToByteArray()
-
-            val addr = InetSocketAddress(endpoint.addr, endpoint.port)
+            val endpointFile = File("$configPath/local_endpoint.conf")
 
             var start = Clock.System.now()
             var wait = minWait
@@ -82,6 +75,12 @@ internal class Client private constructor(private val socket: AsynchronousSocket
                 }
 
                 try {
+                    // Read the endpoint on every attempt, because the service might be listening on
+                    // a different port than before (e.g. it's just been started and bound to a
+                    // random port). If the file doesn't exist yet or is just being rewritten, the
+                    // attempt fails and is retried.
+                    val (addr, authKey) = readLocalEndpoint(endpointFile)
+
                     val socket =
                         withContext(Dispatchers.IO) {
                             AsynchronousSocket.connect(addr).also { socket -> authenticate(socket, authKey) }
@@ -90,6 +89,9 @@ internal class Client private constructor(private val socket: AsynchronousSocket
                     return Client(socket)
                 } catch (e: IOException) {
                     error = e
+                } catch (e: IllegalArgumentException) {
+                    // Invalid endpoint file content.
+                    error = e
                 }
 
                 wait = wait * 2
@@ -97,6 +99,15 @@ internal class Client private constructor(private val socket: AsynchronousSocket
 
                 delay(wait)
             }
+        }
+
+        @OptIn(kotlin.ExperimentalStdlibApi::class)
+        private fun readLocalEndpoint(file: File): Pair<InetSocketAddress, ByteArray> {
+            val endpoint = Json.decodeFromString<LocalEndpoint>(file.readText())
+            return Pair(
+                InetSocketAddress(endpoint.addr, endpoint.port),
+                endpoint.authKey.hexToByteArray(),
+            )
         }
     }
 
@@ -188,10 +199,6 @@ internal class Client private constructor(private val socket: AsynchronousSocket
                 socket.readExact(buffer)
                 buffer.flip()
 
-                if (buffer.remaining() < HEADER_SIZE) {
-                    throw EOFException()
-                }
-
                 val size = buffer.getInt() - Long.SIZE_BYTES
                 val id = buffer.getLong()
 
@@ -204,10 +211,6 @@ internal class Client private constructor(private val socket: AsynchronousSocket
                 buffer.rewind()
                 socket.readExact(buffer)
                 buffer.flip()
-
-                if (buffer.remaining() < size) {
-                    throw EOFException()
-                }
 
                 val completer = messageMatcher.completer(id)
 
@@ -404,20 +407,13 @@ private class AsynchronousSocket(private val channel: AsynchronousSocketChannel)
 
     suspend fun read(buffer: ByteBuffer) = suspendCancellableCoroutine<Int> { cont -> channel.read(buffer, cont, IOHandler()) }
 
-    suspend fun readExact(buffer: ByteBuffer): Int {
-        var total = 0
-
+    /** Fills the whole buffer. Throws `EOFException` if the connection is closed before that. */
+    suspend fun readExact(buffer: ByteBuffer) {
         while (buffer.hasRemaining()) {
-            val n = read(buffer)
-
-            if (n <= 0) {
-                break
-            } else {
-                total += n
+            if (read(buffer) < 0) {
+                throw EOFException()
             }
         }
-
-        return total
     }
 
     suspend fun write(buffer: ByteBuffer) = writeMutex.withLock { writeUnlocked(buffer) }

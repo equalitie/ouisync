@@ -14,3 +14,6 @@ ouisync = { path = "../../lib" }
 tokio = { workspace = true, features = ["signal", "io-std"] }
 sqlx = { workspace = true }
 futures-util = { workspace = true }
+
+[lints]
+workspace = true

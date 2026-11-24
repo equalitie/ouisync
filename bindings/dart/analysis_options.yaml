@@ -1,6 +1,11 @@
 include: package:lints/recommended.yaml
 
 analyzer:
+  exclude:
+    - build/**
+    - android/**
+    - windows/**
+    - linux/**
   language:
     strict-raw-types: true
 
