@@ -3,6 +3,9 @@ name: CI
 on:
   push:
   pull_request:
+  # Allows running the workflow manually from the Actions tab, which also builds the packages
+  # (see the `build_*` jobs).
+  workflow_dispatch:
 
 env:
     PROPTEST_CASES: 32
@@ -181,8 +184,8 @@ jobs:
     build_native_libs:
         name: build native library (${{ matrix.name }})
         runs-on: ${{ matrix.os }}
-        # Build the packages only when pushing version tags (v1.2.3, ...)
-        if: startsWith(github.ref, 'refs/tags/v')
+        # Build the packages only when pushing version tags (v1.2.3, ...) or when run manually.
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
 
         strategy:
             fail-fast: false
@@ -277,8 +280,8 @@ jobs:
     build_kotlin_bindings:
         name: build kotlin bindings packages
         runs-on: ubuntu-24.04
-        # Build the packages only when pushing version tags (v1.2.3, ...)
-        if: startsWith(github.ref, 'refs/tags/v')
+        # Build the packages only when pushing version tags (v1.2.3, ...) or when run manually.
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         needs: build_native_libs
 
         steps:
@@ -463,8 +466,8 @@ jobs:
     build_session_python_bindings:
         name: build session python bindings package
         runs-on: ubuntu-24.04
-        # Build the packages only when pushing version tags (v1.2.3, ...)
-        if: startsWith(github.ref, 'refs/tags/v')
+        # Build the packages only when pushing version tags (v1.2.3, ...) or when run manually.
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
 
         steps:
             - uses: actions/checkout@v7
@@ -493,8 +496,8 @@ jobs:
     build_service_python_bindings:
         name: build service python bindings package (${{ matrix.name }})
         runs-on: ubuntu-24.04
-        # Build the packages only when pushing version tags (v1.2.3, ...)
-        if: startsWith(github.ref, 'refs/tags/v')
+        # Build the packages only when pushing version tags (v1.2.3, ...) or when run manually.
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         needs: build_native_libs
 
         strategy:
@@ -592,9 +595,10 @@ jobs:
     release:
         name: create github release
         runs-on: ubuntu-24.04
-        # Only for version tags (v1.2.3, ...), and only once the packages have
-        # actually been built and tested.
-        if: startsWith(github.ref, 'refs/tags/v')
+        # Only when pushing version tags (v1.2.3, ...), not when run manually (the release would be
+        # named after the branch, or already exist), and only once the packages have actually been
+        # built and tested.
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         needs:
             - build_session_python_bindings
             - build_service_python_bindings
