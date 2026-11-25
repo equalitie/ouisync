@@ -42,6 +42,13 @@ impl LeafNode {
             ..self
         }
     }
+
+    pub fn into_present(self) -> Self {
+        Self {
+            block_presence: SingleBlockPresence::Present,
+            ..self
+        }
+    }
 }
 
 impl Hashable for LeafNode {
